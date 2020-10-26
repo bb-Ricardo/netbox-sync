@@ -1,0 +1,14 @@
+# Exclude all hidden files
+.*
+
+# Except those related to git
+!.git*
+
+# python cache
+__pycache__
+
+# log dir
+log/*
+
+# settings file
+settings.ini
