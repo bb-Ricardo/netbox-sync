@@ -5,9 +5,9 @@ Sync objects from various sources to Netbox
 """
 
 
-from datetime import date, datetime
+from datetime import datetime
 
-from module.common.misc import grab
+from module.common.misc import grab, get_relative_time
 from module.common.cli_parser import parse_command_line
 from module.common.logging import setup_logging
 from module.common.configuration import get_config_file, open_config_file, get_config
@@ -25,10 +25,10 @@ __version_date__ = "2020-10-01"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
 __description__ = "NetBox Sync"
 __license__ = "MIT"
-__url__ = "https://github.com/bb-Ricardo/unknown"
+__url__ = "https://github.com/bb-ricardo/netbox-sync"
 
 
-default_log_level = "WARNING"
+default_log_level = "INFO"
 default_config_file_path = "./settings.ini"
 
 
@@ -132,8 +132,7 @@ def main():
     NB_handler.update_instance()
 
     # finish
-
-    log.info("Completed NetBox Sync! Total execution time %s." % (datetime.now() - start_time))
+    log.info("Completed NetBox Sync in %s" % get_relative_time(datetime.now() - start_time))
 
 
 if __name__ == "__main__":

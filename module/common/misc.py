@@ -1,5 +1,6 @@
 
 import sys
+from modules import plural
     
 
 def grab(structure=None, path=None, separator=".", fallback=None):
@@ -99,5 +100,22 @@ def do_error_exit(log_text):
 
     print(log_text, file=sys.stderr)
     exit(1)
-    
+
+
+def get_relative_time(delta):
+
+    parts = [float(x) for x in str(delta).split(":")]
+
+    hour, minute, second = "{:1.0f}:{:1.0f}:{:1.2f}".format(*parts).split(":")
+    return_string = list()
+
+    if hour != "0":
+        return_string.append(f"{hour} hour%s" % plural(int(hour)))
+    if minute != "0":
+        return_string.append(f"{minute} minute%s" % plural(int(minute)))
+
+    return_string.append(f"{second} seconds")
+
+    return ", ".join(return_string)
+
 # EOF
