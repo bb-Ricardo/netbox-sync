@@ -67,7 +67,7 @@ class VMWareHandler():
         "collect_hardware_asset_tag": True
     }
 
-    def __init__(self, name=None, config=None, inventory=None):
+    def __init__(self, name=None, settings=None, inventory=None):
 
         if name is None:
             raise ValueError("Invalid value for attribute 'name': '{name}'.")
@@ -75,7 +75,7 @@ class VMWareHandler():
         self.inventory = inventory
         self.name = name
 
-        self.parse_config(config)
+        self.parse_config_settings(settings)
 
         self.create_session()
 
@@ -86,49 +86,49 @@ class VMWareHandler():
             self.init_successfull = True
 
 
-    def parse_config(self, config):
+    def parse_config_settings(self, config_settings):
 
         validation_failed = False
         for setting in ["host_fqdn", "port", "username", "password" ]:
-            if config.get(setting) is None:
+            if config_settings.get(setting) is None:
                 log.error(f"Config option '{setting}' in 'source/{self.name}' can't be empty/undefined")
                 validation_failed = True
 
         # check permitted ip subnets
-        if config.get("permitted_subnets") is None:
+        if config_settings.get("permitted_subnets") is None:
             log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. No IP addresses will be populated to Netbox!")
         else:
-            config["permitted_subnets"] = [x.strip() for x in config.get("permitted_subnets").split(",") if x.strip() != ""]
+            config_settings["permitted_subnets"] = [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
 
             permitted_subnets = list()
-            for permitted_subnet in config["permitted_subnets"]:
+            for permitted_subnet in config_settings["permitted_subnets"]:
                 try:
                     permitted_subnets.append(ip_network(permitted_subnet))
                 except Exception as e:
                     log.error(f"Problem parsing permitted subnet: {e}")
                     validation_failed = True
 
-            config["permitted_subnets"] = permitted_subnets
+            config_settings["permitted_subnets"] = permitted_subnets
             
         # check include and exclude filter expressions
-        for setting in [x for x in config.keys() if "filter" in x]:
-            if config.get(setting) is None or config.get(setting).strip() == "":
+        for setting in [x for x in config_settings.keys() if "filter" in x]:
+            if config_settings.get(setting) is None or config_settings.get(setting).strip() == "":
                 continue
             
             re_compiled = None
             try:
-                re_compiled = re.compile(config.get(setting))
+                re_compiled = re.compile(config_settings.get(setting))
             except Exception as e:
                 log.error(f"Problem parsing parsing regular expression for '{setting}': {e}")
                 validation_failed = True
         
-            config[setting] = re_compiled
+            config_settings[setting] = re_compiled
             
         if validation_failed is True:
             do_error_exit("Config validation failed. Exit!")
 
         for setting in self.settings.keys():
-            setattr(self, setting, config.get(setting))
+            setattr(self, setting, config_settings.get(setting))
 
     def create_session(self):
 

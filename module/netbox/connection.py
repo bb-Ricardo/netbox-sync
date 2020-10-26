@@ -17,8 +17,9 @@ from module.common.logging import get_logger
 log = get_logger()
 
 # ToDo:
-#   * compare version
-#   * reset debugging level for requests
+#   * DNS lookup
+#   * primary ip
+#   * get vrf for IP
 
 class NetBoxHandler:
     """
@@ -26,16 +27,9 @@ class NetBoxHandler:
 
 
     """
-
-    # connection defaults
-    verify_tls = True
-    timeout = 30
-    max_retry_attempts = 4
-
-    default_netbox_result_limit = 200
-
     minimum_api_version = "2.9"
-    
+
+    # allowed settings and defaults
     settings = {
         "api_token": None,
         "host_fqdn": None,
@@ -43,7 +37,10 @@ class NetBoxHandler:
         "disable_tls": False,
         "validate_tls_certs": True,
         "prune_enabled": False,
-        "prune_delay_in_days": 30
+        "prune_delay_in_days": 30,
+        "default_netbox_result_limit": 200,
+        "timeout": 30,
+        "max_retry_attempts": 4
     }
     
     primary_tag = "NetBox-synced"
@@ -63,17 +60,17 @@ class NetBoxHandler:
         # set primary tag
         setattr(self.inventory, "primary_tag", self.primary_tag)
         
+        self.parse_config_settings(settings)
+
         proto = "https"
-        if bool(settings.get("disable_tls", False)) is True:
+        if bool(self.disable_tls) is True:
             proto = "http"
 
         port = ""
-        if settings.get("port", None) is not None:
-            port = ":{}".format(settings.get("port"))
+        if self.port is not None:
+            port = f":{self.port}"
 
-        self.url = f"{proto}://%s{port}/api/" % settings.get("host_fqdn")
-
-        self.verify_tls = bool(self.settings.get("validate_tls_certs"))
+        self.url = f"{proto}://{self.host_fqdn}{port}/api/"
 
         self.session = self.create_session()
         
@@ -82,6 +79,25 @@ class NetBoxHandler:
             do_error_exit(f"Netbox API version '{self.api_version}' not supported. "
                           f"Minimum API version: {self.minimum_api_version}")
 
+    def parse_config_settings(self, config_settings):
+
+        validation_failed = False
+        for setting in ["host_fqdn", "api_token"]:
+            if config_settings.get(setting) is None:
+                log.error(f"Config option '{setting}' in 'netbox' can't be empty/undefined")
+                validation_failed = True
+
+        for setting in ["prune_delay_in_days", "default_netbox_result_limit", "timeout", "max_retry_attempts"]:
+            if not isinstance(config_settings.get(setting), int):
+                log.error(f"Config option '{setting}' in 'netbox' must be an integer.")
+                validation_failed = True
+
+        if validation_failed is True:
+            do_error_exit("Config validation failed. Exit!")
+
+        for setting in self.settings.keys():
+            setattr(self, setting, config_settings.get(setting))
+
     def create_session(self):
         """
         Creates a session with NetBox
@@ -89,12 +105,13 @@ class NetBoxHandler:
         :return: `True` if session created else `False`
         :rtype: bool
         """
-        header = {"Authorization": "Token {}".format(self.settings.get("api_token"))}
+        header = {"Authorization": f"Token {self.api_token}"}
 
         session = requests.Session()
         session.headers.update(header)
 
-        log.debug("Created new HTTP Session for NetBox.")
+        log.debug("Created new Session for NetBox.")
+
         return session
 
     def get_api_version(self):
@@ -109,7 +126,7 @@ class NetBoxHandler:
             response = self.session.get(
                 self.url,
                 timeout=self.timeout,
-                verify=self.verify_tls)
+                verify=self.validate_tls_certs)
         except Exception as e:
             do_error_exit(str(e))
 
@@ -143,7 +160,6 @@ class NetBoxHandler:
         # issue request
         response = self.single_request(this_request)
 
-        log.debug2("Received HTTP Status %s.", response.status_code)
 
         try:
             result = response.json()
@@ -166,8 +182,6 @@ class NetBoxHandler:
 
             action = "created" if response.status_code == 201 else "deleted"
 
-            # ToDo:
-            #   * switch to object naming schema based on primary keys
             log.info(
                 f"NetBox successfully {action} {object_class.name} object '%s'." % (result.get(object_class.primary_key))
             )
@@ -205,7 +219,7 @@ class NetBoxHandler:
 
             try:
                 req = self.session.send(this_request,
-                    timeout=self.timeout, verify=self.verify_tls)
+                    timeout=self.timeout, verify=self.validate_tls_certs)
 
             except (ConnectionError, requests.exceptions.ConnectionError,
                 requests.exceptions.ReadTimeout):
@@ -216,6 +230,8 @@ class NetBoxHandler:
         else:
             do_error_exit(f"Giving up after {self.max_retry_attempts} retries.")
 
+        log.debug2("Received HTTP Status %s.", req.status_code)
+        
         return req
 
     def query_current_data(self, netbox_objects_to_query=None):

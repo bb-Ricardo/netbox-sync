@@ -58,6 +58,8 @@ def get_config(config_handler=None, section=None, valid_settings=None):
 
         if isinstance(default, bool):
             value = config_handler.getboolean(section, item, fallback=default)
+        elif isinstance(default, int):
+            value = config_handler.getint(section, item, fallback=default)
         else:
             value = config_handler.get(section, item, fallback=default)
 

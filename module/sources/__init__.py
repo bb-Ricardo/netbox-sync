@@ -56,7 +56,7 @@ def instanciate_sources(config_handler=None, inventory=None):
         
         source_handler = source_class(name=source_section.replace("source/",""),
                                       inventory=inventory, 
-                                      config=source_config)
+                                      settings=source_config)
         
         # add to list of source handlers
         if source_handler.init_successfull is True:
