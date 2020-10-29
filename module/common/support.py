@@ -3,17 +3,8 @@ from ipaddress import ip_network, ip_interface
 import aiodns
 import logging
 
-
-
 def format_ip(ip_addr):
-    """
-    Formats IPv4 addresses and subnet to IP with CIDR standard notation.
 
-    :param ip_addr: IP address with subnet; example `192.168.0.0/255.255.255.0`
-    :type ip_addr: str
-    :return: IP address with CIDR notation; example `192.168.0.0/24`
-    :rtype: str
-    """
     try:
         return ip_interface(ip_addr).compressed
     except Exception:
@@ -32,3 +23,4 @@ def normalize_mac_address(mac_address=None):
 
     return mac_address
 
+# EOF

@@ -42,15 +42,18 @@ class NetBoxHandler:
         "timeout": 30,
         "max_retry_attempts": 4
     }
-    
+
     primary_tag = "NetBox-synced"
     orphaned_tag = f"{primary_tag}: Orphaned"
-    
+
     inventory = None
 
     instance_tags = None
     instance_interfaces = {}
     instance_virtual_interfaces = {}
+
+    # testing option
+    use_netbox_caching_for_testing = False
 
     def __init__(self, cli_args=None, settings=None, inventory=None):
 
@@ -59,7 +62,7 @@ class NetBoxHandler:
 
         # set primary tag
         setattr(self.inventory, "primary_tag", self.primary_tag)
-        
+
         self.parse_config_settings(settings)
 
         proto = "https"
@@ -73,7 +76,7 @@ class NetBoxHandler:
         self.url = f"{proto}://{self.host_fqdn}{port}/api/"
 
         self.session = self.create_session()
-        
+
         # check for minimum version
         if version.parse(self.get_api_version()) < version.parse(self.minimum_api_version):
             do_error_exit(f"Netbox API version '{self.api_version}' not supported. "
@@ -110,7 +113,7 @@ class NetBoxHandler:
         session = requests.Session()
         session.headers.update(header)
 
-        log.debug("Created new Session for NetBox.")
+        log.debug("Created new requests Session for NetBox.")
 
         return session
 
@@ -132,6 +135,7 @@ class NetBoxHandler:
 
         result = str(response.headers["API-Version"])
 
+        log.info(f"Successfully connected to NetBox '{self.host_fqdn}'")
         log.debug(f"Detected NetBox API v{result}.")
 
         return result
@@ -149,9 +153,9 @@ class NetBoxHandler:
 
         if params is None:
             params = dict()
-        
+
         params["limit"] = self.default_netbox_result_limit
-            
+
         # prepare request
         this_request = self.session.prepare_request(
                             requests.Request(req_type, request_url, params=params, json=data)
@@ -195,7 +199,7 @@ class NetBoxHandler:
         elif response.status_code >= 400 and response.status_code < 500:
 
             log.error(f"NetBox returned: {this_request.method} {this_request.path_url} {response.reason}")
-            log.debug(f"NetBox returned body: {result}")
+            log.error(f"NetBox returned body: {result}")
             result = None
 
         elif response.status_code >= 500:
@@ -231,44 +235,45 @@ class NetBoxHandler:
             do_error_exit(f"Giving up after {self.max_retry_attempts} retries.")
 
         log.debug2("Received HTTP Status %s.", req.status_code)
-        
+
         return req
 
     def query_current_data(self, netbox_objects_to_query=None):
 
         if netbox_objects_to_query is None:
-            raise AttributeError(f"Argument netbox_objects_to_query is: '{netbox_objects_to_query}'")
+            raise AttributeError(f"Attribute netbox_objects_to_query is: '{netbox_objects_to_query}'")
 
         # query all dependencies
         for nb_object_class in netbox_objects_to_query:
 
             if nb_object_class not in NetBoxObject.__subclasses__():
                 raise AttributeError(f"Class '{nb_object_class.__name__}' must be a subclass of '{NetBoxObject.__name__}'")
-            
+
             cached_nb_data = None
-            try:
-                cached_nb_data = pickle.load( open( f"cache/{nb_object_class.__name__}.cache", "rb" ) )
-                #pprint.pprint(cached_nb_data)
-            except Exception:
-                pass
-        
+            if self.use_netbox_caching_for_testing is True:
+                try:
+                    cached_nb_data = pickle.load( open( f"cache/{nb_object_class.__name__}.cache", "rb" ) )
+                except Exception:
+                    pass
+
             nb_data = dict()
             if cached_nb_data is None:
                 # get all objects of this class
                 log.debug(f"Requesting {nb_object_class.name}s from NetBox")
                 nb_data = self.request(nb_object_class)
-                
-                pickle.dump(nb_data.get("results"), open( f"cache/{nb_object_class.__name__}.cache", "wb" ) )
+
+                if self.use_netbox_caching_for_testing is True:
+                    pickle.dump(nb_data.get("results"), open( f"cache/{nb_object_class.__name__}.cache", "wb" ) )
             else:
                 nb_data["results"] = cached_nb_data
-                
+
 
             if nb_data.get("results") is None:
                 log.warning(f"Result data from NetBox for object {nb_object_class.__name__} missing!")
                 continue
 
             log.debug(f"Processing %s returned {nb_object_class.name}%s" % (len(nb_data.get("results")),plural(len(nb_data.get("results")))))
-            
+
             for object_data in nb_data.get("results"):
                 self.inventory.add_item_from_netbox(nb_object_class, data=object_data)
 
@@ -314,16 +319,14 @@ class NetBoxHandler:
 
             if object.is_new is True:
                 object.updated_items = object.data.keys()
-                
+
             for key, value in object.data.items():
                 if key in object.updated_items:
 
-                    object_type = object.data_model.get(key)
-
-                    if object_type == NBTags:
+                    if key == "tags":
                         data_to_patch[key] = [{"name": d.get_display_name()} for d in value]
 
-                    elif object_type in NetBoxObject.__subclasses__():
+                    elif isinstance(value, NetBoxObject):
                         data_to_patch[key] = value.get_nb_reference()
 
                         if value.nb_id == 0:
@@ -341,7 +344,7 @@ class NetBoxHandler:
                 log.info("Creating new NetBox '%s' object: %s" % (object.name, object.get_display_name()))
 
                 returned_object_data = self.request(nb_object_sub_class, req_type="POST", data=data_to_patch)
-                
+
                 issued_request = True
 
             if object.is_new is False and len(object.updated_items) > 0:
@@ -351,14 +354,14 @@ class NetBoxHandler:
                 returned_object_data = self.request(nb_object_sub_class, req_type="PATCH", data=data_to_patch, nb_id=object.nb_id)
 
                 issued_request = True
-                
+
             if returned_object_data is not None:
 
                 object.update(data = returned_object_data, read_from_netbox=True)
-                
+
             elif issued_request is True:
                 log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {data_to_patch}")
-                pprint.pprint(object.to_dict())
+            #    pprint.pprint(object.to_dict())
 
         # add class to resolved dependencies
         self.inventory.resolved_dependencies = list(set(self.inventory.resolved_dependencies + [nb_object_sub_class] ))

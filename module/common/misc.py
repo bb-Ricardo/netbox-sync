@@ -1,7 +1,7 @@
 
 import sys
-from modules import plural
-    
+from module import plural
+
 
 def grab(structure=None, path=None, separator=".", fallback=None):
     """
@@ -9,7 +9,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
         "." separated path information. If a part of a path
         is not not present then this function returns the
         value of fallback (default: "None").
-        
+
         example structure:
             data_structure = {
               "rows": [{
@@ -26,7 +26,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
             "rows.0.elements.0.distance.value"
         example return value:
             15193
-            
+
         Parameters
         ----------
         structure: dict, list, object
@@ -38,7 +38,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
             contains the default (.) separator.
         fallback: dict, list, str, int
             data to return if no match was found.
-            
+
         Returns
         -------
         str, dict, list
@@ -64,7 +64,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
         for attribute in r_path.split(separator):
             if isinstance(r_structure, dict):
                 r_structure = {k.lower(): v for k, v in r_structure.items()}
-            
+
             try:
                 if isinstance(r_structure, list):
                     data = r_structure[int(attribute)]
@@ -72,7 +72,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
                     data = r_structure.get(attribute.lower())
                 else:
                     data = getattr(r_structure, attribute)
-                    
+
             except Exception:
                 return fallback
 
@@ -83,13 +83,13 @@ def grab(structure=None, path=None, separator=".", fallback=None):
 
     return traverse(structure, path)
 
-    
+
 def dump(obj):
    for attr in dir(obj):
        if hasattr( obj, attr ):
            print( "obj.%s = %s" % (attr, getattr(obj, attr)))
-     
-     
+
+
 def do_error_exit(log_text):
     """log an error and exit with return code 1
     Parameters
@@ -117,5 +117,13 @@ def get_relative_time(delta):
     return_string.append(f"{second} seconds")
 
     return ", ".join(return_string)
+
+
+def get_string_or_none(text=None):
+
+    if text is not None and len(str(text).strip()) > 0:
+        return str(text).strip()
+
+    return None
 
 # EOF

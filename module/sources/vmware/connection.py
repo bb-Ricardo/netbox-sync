@@ -10,7 +10,7 @@ from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 
 from module.netbox.object_classes import *
-from module.common.misc import grab, do_error_exit, dump
+from module.common.misc import grab, do_error_exit, dump, get_string_or_none
 from module.common.support import normalize_mac_address, format_ip
 from module import plural
 from module.common.logging import get_logger
@@ -29,34 +29,20 @@ class VMWareHandler():
         NBDeviceRoles,
         NBSites,
         NBClusters,
-    #]
-    #"""
         NBDevices,
         NBVMs,
         NBVMInterfaces,
         NBInterfaces,
         NBIPAddresses,
-
-    ] #"""
-
-    session = None
-    inventory = None
-
-    init_successfull = False
-
-    source_type = "vmware"
-
-    source_tag = None
-    site_name = None
-
-    networks = dict()
-    standalone_hosts = list()
+    ]
 
     settings = {
         "host_fqdn": None,
         "port": 443,
         "username": None,
         "password": None,
+        "cluster_exclude_filter": None,
+        "cluster_include_filter": None,
         "host_exclude_filter": None,
         "host_include_filter": None,
         "vm_exclude_filter": None,
@@ -64,8 +50,27 @@ class VMWareHandler():
         "netbox_host_device_role": "Server",
         "netbox_vm_device_role": "Server",
         "permitted_subnets": None,
-        "collect_hardware_asset_tag": True
+        "collect_hardware_asset_tag": True,
+        "cluster_site_relation": None
     }
+
+    init_successfull = False
+    inventory = None
+    name = None
+    source_tag = None
+    source_type = "vmware"
+
+    # internal vars
+    session = None
+
+    site_name = None
+
+    networks = dict()
+    standalone_hosts = list()
+
+    processed_host_names = list()
+    processed_vm_names = list()
+
 
     def __init__(self, name=None, settings=None, inventory=None):
 
@@ -109,21 +114,37 @@ class VMWareHandler():
                     validation_failed = True
 
             config_settings["permitted_subnets"] = permitted_subnets
-            
+
         # check include and exclude filter expressions
         for setting in [x for x in config_settings.keys() if "filter" in x]:
             if config_settings.get(setting) is None or config_settings.get(setting).strip() == "":
                 continue
-            
+
             re_compiled = None
             try:
                 re_compiled = re.compile(config_settings.get(setting))
             except Exception as e:
-                log.error(f"Problem parsing parsing regular expression for '{setting}': {e}")
+                log.error(f"Problem parsing regular expression for '{setting}': {e}")
                 validation_failed = True
-        
+
             config_settings[setting] = re_compiled
-            
+
+        if config_settings.get("cluster_site_relation") is not None:
+
+            relation_data = dict()
+            for relation in config_settings.get("cluster_site_relation").split(","):
+
+                cluster_name = relation.split("=")[0].strip()
+                site_name = relation.split("=")[1].strip()
+
+                if len(cluster_name) == 0 or len(site_name) == 0:
+                    log.error("Config option 'cluster_site_relation' malformed got '{cluster_name}' for cluster_name and '{site_name}' for site name.")
+                    validation_failed = True
+
+                relation_data[cluster_name] = site_name
+
+            config_settings["cluster_site_relation"] = relation_data
+
         if validation_failed is True:
             do_error_exit("Config validation failed. Exit!")
 
@@ -135,7 +156,7 @@ class VMWareHandler():
         if self.session is not None:
             return True
 
-        log.info(f"Starting vCenter connection to '{self.host_fqdn}'")
+        log.debug(f"Starting vCenter connection to '{self.host_fqdn}'")
 
         try:
             instance = SmartConnectNoSSL(
@@ -214,7 +235,7 @@ class VMWareHandler():
                 log.error(f"Creating vCenter view for '{view_name}s' failed!")
                 continue
 
-            log.info("vCenter returned '%d' %s%s" % (len(view_objects), view_name, plural(len(view_objects))))
+            log.debug("vCenter returned '%d' %s%s" % (len(view_objects), view_name, plural(len(view_objects))))
 
             for obj in view_objects:
 
@@ -224,62 +245,106 @@ class VMWareHandler():
 
     def add_datacenter(self, obj):
 
-        if grab(obj, "name") is None:
+        name = get_string_or_none(grab(obj, "name"))
+
+        if name is None:
             return
 
-        self.inventory.add_update_object(NBClusterGroups,
-                                         data = { "name": obj.name }, source=self)
+        log.debug2(f"Parsing vCenter datacenter: {name}")
+
+        self.inventory.add_update_object(NBClusterGroups, data = { "name": name }, source=self)
 
     def add_cluster(self, obj):
 
-        if grab(obj, "name") is None or grab(obj, "parent.parent.name") is None:
+        name = get_string_or_none(grab(obj, "name"))
+        group = get_string_or_none(grab(obj, "parent.parent.name"))
+
+        if name is None or group is None:
             return
 
-        self.inventory.add_update_object(NBClusters,
-                                         data = {
-                                            "name": obj.name,
-                                            "type": { "name": "VMware ESXi" },
-                                            "group": { "name": obj.parent.parent.name }
-                                         },
-                                         source=self)
+        log.debug2(f"Parsing vCenter cluster: {name}")
+
+        # first includes
+        if self.cluster_include_filter is not None:
+            if not self.cluster_include_filter.match(name):
+                log.debug(f"Cluster '{name}' did not match include filter '{self.cluster_include_filter.pattern}'. Skipping")
+                return
+
+        # second excludes
+        if self.cluster_exclude_filter is not None:
+            if self.cluster_exclude_filter.match(name):
+                log.debug(f"Cluster '{name}' matched exclude filter '{self.cluster_exclude_filter.pattern}'. Skipping")
+                return
+
+        # set default site name
+        site_name = self.site_name
+
+        # check if site was provided in config
+        site_realtion = getattr(self, "cluster_site_relation", None)
+        if site_realtion is not None and site_realtion.get(name) is not None:
+            site_name = site_realtion.get(name)
+
+        data = {
+            "name": name,
+            "type": { "name": "VMware ESXi" },
+            "group": { "name": group },
+            "site": { "name": site_name}
+        }
+
+        self.inventory.add_update_object(NBClusters, data = data, source=self)
 
     def add_network(self, obj):
 
-        if grab(obj, "key") is None or grab(obj, "name") is None:
+        key = get_string_or_none(grab(obj, "key"))
+        name = get_string_or_none(grab(obj, "name"))
+
+        if key is None or name is None:
             return
 
-        self.networks[obj.key] = obj.name
+        log.debug2(f"Parsing vCenter network: {name}")
+
+        self.networks[key] = name
 
     def add_host(self, obj):
 
         # ToDo:
         # * find Host based on device mac addresses
 
-        name = grab(obj, "name")
-         
+        name = get_string_or_none(grab(obj, "name"))
+
         # parse data
         log.debug2(f"Parsing vCenter host: {name}")
-       
+
+        if name in self.processed_host_names:
+            log.warning(f"Host '{name}' already parsed. Make sure to use unique host names. Skipping")
+            return
+
+        self.processed_host_names.append(name)
+
         # filter hosts
         # first includes
         if self.host_include_filter is not None:
             if not self.host_include_filter.match(name):
                 log.debug(f"Host '{name}' did not match include filter '{self.host_include_filter.pattern}'. Skipping")
                 return
-                
+
         # second excludes
         if self.host_exclude_filter is not None:
             if self.host_exclude_filter.match(name):
                 log.debug(f"Host '{name}' matched exclude filter '{self.host_exclude_filter.pattern}'. Skipping")
                 return
 
-        manufacturer = grab(obj, "summary.hardware.vendor")
-        model = grab(obj, "summary.hardware.model")
-        platform = "{} {}".format(grab(obj, "config.product.name"), grab(obj, "config.product.version"))
-        
-        cluster = grab(obj, "parent.name")
-        status = "active" if grab(obj, "summary.runtime.connectionState") == "connected" else "offline"
-        
+        manufacturer =  get_string_or_none(grab(obj, "summary.hardware.vendor"))
+        model =  get_string_or_none(grab(obj, "summary.hardware.model"))
+        product_name = get_string_or_none(grab(obj, "config.product.name"))
+        product_version =  get_string_or_none(grab(obj, "config.product.version"))
+        platform = f"{product_name} {product_version}"
+
+
+        status = "offline"
+        if get_string_or_none(grab(obj, "summary.runtime.connectionState")) == "connected":
+            status = "active"
+
         # prepare identifiers
         identifiers = grab(obj, "summary.hardware.otherIdentifyingInfo")
         identifier_dict = dict()
@@ -294,7 +359,7 @@ class VMWareHandler():
 
         for serial_num_key in [ "EnclosureSerialNumberTag", "SerialNumberTag", "ServiceTag"]:
             if serial_num_key in identifier_dict.keys():
-                serial = identifier_dict.get(serial_num_key)
+                serial = get_string_or_none(identifier_dict.get(serial_num_key))
                 break
 
         # add asset tag if desired and present
@@ -309,6 +374,17 @@ class VMWareHandler():
 
             if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
                 asset_tag = this_asset_tag
+
+        # manage site and cluster
+        cluster = get_string_or_none(grab(obj, "parent.name"))
+
+        # set default site name
+        site_name = self.site_name
+
+        # check if site was provided in config
+        site_realtion = getattr(self, "cluster_site_relation", None)
+        if site_realtion is not None and site_realtion.get(cluster) is not None:
+            site_name = site_realtion.get(cluster)
 
         # handle standalone hosts
         if cluster == name:
@@ -325,8 +401,7 @@ class VMWareHandler():
                     "name": manufacturer
                 }
             },
-            "platform": {"name": platform},
-            "site": {"name": self.site_name},
+            "site": {"name": site_name},
             "cluster": {"name": cluster},
             "status": status
         }
@@ -335,6 +410,8 @@ class VMWareHandler():
             data["serial"]: serial
         if asset_tag is not None:
             data["asset_tag"]: asset_tag
+        if platform is not None:
+            data["platform"]: {"name": platform}
 
         host_object = self.inventory.add_update_object(NBDevices, data=data, source=self)
 
@@ -369,11 +446,11 @@ class VMWareHandler():
 
             self.inventory.add_update_object(NBInterfaces, data=pnic_data, source=self)
 
-            
+
         for vnic in grab(obj, "config.network.vnic", fallback=list()):
 
             log.debug2("Parsing {}: {}".format(grab(vnic, "_wsdlName"), grab(vnic, "device")))
-            
+
             vnic_data = {
                 "name": grab(vnic, "device"),
                 "device": host_object,
@@ -386,11 +463,11 @@ class VMWareHandler():
             vnic_object = self.inventory.add_update_object(NBInterfaces, data=vnic_data, source=self)
 
             vnic_ip = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
-            
+
             if format_ip(vnic_ip) is None:
                 logging.error(f"IP address '{vnic_ip}' for {vnic_object.get_display_name()} invalid!")
                 continue
-            
+
             ip_permitted = False
 
             ip_address_object = ip_address(grab(vnic, "spec.ip.ipAddress"))
@@ -402,46 +479,50 @@ class VMWareHandler():
             if ip_permitted is False:
                 log.debug(f"IP address {vnic_ip} not part of any permitted subnet. Skipping.")
                 continue
-                
+
             vnic_ip_data = {
                 "address": format_ip(vnic_ip),
-                "assigned_object_id": vnic_object.nb_id,
-                "assigned_object_type": "dcim.interface"
+                "assigned_object_id": vnic_object,
             }
 
             self.inventory.add_update_object(NBIPAddresses, data=vnic_ip_data, source=self)
 
-
     def add_virtual_machine(self, obj):
 
-        # ToDo:
-        # * find VM based on device mac addresses
-        
-        name = grab(obj, "name")
-        
+        name = get_string_or_none(grab(obj, "name"))
+
         log.debug2(f"Parsing vCenter host: {name}")
-        
-        # filter VMs
+
+        if name in self.processed_vm_names:
+            log.warning(f"Virtual machine '{name}' already parsed. Make sure to use unique host names. Skipping")
+            return
+
+        self.processed_vm_names.append(name)
+
         # first includes
         if self.vm_include_filter is not None:
             if not self.vm_include_filter.match(name):
                 log.debug(f"Virtual machine '{name}' did not match include filter '{self.vm_include_filter.pattern}'. Skipping")
                 return
-                
+
         # second excludes
         if self.vm_exclude_filter is not None:
             if self.vm_exclude_filter.match(name):
                 log.debug(f"Virtual Machine '{name}' matched exclude filter '{self.vm_exclude_filter.pattern}'. Skipping")
                 return
 
-        cluster = grab(obj, "runtime.host.parent.name")
+        cluster = get_string_or_none(grab(obj, "runtime.host.parent.name"))
+        if cluster is None:
+            log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
+            return
+
         if cluster in self.standalone_hosts:
             cluster = "Standalone ESXi Host"
 
         platform = grab(obj, "config.guestFullName")
-        platform = grab(obj, "guest.guestFullName", fallback=platform)
+        platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
-        status = "active" if grab(obj, "runtime.powerState") == "poweredOn" else "offline"
+        status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
@@ -449,26 +530,29 @@ class VMWareHandler():
                        if isinstance(comp, vim.vm.device.VirtualDisk)
                             ]) / 1024 / 1024)
 
+        annotation = get_string_or_none(grab(obj, "config.annotation"))
+
         data = {
-            "name": grab(obj, "name"),
+            "name": name,
+            "cluster": {"name": cluster},
             "role": {"name": self.settings.get("netbox_vm_device_role")},
             "status": status,
             "memory": grab(obj, "config.hardware.memoryMB"),
             "vcpus": grab(obj, "config.hardware.numCPU"),
-            "disk": disk,
-            "comments": grab(obj, "config.annotation")
+            "disk": disk
         }
-        
-        if cluster is not None:
-            data["cluster"] = {"name": cluster}
+
         if platform is not None:
             data["platform"] = {"name": platform}
+
+        if annotation is not None:
+            data["comments"] = annotation
 
         vm_object = self.inventory.add_update_object(NBVMs, data=data, source=self)
 
         # ToDo:
         # * get current interfaces and compare description (primary key in vCenter)
-        
+
         # get vm interfaces
         for vm_device in hardware_devices:
 
@@ -485,7 +569,7 @@ class VMWareHandler():
             int_label = grab(vm_device, "deviceInfo.label", fallback="")
 
             int_name = "vNIC {}".format(int_label.split(" ")[-1])
-            
+
             int_ip_addresses = list()
 
             for guest_nic in grab(obj, "guest.net", fallback=list()):
@@ -496,8 +580,28 @@ class VMWareHandler():
                 int_network_name = grab(guest_nic, "network", fallback=int_network_name)
                 int_connected = grab(guest_nic, "connected", fallback=int_connected)
 
-                for ip in grab(guest_nic, "ipConfig.ipAddress", fallback=list()):
-                    int_ip_addresses.append(f"{ip.ipAddress}/{ip.prefixLength}")
+                # grab all valid interface ip addresses
+                for int_ip in grab(guest_nic, "ipConfig.ipAddress", fallback=list()):
+
+                    int_ip_address = f"{int_ip.ipAddress}/{int_ip.prefixLength}"
+
+                    if format_ip(int_ip_address) is None:
+                        logging.error(f"IP address '{int_ip_address}' for {vm_nic_object.get_display_name()} invalid!")
+                        continue
+
+                    ip_permitted = False
+
+                    ip_address_object = ip_address(int_ip_address.split("/")[0])
+                    for permitted_subnet in self.permitted_subnets:
+                        if ip_address_object in permitted_subnet:
+                            ip_permitted = True
+                            break
+
+                    if ip_permitted is False:
+                        log.debug(f"IP address {int_ip_address} not part of any permitted subnet. Skipping.")
+                        continue
+
+                    int_ip_addresses.append(int_ip_address)
 
 
             if int_network_name is not None:
@@ -511,36 +615,22 @@ class VMWareHandler():
                 "enabled": int_connected,
             }
 
+            # we are trying multiple strategies to find the correct interface
+            #
+
             vm_nic_object = self.inventory.get_by_data(NBVMInterfaces, data={"mac_address": int_mac})
-            
+
             if vm_nic_object is not None:
                 vm_nic_object.update(data=vm_nic_data, source=self)
             else:
                 vm_nic_object = self.inventory.add_update_object(NBVMInterfaces, data=vm_nic_data, source=self)
 
             for int_ip_address in int_ip_addresses:
-                        
-                if format_ip(int_ip_address) is None:
-                    logging.error(f"IP address '{int_ip_address}' for {vm_nic_object.get_display_name()} invalid!")
-                    continue
-                
-                ip_permitted = False
 
-                ip_address_object = ip_address(int_ip_address.split("/")[0])
-                for permitted_subnet in self.permitted_subnets:
-                    if ip_address_object in permitted_subnet:
-                        ip_permitted = True
-                        break
-
-                if ip_permitted is False:
-                    log.debug(f"IP address {int_ip_address} not part of any permitted subnet. Skipping.")
-                    continue
-                
                 # apply ip filter
                 vm_nic_ip_data = {
                     "address": format_ip(int_ip_address),
-                    "assigned_object_id": vm_nic_object.nb_id,
-                    "assigned_object_type": "virtualization.vminterface"
+                    "assigned_object_id": vm_nic_object,
                 }
 
                 self.inventory.add_update_object(NBIPAddresses, data=vm_nic_ip_data, source=self)

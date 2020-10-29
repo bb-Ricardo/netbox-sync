@@ -13,7 +13,7 @@ from module.common.logging import setup_logging
 from module.common.configuration import get_config_file, open_config_file, get_config
 from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
-#from module.netbox.object_classes import *
+from module.netbox.object_classes import *
 
 from module.sources import *
 
@@ -64,8 +64,7 @@ def main():
     # config overwrites default
     log_level = config_handler.get("common", "log_level", fallback=log_level)
     # cli option overwrites config file
-    if grab(args, "log_level") is not None:
-        log_level = grab(args, "log_level")
+    log_level = grab(args, "log_level", fallback=log_level)
 
     log_file = None
     if bool(config_handler.getboolean("common", "log_to_file", fallback=False)) is True:
@@ -89,6 +88,7 @@ def main():
     NB_handler = NetBoxHandler(cli_args=args, settings=netbox_settings, inventory=inventory)
 
     # instantiate source handlers and get attributes
+    log.info("Initializing sources")
     sources = instanciate_sources(config_handler, inventory)
 
     # all sources are unavailable
@@ -101,7 +101,9 @@ def main():
         netbox_objects_to_query.extend(source.dependend_netbox_objects)
 
     # request NetBox data
+    log.info("Querying necessary objects from Netbox. This might take a while.")
     NB_handler.query_current_data(list(set(netbox_objects_to_query)))
+    log.info("Finished querying necessary objects from Netbox")
 
     # resolve object relations within the initial inventory
     inventory.resolve_relations()
@@ -109,9 +111,6 @@ def main():
     # initialize basic data needed for syncing
     NB_handler.inizialize_basic_data()
 
-   # for object in inventory.get_all_items(NBIPAddresses):
-   #     pprint.pprint(object.__dict__)
-   #     exit(0)
     # loop over sources and patch netbox data
     for source in sources:
         source.apply()
@@ -119,10 +118,26 @@ def main():
     # add/remove tags to/from all inventory items
     inventory.tag_all_the_things(sources, NB_handler)
 
+    # update all IP addresses
+    #inventory.update_all_ip_addresses()
+    
     #for object in inventory.get_all_items(NBVMs):
     #    print(object.get_display_name())
+
     """
-    nb.set_primary_ips()
+    for object in inventory.get_all_items(NBIPAddresses):
+   
+        try:
+            print(object)
+        except Exception as e:
+            print(e)
+            pprint.pprint(object.__dict__)
+            exit(2)
+            
+   
+    exit(0)
+
+    inventory.set_primary_ips()
     # Optional tasks
     if settings.POPULATE_DNS_NAME:
         nb.set_dns_names()
