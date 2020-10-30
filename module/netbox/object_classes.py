@@ -159,6 +159,9 @@ class NetBoxObject():
 
         display_name = self.get_display_name(data)
 
+        if display_name is None:
+            display_name = self.get_display_name()
+
         log.debug(f"Parsing '{self.name}' data structure: {display_name}")
 
         parsed_data = dict()
@@ -639,7 +642,9 @@ class NBIPAddresses(NetBoxObject):
         "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
         "assigned_object_id": [ NBInterfaces, NBVMInterfaces ],
         "description": 200,
-        "tags": NBTags
+        "tags": NBTags,
+        "vrf": int,
+        "tenant": int
     }
     # add relation between two attributes
     data_model_relation = {
@@ -674,7 +679,7 @@ class NBIPAddresses(NetBoxObject):
         object = data.get("assigned_object_id")
 
         # we got an object data structure where we have to find the object
-        if read_from_netbox is False:
+        if read_from_netbox is False and object is not None:
 
             if not isinstance(object, NetBoxObject):
 

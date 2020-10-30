@@ -2,6 +2,7 @@
 import requests
 import json
 import logging
+from datetime import datetime
 
 import pickle
 
@@ -361,7 +362,6 @@ class NetBoxHandler:
 
             elif issued_request is True:
                 log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {data_to_patch}")
-            #    pprint.pprint(object.to_dict())
 
         # add class to resolved dependencies
         self.inventory.resolved_dependencies = list(set(self.inventory.resolved_dependencies + [nb_object_sub_class] ))
@@ -374,11 +374,45 @@ class NetBoxHandler:
         for nb_object_sub_class in NetBoxObject.__subclasses__():
             self.update_object(nb_object_sub_class)
 
-        # prune objects
-        #self.prune_instance()
 
+    def prune_data(self):
 
-        #print(self.inventory)
+        if self.prune_enabled == False:
+            log.debug("Pruning disabled. Skipping")
+            return
 
+        log.info("Pruning orphaned data in NetBox")
+
+        # update all items in NetBox accordingly
+        today = datetime.now()
+        for nb_object_sub_class in reversed(self.inventory.resolved_dependencies):
+
+            for object in self.inventory.get_all_items(nb_object_sub_class):
+
+                if object.source is not None:
+                    continue
+
+                if self.orphaned_tag not in object.get_tags():
+                    continue
+
+                log.debug2(f"Object '{object.get_display_name()}' is Orphaned")
+
+                # check prune delay.
+                last_updated = None
+                try:
+                    last_updated = datetime.strptime(grab(object, "data.last_updated"),"%Y-%m-%dT%H:%M:%S")
+                except Exception:
+                    continue
+
+                days_since_last_update = (now - last_updated).days
+
+                # it seems we need to delete this object
+                if last_updated is not None and days_since_last_update >= self.prune_delay_in_days:
+
+                    log.info(f"{nb_object_sub_class.name.capitalize()} '{object.get_display_name()}' is orphaned for {days_since_last_update} and will be deleted.")
+
+                    # Todo:
+                    # * Needs testing
+                    #self.request(nb_object_sub_class, req_type="DELETE", nb_id=object.nb_id)
 
         return

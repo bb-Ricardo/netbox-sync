@@ -3,7 +3,7 @@ import pprint
 
 import json
 
-from ipaddress import ip_address, ip_network, ip_interface
+from ipaddress import ip_address, ip_network, ip_interface, IPv6Network, IPv4Network, IPv4Address, IPv6Address
 
 
 from module.netbox.object_classes import *
@@ -221,8 +221,135 @@ class NetBoxInventory:
 
     def update_all_ip_addresses(self):
 
-        all_prefixes = slef.get_all_items(NBPrefixes)
-        address = slef.get_all_items(NBIPAddresses)
+
+        # ToDo:
+        #   * get DNS names for ip addresses and set them as well
+
+        def _return_longest_match(ip_to_match=None, list_of_prefixes=None):
+
+            if ip_to_match is None or list_of_prefixes is None:
+                return
+
+            if not isinstance(ip_to_match, (IPv4Address, IPv6Address)):
+                try:
+                    ip_to_match = ip_address(ip_to_match)
+                except ValueError:
+                    return
+
+            if not isinstance(list_of_prefixes, list):
+                return
+
+            sanatized_list_of_prefixes = list()
+            for prefix in list_of_prefixes:
+
+                if not isinstance(prefix, (IPv4Network, IPv6Network)):
+                    try:
+                        sanatized_list_of_prefixes.append(ip_network(prefix))
+                    except ValueError:
+                        return
+                else:
+                    sanatized_list_of_prefixes.append(prefix)
+
+            current_longest_matching_prefix_length = 0
+            current_longest_matching_prefix = None
+
+            for prefix in sanatized_list_of_prefixes:
+
+                if ip_to_match in prefix and \
+                    prefix.prefixlen >= current_longest_matching_prefix_length:
+
+                    current_longest_matching_prefix_length = prefix.prefixlen
+                    current_longest_matching_prefix = prefix
+
+            return current_longest_matching_prefix
+
+
+        log.info("Trying to math IPs to existing prefixes")
+
+        all_prefixes = self.get_all_items(NBPrefixes)
+        all_addresses = self.get_all_items(NBIPAddresses)
+
+        # prepare prefixes
+        prefixes_per_site = dict()
+        for this_prefix in all_prefixes:
+
+            # name of the site or None (as string)
+            prefix_site = str(grab(this_prefix, "data.site.data.name"))
+
+            if prefixes_per_site.get(prefix_site) is None:
+                prefixes_per_site[prefix_site] = list()
+
+            prefixes_per_site[prefix_site].append(ip_network(grab(this_prefix, "data.prefix")))
+
+        # iterate over all IP addresses
+        for ip in all_addresses:
+
+            if ip.source is None:
+                continue
+
+            if grab(ip, "data.assigned_object_id") is None:
+                continue
+
+            log.debug2("Trying to find prefix for IP: %s" % ip.get_display_name())
+
+            object_site = "None"
+            # name of the site or None (as string)
+            # -> NBInterfaces -> NBDevices -> NBSites
+            if grab(ip, "data.assigned_object_type") == "dcim.interface":
+                object_site = str(grab(ip, "data.assigned_object_id.data.device.data.site.data.name"))
+            # -> NBVMInterfaces -> NBVMs -> NBClusters -> NBSites
+            elif grab(ip, "data.assigned_object_type") == "virtualization.vminterface":
+                object_site = str(grab(ip, "data.assigned_object_id.data.virtual_machine.data.cluster.data.site.data.name"))
+
+            log.debug2(f"Site name for this IP: {object_site}")
+
+            ip_a = grab(ip, "data.address", fallback="").split("/")[0]
+
+            # test site prefixes first
+            matching_site_name = object_site
+            matching_site_prefix = _return_longest_match(ip_a, prefixes_per_site.get(object_site))
+
+            # nothing was found then check prefixes with no
+            if matching_site_prefix is None:
+
+                matching_site_name = "undefined"
+                matching_site_prefix = _return_longest_match(ip_a, prefixes_per_site.get("None"))
+
+            # no matching prefix found, give up
+            if matching_site_prefix is None:
+                continue
+
+            log.debug2(f"Found IP '{ip_a}' matches prefix '{matching_site_prefix}' in site '{matching_site_name}'")
+
+            for prefix in all_prefixes:
+
+                this_prefix_site_name = grab(prefix, "data.site.data.name", fallback="undefined")
+                matching_site_prefix = str(matching_site_prefix)
+
+                # make sure we found the correct prefix object
+                if this_prefix_site_name == matching_site_name and \
+                    grab(prefix, "data.prefix") == matching_site_prefix:
+
+                    data = dict()
+
+                    vrf = grab(prefix, "data.vrf.id")
+                    tenant = grab(prefix, "data.tenant.id")
+
+                    if vrf is not None and str(vrf) != str(grab(ip, "data.vrf.id")):
+                        data["vrf"] = vrf
+
+                    # only overwrite tenant if not already defined
+                    if tenant is not None and grab(ip, "data.tenant.id") is None and str(tenant) != str(grab(ip, "data.tenant.id")):
+                        data["tenant"] = tenant
+
+                    if len(data.keys()) > 0:
+                        ip.update(data=data)
+                    break
+
+
+    def set_primary_ips(self):
+
+        pass
 
 
     def to_dict(self):

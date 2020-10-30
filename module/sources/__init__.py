@@ -9,6 +9,8 @@ valid_sources = [ VMWareHandler ]
 from module.common.configuration import get_config
 from module.common.logging import get_logger
 
+# ToDo:
+#   * add post initialization validation
 
 def validate_source(source_class=None):
 

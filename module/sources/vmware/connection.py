@@ -90,7 +90,6 @@ class VMWareHandler():
         if self.session is not None:
             self.init_successfull = True
 
-
     def parse_config_settings(self, config_settings):
 
         validation_failed = False
@@ -532,7 +531,7 @@ class VMWareHandler():
 
         annotation = get_string_or_none(grab(obj, "config.annotation"))
 
-        data = {
+        vm_data = {
             "name": name,
             "cluster": {"name": cluster},
             "role": {"name": self.settings.get("netbox_vm_device_role")},
@@ -543,15 +542,14 @@ class VMWareHandler():
         }
 
         if platform is not None:
-            data["platform"] = {"name": platform}
+            vm_data["platform"] = {"name": platform}
 
         if annotation is not None:
-            data["comments"] = annotation
+            vm_data["comments"] = annotation
 
-        vm_object = self.inventory.add_update_object(NBVMs, data=data, source=self)
 
-        # ToDo:
-        # * get current interfaces and compare description (primary key in vCenter)
+        device_nic_data = list()
+        device_ip_addresses = dict()
 
         # get vm interfaces
         for vm_device in hardware_devices:
@@ -562,9 +560,12 @@ class VMWareHandler():
             if int_mac is None:
                 continue
 
-            log.debug2("Parsing device {}: {}".format(grab(vm_device, "_wsdlName"), grab(vm_device, "macAddress")))
+            device_class = grab(vm_device, "_wsdlName")
+
+            log.debug2(f"Parsing device {device_class}: {int_mac}")
 
             int_network_name = self.networks.get(grab(vm_device, "backing.port.portgroupKey"))
+
             int_connected = grab(vm_device, "connectable.connected")
             int_label = grab(vm_device, "deviceInfo.label", fallback="")
 
@@ -577,7 +578,6 @@ class VMWareHandler():
                 if int_mac != normalize_mac_address(grab(guest_nic, "macAddress")):
                     continue
 
-                int_network_name = grab(guest_nic, "network", fallback=int_network_name)
                 int_connected = grab(guest_nic, "connected", fallback=int_connected)
 
                 # grab all valid interface ip addresses
@@ -604,28 +604,68 @@ class VMWareHandler():
                     int_ip_addresses.append(int_ip_address)
 
 
+            int_full_name = int_name
             if int_network_name is not None:
-                int_name = f"{int_name} ({int_network_name})"
+                int_full_name = f"{int_full_name} ({int_network_name})"
 
             vm_nic_data = {
-                "name": int_name,
-                "virtual_machine": vm_object,
+                "name": int_full_name,
                 "mac_address": int_mac,
-                "description": int_label,
+                "description": f"{int_label} ({device_class})",
                 "enabled": int_connected,
             }
 
-            # we are trying multiple strategies to find the correct interface
-            #
+            device_nic_data.append(vm_nic_data)
+            device_ip_addresses[int_full_name] = int_ip_addresses
 
-            vm_nic_object = self.inventory.get_by_data(NBVMInterfaces, data={"mac_address": int_mac})
+
+        # now we collected all the device data
+        # lets try to find a matching object on following order
+        #   * try to match name
+        #       * if name matches try to find the cluster matches
+        #   * try to check if any interface MAC matches to an existing object
+        #       * if mac matches try to match IP
+        #   * try if any interface IP matches the primary IP of that device
+        #       * if primary IP matches see if cluster matches
+        #
+        # if nothing of the above worked then it's probably a new VM
+
+        vm_object = None
+
+        if vm_object is None:
+            vm_object = self.inventory.add_update_object(NBVMs, data=vm_data, source=self)
+
+        for vm_nic_data in device_nic_data:
+
+            vm_nic_data["virtual_machine"] = vm_object
+
+            # we are trying multiple strategies to find the correct interface
+            # mac address will change if interface is moved to a different network
+            # * interface name i.e. vNIC 1 and ignore network
+            # * mac address
+
+            vm_nic_object = None
+            for interface in self.inventory.get_all_items(NBVMInterfaces):
+
+                if grab(interface, "data.virtual_machine") != vm_object:
+                    continue
+
+                # found device based on name
+                if grab(interface, "data.name").startswith(vm_nic_data.get("name").split("(")[0].strip()):
+                    vm_nic_object = interface
+                    break
+
+                # found device based on mac address
+                if grab(interface, "data.mac_address") == vm_nic_data.get("mac_address"):
+                    vm_nic_object = interface
+                    break
 
             if vm_nic_object is not None:
                 vm_nic_object.update(data=vm_nic_data, source=self)
             else:
                 vm_nic_object = self.inventory.add_update_object(NBVMInterfaces, data=vm_nic_data, source=self)
 
-            for int_ip_address in int_ip_addresses:
+            for int_ip_address in device_ip_addresses.get(vm_nic_data.get("name"), list()):
 
                 # apply ip filter
                 vm_nic_ip_data = {

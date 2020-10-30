@@ -1,5 +1,5 @@
 
-from ipaddress import ip_network, ip_interface
+from ipaddress import ip_interface
 import aiodns
 import logging
 
@@ -14,7 +14,7 @@ def normalize_mac_address(mac_address=None):
 
     if mac_address is None:
         return None
-        
+
     mac_address = mac_address.upper()
 
     # add colons to interface address

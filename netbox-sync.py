@@ -95,10 +95,13 @@ def main():
     if len(sources) == 0:
         do_error_exit("No working sources found. Exit.")
 
-    # retrieve all dependent object classes
+    # collect all dependent object classes
     netbox_objects_to_query = list()
     for source in sources:
         netbox_objects_to_query.extend(source.dependend_netbox_objects)
+
+    # we need to collect prefixes as well to so which ip belongs to which prefix
+    netbox_objects_to_query.append(NBPrefixes)
 
     # request NetBox data
     log.info("Querying necessary objects from Netbox. This might take a while.")
@@ -119,32 +122,19 @@ def main():
     inventory.tag_all_the_things(sources, NB_handler)
 
     # update all IP addresses
-    #inventory.update_all_ip_addresses()
-    
-    #for object in inventory.get_all_items(NBVMs):
-    #    print(object.get_display_name())
-
-    """
-    for object in inventory.get_all_items(NBIPAddresses):
-   
-        try:
-            print(object)
-        except Exception as e:
-            print(e)
-            pprint.pprint(object.__dict__)
-            exit(2)
-            
-   
-    exit(0)
-
-    inventory.set_primary_ips()
-    # Optional tasks
-    if settings.POPULATE_DNS_NAME:
-        nb.set_dns_names()
-    """
+    inventory.update_all_ip_addresses()
 
     # update data in NetBox
     NB_handler.update_instance()
+
+    # now see where we can update primary IPs
+    inventory.set_primary_ips()
+
+    # update data in NetBox again
+    NB_handler.update_instance()
+
+    # prune orphaned objects from NetBox
+    NB_handler.prune_data()
 
     # finish
     log.info("Completed NetBox Sync in %s" % get_relative_time(datetime.now() - start_time))
