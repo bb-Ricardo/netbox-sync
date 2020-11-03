@@ -13,7 +13,7 @@ from module.netbox.object_classes import *
 from module.common.misc import grab, do_error_exit, dump, get_string_or_none
 from module.common.support import normalize_mac_address, format_ip
 from module import plural
-from module.common.logging import get_logger
+from module.common.logging import get_logger, DEBUG3
 
 log = get_logger()
 
@@ -51,7 +51,9 @@ class VMWareHandler():
         "netbox_vm_device_role": "Server",
         "permitted_subnets": None,
         "collect_hardware_asset_tag": True,
-        "cluster_site_relation": None
+        "cluster_site_relation": None,
+        "dns_name_lookup": False,
+        "custom_dns_servers": None
     }
 
     init_successfull = False
@@ -66,11 +68,14 @@ class VMWareHandler():
     site_name = None
 
     networks = dict()
+    dvs_mtu = dict()
     standalone_hosts = list()
 
     processed_host_names = list()
     processed_vm_names = list()
+    processed_vm_uuid = list()
 
+    parsing_vms_the_first_time = True
 
     def __init__(self, name=None, settings=None, inventory=None):
 
@@ -137,15 +142,30 @@ class VMWareHandler():
                 site_name = relation.split("=")[1].strip()
 
                 if len(cluster_name) == 0 or len(site_name) == 0:
-                    log.error("Config option 'cluster_site_relation' malformed got '{cluster_name}' for cluster_name and '{site_name}' for site name.")
+                    log.error(f"Config option 'cluster_site_relation' malformed got '{cluster_name}' for cluster_name and '{site_name}' for site name.")
                     validation_failed = True
 
                 relation_data[cluster_name] = site_name
 
             config_settings["cluster_site_relation"] = relation_data
 
+        if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
+
+            custom_dns_servers = [x.strip() for x in config_settings.get("custom_dns_servers").split(",") if x.strip() != ""]
+
+            tested_custom_dns_servers = list()
+            for custom_dns_server in custom_dns_servers:
+                try:
+                    tested_custom_dns_servers.append(str(ip_address(custom_dns_server)))
+                except ValueError:
+                    log.error(f"Config option 'custom_dns_servers' value '{custom_dns_server}' does not appear to be an IP address.")
+                    validation_failed = True
+
+            config_settings["custom_dns_servers"] = tested_custom_dns_servers
+
         if validation_failed is True:
-            do_error_exit("Config validation failed. Exit!")
+            log.error("Config validation failed. Exit!")
+            exit(1)
 
         for setting in self.settings.keys():
             setattr(self, setting, config_settings.get(setting))
@@ -186,7 +206,21 @@ class VMWareHandler():
 
         log.info(f"Query data from vCenter: '{self.host_fqdn}'")
 
-        # Mapping of object type keywords to view types and handlers
+        """
+        Mapping of object type keywords to view types and handlers
+
+        iterate over all VMs twice.
+
+        To handle VMs with the same name in a cluster we first
+        iterate over all VMs and look only at the active ones
+        and sync these first.
+        Then we iterate a second time to catch the rest.
+
+        This has been implemented to support migration scenarios
+        where you create the same machines with a different setup
+        like a new version or something. This way NetBox will be
+        updated primarily with the actual active VM data.
+        """
         object_mapping = {
             "datacenter": {
                 "view_type": vim.Datacenter,
@@ -205,6 +239,10 @@ class VMWareHandler():
                 "view_handler": self.add_host
             },
             "virtual machine": {
+                "view_type": vim.VirtualMachine,
+                "view_handler": self.add_virtual_machine
+            },
+            "offline virtual machine": {
                 "view_type": vim.VirtualMachine,
                 "view_handler": self.add_virtual_machine
             }
@@ -234,13 +272,38 @@ class VMWareHandler():
                 log.error(f"Creating vCenter view for '{view_name}s' failed!")
                 continue
 
-            log.debug("vCenter returned '%d' %s%s" % (len(view_objects), view_name, plural(len(view_objects))))
+            if view_name != "offline virtual machine":
+                log.debug("vCenter returned '%d' %s%s" % (len(view_objects), view_name, plural(len(view_objects))))
+            else:
+                self.parsing_vms_the_first_time = False
+                log.debug("Iterating over all virtual machines a second time ")
 
             for obj in view_objects:
+
+                if log.level == DEBUG3:
+                    try:
+                        dump(obj)
+                    except Exception as e:
+                        log.error(e)
 
                 view_details.get("view_handler")(obj)
 
             container_view.Destroy()
+
+    @staticmethod
+    def passes_filter(name, include_filter, exclude_filter):
+
+        # first includes
+        if include_filter is not None and not include_filter.match(name):
+            log.debug(f"Cluster '{name}' did not match include filter '{include_filter.pattern}'. Skipping")
+            return False
+
+        # second excludes
+        if exclude_filter is not None and exclude_filter.match(name):
+            log.debug(f"Cluster '{name}' matched exclude filter '{exclude_filter.pattern}'. Skipping")
+            return False
+
+        return True
 
     def add_datacenter(self, obj):
 
@@ -263,17 +326,8 @@ class VMWareHandler():
 
         log.debug2(f"Parsing vCenter cluster: {name}")
 
-        # first includes
-        if self.cluster_include_filter is not None:
-            if not self.cluster_include_filter.match(name):
-                log.debug(f"Cluster '{name}' did not match include filter '{self.cluster_include_filter.pattern}'. Skipping")
-                return
-
-        # second excludes
-        if self.cluster_exclude_filter is not None:
-            if self.cluster_exclude_filter.match(name):
-                log.debug(f"Cluster '{name}' matched exclude filter '{self.cluster_exclude_filter.pattern}'. Skipping")
-                return
+        if self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
+            return
 
         # set default site name
         site_name = self.site_name
@@ -296,13 +350,17 @@ class VMWareHandler():
 
         key = get_string_or_none(grab(obj, "key"))
         name = get_string_or_none(grab(obj, "name"))
+        vlan_id = grab(obj, "config.defaultPortConfig.vlan.vlanId")
 
         if key is None or name is None:
             return
 
         log.debug2(f"Parsing vCenter network: {name}")
 
-        self.networks[key] = name
+        self.networks[key] = {
+            "name": name,
+            "vlan_id": vlan_id
+        }
 
     def add_host(self, obj):
 
@@ -321,22 +379,13 @@ class VMWareHandler():
         self.processed_host_names.append(name)
 
         # filter hosts
-        # first includes
-        if self.host_include_filter is not None:
-            if not self.host_include_filter.match(name):
-                log.debug(f"Host '{name}' did not match include filter '{self.host_include_filter.pattern}'. Skipping")
-                return
-
-        # second excludes
-        if self.host_exclude_filter is not None:
-            if self.host_exclude_filter.match(name):
-                log.debug(f"Host '{name}' matched exclude filter '{self.host_exclude_filter.pattern}'. Skipping")
-                return
+        if self.passes_filter(name, self.host_include_filter, self.host_exclude_filter) is False:
+            return
 
         manufacturer =  get_string_or_none(grab(obj, "summary.hardware.vendor"))
         model =  get_string_or_none(grab(obj, "summary.hardware.model"))
-        product_name = get_string_or_none(grab(obj, "config.product.name"))
-        product_version =  get_string_or_none(grab(obj, "config.product.version"))
+        product_name = get_string_or_none(grab(obj, "summary.config.product.name"))
+        product_version =  get_string_or_none(grab(obj, "summary.config.product.version"))
         platform = f"{product_name} {product_version}"
 
 
@@ -414,9 +463,63 @@ class VMWareHandler():
 
         host_object = self.inventory.add_update_object(NBDevices, data=data, source=self)
 
+        host_vswitches = dict()
+        for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
+
+            vswitch_name = grab(vswitch, "name")
+
+            vswitch_pnics = [str(x) for x in grab(vswitch, "pnic", fallback=list())]
+
+            if vswitch_name is not None:
+
+                log.debug2(f"Found vSwitch {vswitch_name}")
+
+                host_vswitches[vswitch_name] = {
+                    "mtu": grab(vswitch, "mtu"),
+                    "pnics": vswitch_pnics
+                }
+
+        host_pswitches = dict()
+        for pswitch in grab(obj, "config.network.proxySwitch", fallback=list()):
+
+            pswitch_uuid = grab(pswitch, "dvsUuid")
+            pswitch_name = grab(pswitch, "dvsName")
+            pswitch_pnics = [str(x) for x in grab(pswitch, "pnic", fallback=list())]
+
+            if pswitch_uuid is not None:
+
+                log.debug2(f"Found proxySwitch {pswitch_name}")
+
+                host_pswitches[pswitch_uuid] = {
+                    "name": pswitch_name,
+                    "mtu": grab(pswitch, "mtu"),
+                    "pnics": pswitch_pnics
+                }
+
+                self.dvs_mtu[pswitch_uuid] = grab(pswitch, "mtu")
+
+        host_portgroups = dict()
+        for pgroup in grab(obj, "config.network.portgroup", fallback=list()):
+
+            pgroup_name = grab(pgroup, "spec.name")
+
+            if pgroup_name is not None:
+
+                log.debug2(f"Found portGroup {pgroup_name}")
+
+                host_portgroups[pgroup_name] = {
+                    "vlan_id": grab(pgroup, "spec.vlanId"),
+                    "vswitch": grab(pgroup, "spec.vswitchName")
+                }
+
         for pnic in grab(obj, "config.network.pnic", fallback=list()):
 
-            log.debug2("Parsing {}: {}".format(grab(pnic, "_wsdlName"), grab(pnic, "device")))
+            pnic_name = grab(pnic, "device")
+            pnic_key = grab(pnic, "key")
+
+            log.debug2("Parsing {}: {}".format(grab(pnic, "_wsdlName"), pnic_name))
+
+            pnic_mtu = None
 
             pnic_link_speed = grab(pnic, "linkSpeed.speedMb")
             if pnic_link_speed is None:
@@ -424,7 +527,30 @@ class VMWareHandler():
             if pnic_link_speed is None:
                 pnic_link_speed = grab(pnic, "validLinkSpecification.0.speedMb")
 
-            pnic_link_speed_text = f"{pnic_link_speed}Mbps " if pnic_link_speed is not None else ""
+            # determine link speed text
+            pnic_description = ""
+            if pnic_link_speed is not None:
+                if pnic_link_speed >= 1000:
+                    pnic_description = "%iGb/s " % int(pnic_link_speed / 1000)
+                else:
+                    pnic_description = f"{pnic_link_speed}Mb/s "
+
+            pnic_description = f"{pnic_description} pNIC"
+
+            # check virtual switches for interface data
+            for vs_name, vs_data in host_vswitches.items():
+
+                if pnic_key in vs_data.get("pnics", list()):
+                    pnic_description = f"{pnic_description} ({vs_name})"
+                    pnic_mtu = vs_data.get("mtu")
+
+            # check proxy switches for interface data
+            for ps_uuid, ps_data in host_pswitches.items():
+
+                if pnic_key in ps_data.get("pnics", list()):
+                    ps_name = ps_data.get("name")
+                    pnic_description = f"{pnic_description} ({ps_name})"
+                    pnic_mtu = ps_data.get("mtu")
 
             pnic_speed_type_mapping = {
                 100: "100base-tx",
@@ -435,85 +561,121 @@ class VMWareHandler():
             }
 
             pnic_data = {
-                "name": grab(pnic, "device"),
+                "name": pnic_name,
                 "device": host_object,
                 "mac_address": normalize_mac_address(grab(pnic, "mac")),
-                "enabled": bool(grab(pnic, "spec.linkSpeed")),
-                "description": f"{pnic_link_speed_text}Physical Interface",
+                "enabled": bool(grab(pnic, "linkSpeed")),
+                "description": pnic_description,
                 "type": pnic_speed_type_mapping.get(pnic_link_speed, "other")
             }
+
+            if pnic_mtu is not None:
+                pnic_data["mtu"] = pnic_mtu
 
             self.inventory.add_update_object(NBInterfaces, data=pnic_data, source=self)
 
 
         for vnic in grab(obj, "config.network.vnic", fallback=list()):
 
-            log.debug2("Parsing {}: {}".format(grab(vnic, "_wsdlName"), grab(vnic, "device")))
+            vnic_name = grab(vnic, "device")
+
+            log.debug2("Parsing {}: {}".format(grab(vnic, "_wsdlName"), vnic_name))
+
+            vnic_portgroup = grab(vnic, "portgroup")
+            vnic_portgroup_data = host_portgroups.get(vnic_portgroup)
+
+            vnic_description = vnic_portgroup
+            if vnic_portgroup_data is not None:
+                vnic_vlan_id = vnic_portgroup_data.get("vlan_id")
+                vnic_vswitch = vnic_portgroup_data.get("vswitch")
+                vnic_description = f"{vnic_description} ({vnic_vswitch}, vlan ID: {vnic_vlan_id})"
 
             vnic_data = {
-                "name": grab(vnic, "device"),
+                "name": vnic_name,
                 "device": host_object,
                 "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
                 "mtu": grab(vnic, "spec.mtu"),
-                "description": grab(vnic, "portgroup"),
+                "description": vnic_description,
                 "type": "virtual"
             }
 
             vnic_object = self.inventory.add_update_object(NBInterfaces, data=vnic_data, source=self)
 
-            vnic_ip = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
+            # check if interface has the default route
+            if grab(vnic, "spec.ipRouteSpec") is not None:
+                vnic_object.is_primary = True
 
-            if format_ip(vnic_ip) is None:
-                logging.error(f"IP address '{vnic_ip}' for {vnic_object.get_display_name()} invalid!")
-                continue
+            vnic_ips = list()
 
-            ip_permitted = False
+            vnic_ips.append("{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask")))
 
-            ip_address_object = ip_address(grab(vnic, "spec.ip.ipAddress"))
-            for permitted_subnet in self.permitted_subnets:
-                if ip_address_object in permitted_subnet:
-                    ip_permitted = True
-                    break
+            for ipv6_a in grab(vnic, "spec.ip.ipV6Config.ipV6Address", fallback=list()):
 
-            if ip_permitted is False:
-                log.debug(f"IP address {vnic_ip} not part of any permitted subnet. Skipping.")
-                continue
+                vnic_ips.append("{}/{}".format(grab(ipv6_a, "ipAddress"), grab(ipv6_a, "prefixLength")))
 
-            vnic_ip_data = {
-                "address": format_ip(vnic_ip),
-                "assigned_object_id": vnic_object,
-            }
+            # add all interface IPs
+            for vnic_ip in vnic_ips:
 
-            self.inventory.add_update_object(NBIPAddresses, data=vnic_ip_data, source=self)
+                if format_ip(vnic_ip) is None:
+                    logging.error(f"IP address '{vnic_ip}' for {vnic_object.get_display_name()} invalid!")
+                    continue
+
+                ip_permitted = False
+
+                ip_address_object = ip_interface(vnic_ip).ip
+                for permitted_subnet in self.permitted_subnets:
+                    if ip_address_object in permitted_subnet:
+                        ip_permitted = True
+                        break
+
+                if ip_permitted is False:
+                    log.debug(f"IP address {vnic_ip} not part of any permitted subnet. Skipping.")
+                    continue
+
+                vnic_ip_data = {
+                    "address": format_ip(vnic_ip),
+                    "assigned_object_id": vnic_object,
+                }
+
+                self.inventory.add_update_object(NBIPAddresses, data=vnic_ip_data, source=self)
 
     def add_virtual_machine(self, obj):
 
         name = get_string_or_none(grab(obj, "name"))
 
-        log.debug2(f"Parsing vCenter host: {name}")
+        # get VM UUID
+        vm_uuid = grab(obj, "config.uuid")
 
-        if name in self.processed_vm_names:
-            log.warning(f"Virtual machine '{name}' already parsed. Make sure to use unique host names. Skipping")
+        if vm_uuid is None or vm_uuid in self.processed_vm_uuid:
             return
 
-        self.processed_vm_names.append(name)
+        log.debug2(f"Parsing vCenter VM: {name}")
 
-        # first includes
-        if self.vm_include_filter is not None:
-            if not self.vm_include_filter.match(name):
-                log.debug(f"Virtual machine '{name}' did not match include filter '{self.vm_include_filter.pattern}'. Skipping")
-                return
+        # get VM power state
+        status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
 
-        # second excludes
-        if self.vm_exclude_filter is not None:
-            if self.vm_exclude_filter.match(name):
-                log.debug(f"Virtual Machine '{name}' matched exclude filter '{self.vm_exclude_filter.pattern}'. Skipping")
-                return
+        # ignore offline VMs during first run
+        if self.parsing_vms_the_first_time == True and status == "offline":
+            log.debug2(f"Ignoring {status} VM '{name}' on first run")
+            return
+
+        # filter VMs
+        if self.passes_filter(name, self.vm_include_filter, self.vm_exclude_filter) is False:
+            return
 
         cluster = get_string_or_none(grab(obj, "runtime.host.parent.name"))
         if cluster is None:
             log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
             return
+
+        if name in self.processed_vm_names:
+            log.warning(f"Virtual machine '{name}' already parsed. Make sure to use unique VM names. Skipping")
+            return
+
+        # add to processed VMs
+        self.processed_vm_uuid.append(vm_uuid)
+        self.processed_vm_names.append(name)
+
 
         if cluster in self.standalone_hosts:
             cluster = "Standalone ESXi Host"
@@ -521,7 +683,6 @@ class VMWareHandler():
         platform = grab(obj, "config.guestFullName")
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
-        status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
@@ -551,6 +712,38 @@ class VMWareHandler():
         device_nic_data = list()
         device_ip_addresses = dict()
 
+        default_route_4_int_mac = None
+        default_route_6_int_mac = None
+
+        for route in grab(obj, "guest.ipStack.0.ipRouteConfig.ipRoute", fallback=list()):
+
+            # we found a default route
+            if grab(route, "prefixLength") == 0:
+
+                ip_a = None
+                try:
+                    ip_a = ip_address(grab(route, "network"))
+                except ValueError:
+                    pass
+
+                if ip_a is None:
+                    continue
+
+                gateway_device = grab(route, "gateway.device", fallback="")
+
+                nics = grab(obj, "guest.net", fallback=list())
+
+                print(grab(nics, f"{gateway_device}"))
+                gateway_device_mac = normalize_mac_address(grab(nics, f"{gateway_device}.macAddress"))
+
+                if ip_a.version == 4 and gateway_device_mac is not None:
+                    default_route_4_int_mac = gateway_device_mac
+                elif ip_a.version == 6 and gateway_device_mac is not None:
+                    default_route_6_int_mac = gateway_device_mac
+
+        #print(default_route_4_int_mac)
+        #print(default_route_6_int_mac)
+
         # get vm interfaces
         for vm_device in hardware_devices:
 
@@ -564,7 +757,17 @@ class VMWareHandler():
 
             log.debug2(f"Parsing device {device_class}: {int_mac}")
 
-            int_network_name = self.networks.get(grab(vm_device, "backing.port.portgroupKey"))
+            int_portgroup_data = self.networks.get(grab(vm_device, "backing.port.portgroupKey"))
+
+            int_network_name = grab(int_portgroup_data, "name")
+            int_network_vlan_id = grab(int_portgroup_data, "vlan_id")
+
+
+            int_dvswitch_uuid = grab(vm_device, "backing.port.switchUuid")
+
+            int_mtu = None
+            if int_dvswitch_uuid is not None:
+                int_mtu = self.dvs_mtu.get(int_dvswitch_uuid)
 
             int_connected = grab(vm_device, "connectable.connected")
             int_label = grab(vm_device, "deviceInfo.label", fallback="")
@@ -608,16 +811,52 @@ class VMWareHandler():
             if int_network_name is not None:
                 int_full_name = f"{int_full_name} ({int_network_name})"
 
+            int_description = f"{int_label} ({device_class})"
+            if int_network_vlan_id is not None:
+                int_description = f"{int_description} (vlan ID: {int_network_vlan_id})"
+
             vm_nic_data = {
                 "name": int_full_name,
                 "mac_address": int_mac,
-                "description": f"{int_label} ({device_class})",
+                "description": int_description,
                 "enabled": int_connected,
             }
+
+            if int_mtu is not None:
+                vm_nic_data["mtu"] = int_mtu
 
             device_nic_data.append(vm_nic_data)
             device_ip_addresses[int_full_name] = int_ip_addresses
 
+
+        #####
+        # add reported guest IP if
+        #   * VM has one interface and
+        #   * this one interface hast no IPv4
+        """
+        if len(device_nic_data) == 1 and guest_ip is not None:
+
+            ip_a = None
+            try:
+                ip_a = ip_address(guest_ip)
+            except ValueError:
+                pass
+
+            if ip_a is not None:
+
+                prefix_len = 32 if ip_a.version == 4 else 128
+
+                nic_name = grab(device_nic_data, "0.name")
+
+                add_this_ip = True
+                for nic_ip in device_ip_addresses[nic_name]:
+                    if nic_ip.split("/")[0] == guest_ip:
+                        add_this_ip = False
+                        break
+
+                if add_this_ip is True:
+                    device_ip_addresses[int_full_name].append(f"{guest_ip}/{prefix_len}")
+        """
 
         # now we collected all the device data
         # lets try to find a matching object on following order
@@ -631,9 +870,34 @@ class VMWareHandler():
         # if nothing of the above worked then it's probably a new VM
 
         vm_object = None
+        vm_object_candidates = list()
+
+        # check existing VMs for matches
+        for vm in self.inventory.get_all_items(NBVMs):
+
+            if vm.source is not None:
+                continue
+
+            if grab(vm, "data.name") != vm_data.get("name"):
+                continue
+
+            # name and cluster match exactly, we most likely found the correct VM
+            if grab(vm, "data.cluster.data.name") == vm_data.get("cluster.name"):
+                vm_object = vm
+                break
+
+            vm_object_candidates.append(vm)
+
+        if vm_object is None:
+
+            for vm_interface in self.inventory.get_all_items(NBVMInterfaces):
+                # check all interfaces against all MACs and try to find candidates
+                pass
 
         if vm_object is None:
             vm_object = self.inventory.add_update_object(NBVMs, data=vm_data, source=self)
+        else:
+            vm_object.update(data=vm_data, source=self)
 
         for vm_nic_data in device_nic_data:
 
@@ -706,3 +970,4 @@ class VMWareHandler():
 
 
 # EOF
+

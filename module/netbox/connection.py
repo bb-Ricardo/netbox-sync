@@ -1,9 +1,8 @@
 
-import requests
 import json
-import logging
 from datetime import datetime
-
+import requests
+from http.client import HTTPConnection
 import pickle
 
 from packaging import version
@@ -13,14 +12,12 @@ import pprint
 from module import plural
 from module.common.misc import grab, do_error_exit, dump
 from module.netbox.object_classes import *
-from module.common.logging import get_logger
+from module.common.logging import get_logger, DEBUG3
 
 log = get_logger()
 
 # ToDo:
-#   * DNS lookup
 #   * primary ip
-#   * get vrf for IP
 
 class NetBoxHandler:
     """
@@ -54,9 +51,9 @@ class NetBoxHandler:
     instance_virtual_interfaces = {}
 
     # testing option
-    use_netbox_caching_for_testing = False
+    use_netbox_caching_for_testing = True
 
-    def __init__(self, cli_args=None, settings=None, inventory=None):
+    def __init__(self, settings=None, inventory=None):
 
         self.settings = settings
         self.inventory = inventory
@@ -65,6 +62,12 @@ class NetBoxHandler:
         setattr(self.inventory, "primary_tag", self.primary_tag)
 
         self.parse_config_settings(settings)
+
+        # flood the console
+        if log.level == DEBUG3:
+            log.warning("Log level is set to DEBUG3, Request logs will only be printed to console")
+
+            HTTPConnection.debuglevel = 1
 
         proto = "https"
         if bool(self.disable_tls) is True:
@@ -97,7 +100,8 @@ class NetBoxHandler:
                 validation_failed = True
 
         if validation_failed is True:
-            do_error_exit("Config validation failed. Exit!")
+            log.error("Config validation failed. Exit!")
+            exit(1)
 
         for setting in self.settings.keys():
             setattr(self, setting, config_settings.get(setting))
@@ -109,7 +113,10 @@ class NetBoxHandler:
         :return: `True` if session created else `False`
         :rtype: bool
         """
-        header = {"Authorization": f"Token {self.api_token}"}
+        header = {
+            "Authorization": f"Token {self.api_token}",
+            "User-Agent": "netbox-sync/0.0.1"
+        }
 
         session = requests.Session()
         session.headers.update(header)
@@ -137,7 +144,7 @@ class NetBoxHandler:
         result = str(response.headers["API-Version"])
 
         log.info(f"Successfully connected to NetBox '{self.host_fqdn}'")
-        log.debug(f"Detected NetBox API v{result}.")
+        log.debug(f"Detected NetBox API version: {result}")
 
         return result
 
@@ -174,7 +181,6 @@ class NetBoxHandler:
         if response.status_code == 200:
 
             # retrieve paginated results
-            #""" pagination disabled
             if this_request.method == "GET" and result is not None:
                 while response.json().get("next") is not None:
                     this_request.url = response.json().get("next")
@@ -182,7 +188,7 @@ class NetBoxHandler:
 
                     response = self.single_request(this_request)
                     result["results"].extend(response.json().get("results"))
-            #"""
+
         elif response.status_code in [201, 204]:
 
             action = "created" if response.status_code == 201 else "deleted"
@@ -211,7 +217,10 @@ class NetBoxHandler:
 
     def single_request(self, this_request):
 
-        req = None
+        response = None
+
+        if log.level == DEBUG3:
+            pprint.pprint(vars(this_request))
 
         for _ in range(self.max_retry_attempts):
 
@@ -223,7 +232,7 @@ class NetBoxHandler:
                 log.debug2(log_message)
 
             try:
-                req = self.session.send(this_request,
+                response = self.session.send(this_request,
                     timeout=self.timeout, verify=self.validate_tls_certs)
 
             except (ConnectionError, requests.exceptions.ConnectionError,
@@ -235,9 +244,17 @@ class NetBoxHandler:
         else:
             do_error_exit(f"Giving up after {self.max_retry_attempts} retries.")
 
-        log.debug2("Received HTTP Status %s.", req.status_code)
+        log.debug2("Received HTTP Status %s.", response.status_code)
 
-        return req
+        # print debugging information
+        if log.level == DEBUG3:
+            log.debug("Response Body:")
+            try:
+                pprint.pprint(response.json())
+            except json.decoder.JSONDecodeError as e:
+                log.error(e)
+
+        return response
 
     def query_current_data(self, netbox_objects_to_query=None):
 
@@ -281,25 +298,29 @@ class NetBoxHandler:
         return
 
     def inizialize_basic_data(self):
+        """
+            Adds the two basic tags to keep track of objects and see which
+            objects are no longer exists in source to automatically remove them
+        """
 
         log.debug("Checking/Adding NetBox Sync dependencies")
+
+        prune_text = f"Pruning is enabled and Objects will be automatically removed after {self.prune_delay_in_days} days"
+
+        if self.prune_enabled is False:
+            prune_text = f"Objects would be automatically removed after {self.prune_delay_in_days} days but pruning is currently disabled."
 
         self.inventory.add_update_object(NBTags, data = {
             "name": self.orphaned_tag,
             "color": "607d8b",
-            "description": "The source which has previously "
-                        "provided the object no longer "
-                        "states it exists.{}".format(
-                        " An object with the 'Orphaned' tag will "
-                        "remain in this state until it ages out "
-                        "and is automatically removed."
-                        ) if bool(self.settings.get("prune_enabled", False)) else ""
+            "description": "A source which has previously provided this object no "
+                          f"longer states it exists. {prune_text}"
         })
 
         self.inventory.add_update_object(NBTags, data = {
             "name": self.primary_tag,
-            "description": "Created and used by NetBox Sync Script "
-                           "to keep track of created items."
+            "description": "Created and used by NetBox Sync Script to keep track of created items. "
+                           "DO NOT change this tag, otherwise syncing can't keep track of deleted objects."
         })
 
     def update_object(self, nb_object_sub_class):
@@ -359,6 +380,7 @@ class NetBoxHandler:
             if returned_object_data is not None:
 
                 object.update(data = returned_object_data, read_from_netbox=True)
+                object.resolve_relations()
 
             elif issued_request is True:
                 log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {data_to_patch}")
@@ -395,24 +417,106 @@ class NetBoxHandler:
                 if self.orphaned_tag not in object.get_tags():
                     continue
 
-                log.debug2(f"Object '{object.get_display_name()}' is Orphaned")
+                date_last_update = grab(object, "data.last_updated")
+
+                if date_last_update is None:
+                    continue
+
+                # only need the date including seconds
+                date_last_update = date_last_update[0:19]
+
+                log.debug2(f"Object '{object.get_display_name()}' is Orphaned. Last time changed: {date_last_update}")
 
                 # check prune delay.
                 last_updated = None
                 try:
-                    last_updated = datetime.strptime(grab(object, "data.last_updated"),"%Y-%m-%dT%H:%M:%S")
+                    last_updated = datetime.strptime(date_last_update,"%Y-%m-%dT%H:%M:%S")
                 except Exception:
                     continue
 
-                days_since_last_update = (now - last_updated).days
+                days_since_last_update = (today - last_updated).days
 
                 # it seems we need to delete this object
                 if last_updated is not None and days_since_last_update >= self.prune_delay_in_days:
 
-                    log.info(f"{nb_object_sub_class.name.capitalize()} '{object.get_display_name()}' is orphaned for {days_since_last_update} and will be deleted.")
+                    log.info(f"{nb_object_sub_class.name.capitalize()} '{object.get_display_name()}' is orphaned for {days_since_last_update} days and will be deleted.")
 
                     # Todo:
                     # * Needs testing
                     #self.request(nb_object_sub_class, req_type="DELETE", nb_id=object.nb_id)
 
         return
+
+    def just_delete_all_the_things(self):
+        """
+        Using a brute force approach. Try to delete everything 10 times.
+        This way we don't need to care about dependencies.
+        """
+
+        log.info("Querying necessary objects from Netbox. This might take a while.")
+        self.query_current_data(NetBoxObject.__subclasses__())
+        log.info("Finished querying necessary objects from Netbox")
+
+        self.inventory.resolve_relations()
+
+        log.warning(f"Starting purge now. All objects with the tag '{self.primary_tag}' will be deleted!!!")
+
+        for iteration in range(10):
+
+            log.debug("Iteration %d trying to deleted all the objects." % (iteration + 1))
+
+            found_objects_to_delete = False
+
+            for nb_object_sub_class in reversed(NetBoxObject.__subclasses__()):
+
+                # tags need to be deleted at the end
+                if nb_object_sub_class == NBTags:
+                    continue
+
+                # object has no tags so we can't be sure it was created with this tool
+                if NBTags not in nb_object_sub_class.data_model.values():
+                    continue
+
+                for object in self.inventory.get_all_items(nb_object_sub_class):
+
+                    # already deleted
+                    if getattr(object, "deleted", False) is True:
+                        continue
+
+
+                    found_objects_to_delete = True
+
+                    if self.primary_tag in object.get_tags():
+                        log.info(f"{nb_object_sub_class.name} '{object.get_display_name()}' will be deleted now")
+
+                        """
+                        # Todo:
+                        # * Needs testing
+                        result = self.request(nb_object_sub_class, req_type="DELETE", nb_id=object.nb_id)
+
+                        if result is not None:
+                            object.deleted = True
+                        """
+
+
+            if found_objects_to_delete is False:
+
+                # get tag objects
+                primary_tag = self.inventory.add_update_object(NBTags, data = {"name": self.primary_tag})
+                orpahned_tag = self.inventory.get_by_data(NBTags, data = {"name": self.orphaned_tag})
+
+                # try to delete them
+                log.info(f"{NBTags.name} '{primary_tag.get_display_name()}' will be deleted now")
+                #self.request(NBTags, req_type="DELETE", nb_id=primary_tag.nb_id)
+
+                log.info(f"{NBTags.name} '{orpahned_tag.get_display_name()}' will be deleted now")
+                #self.request(NBTags, req_type="DELETE", nb_id=orpahned_tag.nb_id)
+
+                log.info("Successfully deleted all objects which were sync by this program.")
+                break
+        else:
+
+            log.warning("Unfortunately we were not able to delete all objects. Sorry")
+
+        return
+# EOF

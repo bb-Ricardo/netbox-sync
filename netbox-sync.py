@@ -13,9 +13,8 @@ from module.common.logging import setup_logging
 from module.common.configuration import get_config_file, open_config_file, get_config
 from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
-from module.netbox.object_classes import *
-
-from module.sources import *
+from module.netbox.object_classes import NBPrefixes
+from module.sources import instanciate_sources
 
 
 import pprint
@@ -35,8 +34,21 @@ default_config_file_path = "./settings.ini"
 """
 ToDo:
 * host "Management" interface is Primary
-* return more then one object if found more then one and add somehow to returned objects. Maybe related?
-* Add purge option
+* documentation
+    * describe migration (rename tags)
+    * proper naming to assign sites to clusters
+    * connection details
+    * installation
+    * Standalone Host declaration
+    * source module structure
+    * how a vm is picked
+    * how interfaces are named
+    * how objects are abducted (taken over by this program)
+    * thanks to original Owner of ideas
+    * ensure NTP is set up properly between all instances (pruning delay)
+* primary IP assignment
+* complain about prefix length mismatch
+* test all log levels
 """
 
 def main():
@@ -85,7 +97,14 @@ def main():
     netbox_settings = get_config(config_handler, section="netbox", valid_settings=NetBoxHandler.settings)
 
     # establish NetBox connection
-    NB_handler = NetBoxHandler(cli_args=args, settings=netbox_settings, inventory=inventory)
+    NB_handler = NetBoxHandler(settings=netbox_settings, inventory=inventory)
+
+    # if purge was selected we go ahead and remove all items which were managed by this tools
+    if args.purge is True:
+        NB_handler.just_delete_all_the_things()
+
+        # that's it, we are done here
+        exit(0)
 
     # instantiate source handlers and get attributes
     log.info("Initializing sources")
@@ -100,7 +119,7 @@ def main():
     for source in sources:
         netbox_objects_to_query.extend(source.dependend_netbox_objects)
 
-    # we need to collect prefixes as well to so which ip belongs to which prefix
+    # we need to collect prefixes as well to so which IP belongs to which prefix
     netbox_objects_to_query.append(NBPrefixes)
 
     # request NetBox data
@@ -119,7 +138,7 @@ def main():
         source.apply()
 
     # add/remove tags to/from all inventory items
-    inventory.tag_all_the_things(sources, NB_handler)
+    inventory.tag_all_the_things(NB_handler)
 
     # update all IP addresses
     inventory.update_all_ip_addresses()
@@ -142,3 +161,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# EOF

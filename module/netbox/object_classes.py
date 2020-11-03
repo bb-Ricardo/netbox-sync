@@ -575,6 +575,8 @@ class NBDevices(NetBoxObject):
         "status": [ "offline", "active", "planned", "staged", "failed", "inventory", "decommissioning" ],
         "cluster": NBClusters,
         "asset_tag": 50,
+        "primary_ip4": int,
+        "primary_ip6": int,
         "tags": NBTags
     }
 
@@ -594,6 +596,8 @@ class NBVMs(NetBoxObject):
         "memory": int,
         "disk": int,
         "comments": str,
+        "primary_ip4": int,
+        "primary_ip6": int,
         "tags": NBTags
     }
 
@@ -603,6 +607,7 @@ class NBVMInterfaces(NetBoxObject):
     primary_key = "name"
     secondary_key = "virtual_machine"
     enforce_secondary_key = True
+    is_primary = False
     data_model = {
         "name": 64,
         "virtual_machine": NBVMs,
@@ -618,6 +623,7 @@ class NBInterfaces(NetBoxObject):
     primary_key = "name"
     secondary_key = "device"
     enforce_secondary_key = True
+    is_primary = False
     data_model = {
         "name": 64,
         "device": NBDevices,
@@ -642,9 +648,10 @@ class NBIPAddresses(NetBoxObject):
         "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
         "assigned_object_id": [ NBInterfaces, NBVMInterfaces ],
         "description": 200,
+        "dns_name": 255,
         "tags": NBTags,
-        "vrf": int,
-        "tenant": int
+        "tenant": int,
+        "vrf": int
     }
     # add relation between two attributes
     data_model_relation = {
@@ -694,6 +701,13 @@ class NBIPAddresses(NetBoxObject):
         # we need to tell NetBox which object type this is meant to be
         if "assigned_object_id" in self.updated_items:
             self.updated_items.append("assigned_object_type")
+
+    def get_dependencies(self):
+        """
+            This is hard coded in here. Updated if data_model attribute changes!!!!
+        """
+
+        return [ NBInterfaces, NBVMInterfaces, NBTags ]
 
 
 class NBPrefixes(NetBoxObject):

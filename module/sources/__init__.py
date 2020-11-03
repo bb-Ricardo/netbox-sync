@@ -8,26 +8,40 @@ valid_sources = [ VMWareHandler ]
 ###############
 from module.common.configuration import get_config
 from module.common.logging import get_logger
+from module.netbox.inventory import NetBoxInventory
 
-# ToDo:
-#   * add post initialization validation
 
-def validate_source(source_class=None):
+def validate_source(source_class_object=None, state="pre"):
 
-    necessary_atrtributes = [
-        "dependend_netbox_objects",
-        "init_successfull",
-        "inventory",
-        "name",
-        "settings",
-        "source_tag",
-        "source_type",
-    ]
+    necessary_atrtributes = {
+        "dependend_netbox_objects": list,
+        "init_successfull": bool,
+        "inventory": NetBoxInventory,
+        "name": str,
+        "settings": dict,
+        "source_tag": str,
+        "source_type": str,
+    }
 
-    for attr in necessary_atrtributes:
+    for attr in necessary_atrtributes.keys():
 
         # raise exception if attribute not present
-        getattr(source_class, attr)
+        getattr(source_class_object, attr)
+
+    if state == "pre":
+        return
+
+    # post initialization validation
+    for attr, value_type in necessary_atrtributes.items():
+
+        value = getattr(source_class_object, attr)
+
+        if not isinstance(value, value_type):
+            raise ValueError(f"Value for attribute '{attr}' needs to be {value_type}")
+
+        if value_type in [list,str] and len(value) == 0:
+            raise ValueError(f"Value for attribute '{attr}' can't be empty.")
+
 
 def instanciate_sources(config_handler=None, inventory=None):
 
@@ -81,6 +95,8 @@ def instanciate_sources(config_handler=None, inventory=None):
         source_handler = source_class(name=source_section.replace("source/",""),
                                       inventory=inventory,
                                       settings=source_config)
+
+        validate_source(source_handler, "post")
 
         # add to list of source handlers
         if source_handler.init_successfull is True:

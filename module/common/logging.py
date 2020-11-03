@@ -7,17 +7,27 @@ from module.common.misc import do_error_exit
 
 # define DEBUG2 and DEBUG3 log levels
 DEBUG2 = 6  # extended messages
+DEBUG3 = 3  # extra extended messages
 
 # define valid log levels
-valid_log_levels = [ "DEBUG2", "DEBUG", "INFO", "WARNING", "ERROR"]
+valid_log_levels = [ "DEBUG3", "DEBUG2", "DEBUG", "INFO", "WARNING", "ERROR"]
 
 # add log level DEBUG2
 logging.addLevelName(DEBUG2, "DEBUG2")
+# add log level DEBUG3
+logging.addLevelName(DEBUG3, "DEBUG3")
+
 def debug2(self, message, *args, **kws):
     if self.isEnabledFor(DEBUG2):
         # Yes, logger takes its '*args' as 'args'.
         self._log(DEBUG2, message, args, **kws)
 logging.Logger.debug2 = debug2
+
+def debug3(self, message, *args, **kws):
+    if self.isEnabledFor(DEBUG3):
+        # Yes, logger takes its '*args' as 'args'.
+        self._log(DEBUG3, message, args, **kws)
+logging.Logger.debug3 = debug3
 
 
 def get_logger():
@@ -36,6 +46,8 @@ def setup_logging(log_level=None, log_file=None):
 
     """
 
+    log_format = '%(asctime)s - %(levelname)s: %(message)s'
+
     if log_level is None or log_level == "":
         do_error_exit("ERROR: log level undefined or empty. Check config please.")
 
@@ -46,10 +58,13 @@ def setup_logging(log_level=None, log_file=None):
     # check the provided log level
     if log_level == "DEBUG2":
         numeric_log_level = DEBUG2
+    elif log_level == "DEBUG3":
+        numeric_log_level = DEBUG3
+        logging.basicConfig(level=logging.DEBUG, format=log_format)
     else:
         numeric_log_level = getattr(logging, log_level.upper(), None)
 
-    log_format = logging.Formatter('%(asctime)s - %(levelname)s: %(message)s')
+    log_format = logging.Formatter(log_format)
 
     # create logger instance
     logger = get_logger()
@@ -57,9 +72,10 @@ def setup_logging(log_level=None, log_file=None):
     logger.setLevel(numeric_log_level)
 
     # setup stream handler
-    log_stream = logging.StreamHandler()
-    log_stream.setFormatter(log_format)
-    logger.addHandler(log_stream)
+    if log_level != "DEBUG3":
+        log_stream = logging.StreamHandler()
+        log_stream.setFormatter(log_format)
+        logger.addHandler(log_stream)
 
     # setup log file handler
     if log_file is not None:

@@ -8,6 +8,7 @@ from ipaddress import ip_address, ip_network, ip_interface, IPv6Network, IPv4Net
 
 from module.netbox.object_classes import *
 from module.common.logging import get_logger
+from module.common.support import perform_ptr_lookups
 
 log = get_logger()
 
@@ -171,7 +172,7 @@ class NetBoxInventory:
         log.debug("Start resolving relations")
         for object_type in NetBoxObject.__subclasses__():
 
-            for object in self.base_structure.get(object_type.name, list()):
+            for object in self.get_all_items(object_type):
 
                 object.resolve_relations()
 
@@ -186,7 +187,7 @@ class NetBoxInventory:
         return self.base_structure.get(object_type.name, list())
 
 
-    def tag_all_the_things(self, sources, netbox_handler):
+    def tag_all_the_things(self, netbox_handler):
 
         # ToDo:
         # * DONE: add main tag to all objects retrieved from a source
@@ -195,14 +196,10 @@ class NetBoxInventory:
         #   * DONE: objects tagged by a source but not present in source anymore (add)
         #   * DONE: objects tagged as orphaned but are present again (remove)
 
-        source_tags = [x.source_tag for x in sources]
 
         for object_type in NetBoxObject.__subclasses__():
 
-            if self.base_structure[object_type.name] is None:
-                continue
-
-            for object in self.base_structure[object_type.name]:
+            for object in self.get_all_items(object_type):
 
                 # if object was found in source
                 if object.source is not None:
@@ -212,12 +209,11 @@ class NetBoxInventory:
                     if netbox_handler.orphaned_tag in object.get_tags():
                         object.remove_tags(netbox_handler.orphaned_tag)
 
-                # if object was tagged by a source in previous runs but is not present
+                # if object was tagged by this program in previous runs but is not present
                 # anymore then add the orphaned tag
                 else:
-                    for source_tag in source_tags:
-                        if source_tag in object.get_tags():
-                            object.add_tags(netbox_handler.orphaned_tag)
+                    if netbox_handler.primary_tag in object.get_tags():
+                        object.add_tags(netbox_handler.orphaned_tag)
 
     def update_all_ip_addresses(self):
 
@@ -339,6 +335,7 @@ class NetBoxInventory:
                         data["vrf"] = vrf
 
                     # only overwrite tenant if not already defined
+                    # ToDo: document behavior
                     if tenant is not None and grab(ip, "data.tenant.id") is None and str(tenant) != str(grab(ip, "data.tenant.id")):
                         data["tenant"] = tenant
 
@@ -347,10 +344,114 @@ class NetBoxInventory:
                     break
 
 
+        # perform DNS name lookup
+        ip_lookup_dict = dict()
+
+        log.debug("Starting to look up PTR records for IP addresses")
+        for ip in all_addresses:
+
+            if ip.source is None:
+                continue
+
+            ip_dns_name_lookup = grab(ip, "source.dns_name_lookup", fallback=False)
+
+            if ip_lookup_dict.get(ip.source) is None:
+
+                ip_lookup_dict[ip.source] = {
+                    "ips": list(),
+                    "servers": grab(ip, "source.custom_dns_servers")
+                }
+
+            if ip_dns_name_lookup is True:
+
+                ip_lookup_dict[ip.source].get("ips").append(grab(ip, "data.address", fallback="").split("/")[0])
+
+        for source, data in ip_lookup_dict.items():
+
+            if len(data.get("ips")) == 0:
+                continue
+
+            # get DNS names for IP addresses:
+            records = perform_ptr_lookups(data.get("ips"), data.get("servers"))
+
+            for ip in all_addresses:
+
+                if ip.source != source:
+                    continue
+
+                ip_a = grab(ip, "data.address", fallback="").split("/")[0]
+
+                dns_name = records.get(ip_a)
+
+                if dns_name is not None:
+
+                    ip.update(data = {"dns_name": dns_name})
+
     def set_primary_ips(self):
 
-        pass
+        for nb_object_class in [NBDevices, NBVMs]:
 
+            for object in self.get_all_items(nb_object_class):
+
+                if object.source is None:
+                    continue
+
+                if nb_object_class == NBDevices:
+
+                    log.debug2(f"Trying to find ESXi Management Interface for '{object.get_display_name()}'")
+
+                    management_interface = None
+                    for interface in self.get_all_items(NBInterfaces):
+
+                        if grab(interface, "data.device") == object:
+
+                            if "management" in grab(interface, "data.description", fallback="").lower():
+                                management_interface = interface
+                                break
+
+                    if management_interface is None:
+                        continue
+
+                    log.debug2(f"Found Management interface '{management_interface.get_display_name()}'")
+
+                    ipv4_assigned = False
+                    ipv6_assigend = False
+
+                    for ip in self.get_all_items(NBIPAddresses):
+
+                        #if grab(ip, "data.address") == "10.100.5.28/24":
+                        #    print(ip)
+                         #   print(management_interface)
+
+                        if grab(ip, "data.assigned_object_id") == management_interface:
+
+                            log.debug2(f"Found Management IP '{ip.get_display_name()}'")
+
+                            ip_version = None
+
+                            try:
+                                ip_version = ip_address(grab(ip, "data.address", fallback="").split("/")[0]).version
+                            except ValueError:
+                                pass
+
+                            if ip_version == 4 and ipv4_assigned == False:
+                                log.debug2(f"Assigning IP '{ip.get_display_name()}' as primary IP v4 address to '{object.get_display_name()}'")
+                                if grab(object, "data.primary_ip4.address") != grab(ip, "data.address"):
+                                    object.update(data = {"primary_ip4": ip.nb_id})
+                                    ipv4_assigned = True
+                                else:
+                                    log.debug2("primary IP v4 did not change")
+
+                            if ip_version == 6 and ipv6_assigned == False:
+                                log.debug2(f"Assigning IP '{ip.get_display_name()}' as primary IP v6 address to '{object.get_display_name()}'")
+                                if grab(object, "data.primary_ip6.address") != grab(ip, "data.address"):
+                                    object.update(data = {"primary_ip6": ip.nb_id})
+                                    ipv6_assigned = True
+                                else:
+                                    log.debug2("primary IP v6 did not change")
+
+
+                #if nb_object_class == NBDevices:
 
     def to_dict(self):
 
