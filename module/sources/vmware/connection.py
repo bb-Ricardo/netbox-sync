@@ -11,7 +11,7 @@ from pyVmomi import vim
 
 from module.netbox.object_classes import *
 from module.common.misc import grab, do_error_exit, dump, get_string_or_none
-from module.common.support import normalize_mac_address, format_ip
+from module.common.support import normalize_mac_address, normalize_ip_to_string, ip_valid_to_add_to_netbox
 from module import plural
 from module.common.logging import get_logger, DEBUG3
 
@@ -295,15 +295,174 @@ class VMWareHandler():
 
         # first includes
         if include_filter is not None and not include_filter.match(name):
-            log.debug(f"Cluster '{name}' did not match include filter '{include_filter.pattern}'. Skipping")
+            log.debug(f"Object '{name}' did not match include filter '{include_filter.pattern}'. Skipping")
             return False
 
         # second excludes
         if exclude_filter is not None and exclude_filter.match(name):
-            log.debug(f"Cluster '{name}' matched exclude filter '{exclude_filter.pattern}'. Skipping")
+            log.debug(f"Object '{name}' matched exclude filter '{exclude_filter.pattern}'. Skipping")
             return False
 
         return True
+
+    def get_object_based_on_macs(self, object_type, mac_list=list()):
+
+        object_to_return = None
+
+        if object_type not in [NBDevices, NBVMs]:
+            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+
+        if len(mac_list) == 0:
+            return
+
+        interface_typ = NBInterfaces if object_type == NBDevices else NBVMInterfaces
+
+        objects_with_matching_macs = dict()
+
+        for int in self.inventory.get_all_items(interface_typ):
+
+            if grab(int, "data.mac_address") in mac_list:
+                log.debug2(f"{int.secondary_key}")
+                matching_object = grab(int, f"data.{int.secondary_key}")
+                if matching_object is None:
+                    continue
+
+                log.debug2("Found matching MAC '%s' on %s '%s'" % (object_type.name, grab(int, "data.mac_address"), matching_object.get_display_name(including_second_key=True)))
+
+                if objects_with_matching_macs.get(matching_object) is None:
+                    objects_with_matching_macs[matching_object] = 1
+                else:
+                    objects_with_matching_macs[matching_object] += 1
+
+        # try to find object based on amount of matching MAC addresses
+        num_devices_witch_matching_macs = len(objects_with_matching_macs.keys())
+
+        if num_devices_witch_matching_macs == 1:
+
+            log.debug2("Found one %s '%s' based on MAC addresses and using it" % (object_type.name, matching_object.get_display_name(including_second_key=True)))
+
+            object_to_return = objects_with_matching_macs.keys()[0]
+
+        elif num_devices_witch_matching_macs > 1:
+
+            log.debug2(f"Found {num_devices_witch_matching_macs} {object_type.name}s with matching MAC addresses")
+
+            # now select the two top matches
+            first_choice, second_choice = sorted(objects_with_matching_macs, key=objects_with_matching_macs.get, reverse=True)[0:2]
+
+            first_choice_matches = objects_with_matching_macs.get(first_choice)
+            second_choice_matches = objects_with_matching_macs.get(second_choice)
+
+            log.debug2(f"The top candidate {first_choice.get_display_name()} with {first_choice_matches} matches")
+            log.debug2(f"The second candidate {second_choice.get_display_name()} with {second_choice_matches} matches")
+
+            # get ratio between
+            matching_ration = first_choice_matches / second_choice_matches
+
+            # only pick the first one if the ration exceeds 2
+            if matching_ration >= 2.0:
+                log.debug2(f"The matching ratio of {matching_ration} is high enough to select {first_choice.get_display_name()} as desired {object_type.name}")
+                object_to_return = first_choice
+            else:
+                log.debug2("Both candidates have a similar amount of matching interface MAC addresses. Using NONE of them!")
+
+        return object_to_return
+
+    def get_object_based_on_primary_ip(self, object_type, primary_ip4=None, primary_ip6=None):
+
+        def _matches_device_primary_ip(device_primary_ip, ip_needle):
+
+            if device_primary_ip is not None and ip_needle is not None:
+                if isinstance(device_primary_ip, dict):
+                    ip = grab(device_primary_ip, "address")
+
+                elif isinstance(device_primary_ip, int):
+                    ip = self.inventory.get_by_id(NBIPAddresses, id=device_primary_ip)
+                    ip = grab(ip, "data.address")
+
+                if ip is not None and ip.split("/")[0] == ip_needle:
+                    return True
+
+            return False
+
+        if object_type not in [NBDevices, NBVMs]:
+            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+
+        if primary_ip4 is None and primary_ip6 is None:
+            return
+
+        if primary_ip4 is not None:
+            primary_ip4 = str(primary_ip4).split("/")[0]
+
+        if primary_ip6 is not None:
+            primary_ip6 = str(primary_ip6).split("/")[0]
+
+        for device in self.inventory.get_all_items(object_type):
+
+            if _matches_device_primary_ip(grab(device, "data.primary_ip4"), primary_ip4) is True:
+                log.debug2(f"Found existing host '{device.get_display_name()}' based on the primary IPv4 '{primary_ip4}'")
+                return device
+
+            if _matches_device_primary_ip(grab(device, "data.primary_ip6"), primary_ip6) is True:
+                log.debug2(f"Found existing host '{device.get_display_name()}' based on the primary IPv6 '{primary_ip6}'")
+                return device
+
+    def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=dict()):
+        """
+            trying multiple ways to match interfaces
+            * by MAC address
+            * by sorting current and new ones by name and matching 1:1
+                eth0 > vNIC 1
+                eth1 > vNIC 2
+            * interface virtual or not is compared as well if type is NBInterfaces
+        """
+
+        if not isinstance(device_vm_object, (NBDevices, NBVMs)):
+            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+
+        if not isinstance(interface_data_dict, dict):
+            raise ValueError(f"Value for 'interface_data_dict' must be a dict, got: {interface_data_dict}")
+
+        current_object_interfaces = dict()
+        current_object_interface_names = list()
+
+        return_data = dict()
+
+        # grab current data
+        for int in self.inventory.get_all_interfaces(device_vm_object):
+            int_mac = grab(int, "data.mac_address")
+            int_name = grab(int, "data.name")
+            if int_mac is not None:
+                current_object_interfaces[int_mac] = int
+            if int_name is not None:
+                current_object_interfaces[int_name] = int
+                current_object_interface_names.append(int_name)
+
+
+        unmatched_interface_names = list()
+
+        for int_name, int_data in interface_data_dict.items():
+
+            return_data[int_name] = None
+
+            int_mac = grab(int_data, "mac_address")
+            int_type = grab(int_data, "type") # for NBInterfaces
+            # HERE do match, somehow
+            if int_mac is not None and current_object_interfaces.get(int_mac) is not None:
+                return_data[int_name] = current_object_interfaces.get(int_mac)
+                current_object_interface_names.remove(int_name)
+            else:
+                unmatched_interface_names.append(int_name)
+
+        current_object_interface_names.sort()
+        unmatched_interface_names.sort()
+
+        matching_nics = dict(zip(unmatched_interface_names, current_object_interface_names))
+
+        for new_int, current_int in matching_nics.items():
+            return_data[new_int] = current_object_interfaces.get(current_int)
+
+        return return_data
 
     def add_datacenter(self, obj):
 
@@ -364,9 +523,6 @@ class VMWareHandler():
 
     def add_host(self, obj):
 
-        # ToDo:
-        # * find Host based on device mac addresses
-
         name = get_string_or_none(grab(obj, "name"))
 
         # parse data
@@ -382,18 +538,19 @@ class VMWareHandler():
         if self.passes_filter(name, self.host_include_filter, self.host_exclude_filter) is False:
             return
 
+        # collect all necessary data
         manufacturer =  get_string_or_none(grab(obj, "summary.hardware.vendor"))
         model =  get_string_or_none(grab(obj, "summary.hardware.model"))
         product_name = get_string_or_none(grab(obj, "summary.config.product.name"))
         product_version =  get_string_or_none(grab(obj, "summary.config.product.version"))
         platform = f"{product_name} {product_version}"
 
-
+        # get status
         status = "offline"
         if get_string_or_none(grab(obj, "summary.runtime.connectionState")) == "connected":
             status = "active"
 
-        # prepare identifiers
+        # prepare identifiers to find asset tag and serial number
         identifiers = grab(obj, "summary.hardware.otherIdentifyingInfo")
         identifier_dict = dict()
         if identifiers is not None:
@@ -436,11 +593,12 @@ class VMWareHandler():
 
         # handle standalone hosts
         if cluster == name:
-            # Store the host so that we can check VMs against it
+            # store the host so that we can check VMs against it
             self.standalone_hosts.append(cluster)
             cluster = "Standalone ESXi Host"
 
-        data={
+        # prepare host data model
+        host_data = {
             "name": name,
             "device_role": {"name": self.netbox_host_device_role},
             "device_type": {
@@ -454,15 +612,15 @@ class VMWareHandler():
             "status": status
         }
 
+        # add data if present
         if serial is not None:
-            data["serial"]: serial
+            host_data["serial"]: serial
         if asset_tag is not None:
-            data["asset_tag"]: asset_tag
+            host_data["asset_tag"]: asset_tag
         if platform is not None:
-            data["platform"]: {"name": platform}
+            host_data["platform"]: {"name": platform}
 
-        host_object = self.inventory.add_update_object(NBDevices, data=data, source=self)
-
+        # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         host_vswitches = dict()
         for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
 
@@ -479,6 +637,8 @@ class VMWareHandler():
                     "pnics": vswitch_pnics
                 }
 
+        # iterate over hosts proxy switches, needed to enrich data on physical interfaces
+        # also stores data on proxy switch configured mtu which is used for VM interfaces
         host_pswitches = dict()
         for pswitch in grab(obj, "config.network.proxySwitch", fallback=list()):
 
@@ -498,6 +658,7 @@ class VMWareHandler():
 
                 self.dvs_mtu[pswitch_uuid] = grab(pswitch, "mtu")
 
+        # iterate over hosts port groups, needed to enrich data on physical interfaces
         host_portgroups = dict()
         for pgroup in grab(obj, "config.network.portgroup", fallback=list()):
 
@@ -512,14 +673,15 @@ class VMWareHandler():
                     "vswitch": grab(pgroup, "spec.vswitchName")
                 }
 
+
+        # now iterate over all physical interfaces and collect data
+        pnic_data_dict = dict()
         for pnic in grab(obj, "config.network.pnic", fallback=list()):
 
             pnic_name = grab(pnic, "device")
             pnic_key = grab(pnic, "key")
 
             log.debug2("Parsing {}: {}".format(grab(pnic, "_wsdlName"), pnic_name))
-
-            pnic_mtu = None
 
             pnic_link_speed = grab(pnic, "linkSpeed.speedMb")
             if pnic_link_speed is None:
@@ -536,6 +698,8 @@ class VMWareHandler():
                     pnic_description = f"{pnic_link_speed}Mb/s "
 
             pnic_description = f"{pnic_description} pNIC"
+
+            pnic_mtu = None
 
             # check virtual switches for interface data
             for vs_name, vs_data in host_vswitches.items():
@@ -562,7 +726,7 @@ class VMWareHandler():
 
             pnic_data = {
                 "name": pnic_name,
-                "device": host_object,
+                "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(pnic, "mac")),
                 "enabled": bool(grab(pnic, "linkSpeed")),
                 "description": pnic_description,
@@ -572,9 +736,14 @@ class VMWareHandler():
             if pnic_mtu is not None:
                 pnic_data["mtu"] = pnic_mtu
 
-            self.inventory.add_update_object(NBInterfaces, data=pnic_data, source=self)
+            pnic_data_dict[pnic_name] = pnic_data
 
+        host_primary_ip4 = None
+        host_primary_ip6 = None
 
+        # now iterate over all virtual interfaces and collect data
+        vnic_data_dict = dict()
+        vnic_ips = dict()
         for vnic in grab(obj, "config.network.vnic", fallback=list()):
 
             vnic_name = grab(vnic, "device")
@@ -592,55 +761,112 @@ class VMWareHandler():
 
             vnic_data = {
                 "name": vnic_name,
-                "device": host_object,
+                "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
                 "mtu": grab(vnic, "spec.mtu"),
                 "description": vnic_description,
                 "type": "virtual"
             }
 
-            vnic_object = self.inventory.add_update_object(NBInterfaces, data=vnic_data, source=self)
+            vnic_data_dict[vnic_name] = vnic_data
 
             # check if interface has the default route
+            vnic_is_primary = False
             if grab(vnic, "spec.ipRouteSpec") is not None:
-                vnic_object.is_primary = True
+                vnic_is_primary = True
 
-            vnic_ips = list()
+            vnic_ips[vnic_name] = list()
 
-            vnic_ips.append("{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask")))
+            int_v4 = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
 
-            for ipv6_a in grab(vnic, "spec.ip.ipV6Config.ipV6Address", fallback=list()):
+            if ip_valid_to_add_to_netbox(int_v4, self.permitted_subnets, vnic_name) is True:
+                vnic_ips[vnic_name].append(int_v4)
 
-                vnic_ips.append("{}/{}".format(grab(ipv6_a, "ipAddress"), grab(ipv6_a, "prefixLength")))
+                if vnic_is_primary is True and host_primary_ip4 is None:
+                    host_primary_ip4 = int_v4
 
-            # add all interface IPs
-            for vnic_ip in vnic_ips:
+            for ipv6_entry in grab(vnic, "spec.ip.ipV6Config.ipV6Address", fallback=list()):
 
-                if format_ip(vnic_ip) is None:
-                    logging.error(f"IP address '{vnic_ip}' for {vnic_object.get_display_name()} invalid!")
-                    continue
+                int_v6 = "{}/{}".format(grab(ipv6_entry, "ipAddress"), grab(ipv6_entry, "prefixLength"))
 
-                ip_permitted = False
+                if ip_valid_to_add_to_netbox(int_v6, self.permitted_subnets, vnic_name) is True:
+                    vnic_ips[vnic_name].append(int_v6)
 
-                ip_address_object = ip_interface(vnic_ip).ip
-                for permitted_subnet in self.permitted_subnets:
-                    if ip_address_object in permitted_subnet:
-                        ip_permitted = True
-                        break
+                    # set first valid IPv6 address as primary IPv6
+                    # not the best way but maybe we can find infos in "spec.ipRouteSpec"
+                    # about default route and we could use that to determine the correct IPv6 address
+                    if vnic_is_primary is True and host_primary_ip6 is None:
+                        host_primary_ip6 = int_v6
 
-                if ip_permitted is False:
-                    log.debug(f"IP address {vnic_ip} not part of any permitted subnet. Skipping.")
-                    continue
 
-                vnic_ip_data = {
-                    "address": format_ip(vnic_ip),
-                    "assigned_object_id": vnic_object,
-                }
 
-                self.inventory.add_update_object(NBIPAddresses, data=vnic_ip_data, source=self)
+        ##################
+        # Now we have find the correct host object and trying multiple ways
+        #   * try to find by name and site
+        #   * try to find by mac addresses of physical interfaces
+        #   * try to find by primary IP
+        ##################
+
+        # check existing Devices for matches
+        log.debug2("Trying to find a host object based on the collected name, site, IP and MAC addresses")
+
+        host_object = self.inventory.get_by_data(NBDevices, data=host_data)
+
+        if host_object is not None:
+            log.debug2("Found a exact matching device object: %s" % host_object.get_display_name(including_second_key=True))
+
+        # keep searching if no exact match was found
+        else:
+
+            log.debug2("No exact match found. Trying to find device based on MAC addresses")
+
+            physical_macs = [x.get("mac_address") for x in pnic_data_dict.values()]
+
+            #host_object = self.get_object_based_on_macs(NBDevices, physical_macs)
+
+        if host_object is not None:
+            log.debug2("Found a matching device object: %s" % host_object.get_display_name(including_second_key=True))
+
+        # keep looking for devices with the same primary IP
+        else:
+
+            log.debug2("No match found. Trying to find device based on primary IP addresses")
+
+            host_object = self.get_object_based_on_primary_ip(NBDevices, host_primary_ip4, host_primary_ip6)
+
+
+        if host_object is None:
+            log.debug("found no exiting host object. Creating a new host.")
+            host_object = self.inventory.add_update_object(NBDevices, data=host_data, source=self)
+        else:
+            host_object.update(data=host_data, source=self)
+
+
+        nic_object_dict = self.map_object_interfaces_to_current_interfaces(host_object, {**pnic_data_dict, **vnic_data_dict} )
+        pprint.pprint(nic_object_dict)
+        exit(0)
+
+        return
+        # ToDo:
+        # add all interfaces and IP addresses
+        # work the same way for VMs
+        pnic_object = self.inventory.add_update_object(NBInterfaces, data=pnic_data, source=self)
+        vnic_object = self.inventory.add_update_object(NBInterfaces, data=vnic_data, source=self)
+
+        # add all interface IPs
+        for vnic_ip in vnic_ips:
+
+            vnic_ip_data = {
+                "address": format_ip(vnic_ip),
+                "assigned_object_id": vnic_object,
+            }
+
+            self.inventory.add_update_object(NBIPAddresses, data=vnic_ip_data, source=self)
+
 
     def add_virtual_machine(self, obj):
 
+        exit(1)
         name = get_string_or_none(grab(obj, "name"))
 
         # get VM UUID

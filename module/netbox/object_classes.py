@@ -162,7 +162,7 @@ class NetBoxObject():
         if display_name is None:
             display_name = self.get_display_name()
 
-        log.debug(f"Parsing '{self.name}' data structure: {display_name}")
+        log.debug2(f"Parsing '{self.name}' data structure: {display_name}")
 
         parsed_data = dict()
         for key, value in data.items():
@@ -173,7 +173,7 @@ class NetBoxObject():
 
             # skip unset values
             if value is None:
-                log.info(f"Found unset/empty key: {key}")
+                log.info(f"Found unset key '{key}' while parsing {display_name}. Skipping This key")
                 continue
 
             # check data model to see how we have to parse the value
@@ -279,7 +279,7 @@ class NetBoxObject():
                 self.data[key] = new_value
                 self.updated_items.append(key)
 
-                log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from '{current_value_str}' to '{new_value_str}'")
+                log.debug(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from '{current_value_str}' to '{new_value_str}'")
 
             self.resolve_relations()
 
@@ -305,11 +305,13 @@ class NetBoxObject():
             if isinstance(secondary_key_value, NetBoxObject):
                 secondary_key_value = secondary_key_value.get_display_name()
 
-            if secondary_key_value is not None:
-                #import pprint
-                #pprint.pprint(this_data_set)
+            if isinstance(secondary_key_value, dict):
+                secondary_key_value = self.get_display_name(data=secondary_key_value)
 
-                my_name = f"{my_name} ({secondary_key_value})"
+            if secondary_key_value is None:
+                raise ValueError(f"Unable to determine second key for {this_data_set.get(secondary_key)}")
+
+            my_name = f"{my_name} ({secondary_key_value})"
 
         return my_name
 
@@ -398,7 +400,7 @@ class NetBoxObject():
             extract_tags(tags)
 
 
-        log.debug2(f"Tag list: {new_tags}")
+        log.debug2(f"Parsed tag list: {new_tags}")
 
         current_tags = self.get_tags()
 

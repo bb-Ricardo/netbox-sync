@@ -47,18 +47,11 @@ class NetBoxInventory:
                                  (object_type.__name__, NetBoxObject.__name__))
 
 
-        if data is None:
-            return None
-
-        if self.base_structure[object_type.name] is None:
-            return None
+        if data is None or len(self.get_all_items(object_type)) == 0:
+            return
 
         if not isinstance(data, dict):
-            # ToDo:
-            # * proper handling
-            log.error("data is not dict")
-            pprint.pprint(data)
-            exit(0)
+            raise ValueError(f"Attribute data must be type 'dict' got: {data}")
 
         # shortcut if data contains valid id
         data_id = data.get("id")
@@ -69,14 +62,20 @@ class NetBoxInventory:
         if data.get(object_type.primary_key) is not None:
             object_name_to_find = None
             results = list()
-            for object in self.base_structure[object_type.name]:
+            for object in self.get_all_items(object_type):
 
+                if object_name_to_find is None:
+                    object_name_to_find = object.get_display_name(data, including_second_key=True)
+
+                if object_name_to_find == object.get_display_name(including_second_key=True):
+                    return object
+
+            """
                 # Todo:
                 #   * try to compare second key if present.
 
                 if object_name_to_find is None:
                     object_name_to_find = object.get_display_name(data)
-                    #print(f"get_by_data(): Object Display Name: {object_name_to_find}")
 
                 if object_name_to_find == object.get_display_name():
                     results.append(object)
@@ -101,11 +100,12 @@ class NetBoxInventory:
 
                     if object_name_to_find == object.get_display_name(including_second_key=True):
                         return object
+            """
 
         # try to match all data attributes
         else:
 
-            for object in self.base_structure[object_type.name]:
+            for object in self.get_all_items(object_type):
                 all_items_match = True
                 for attr_name, attr_value in data.items():
 
@@ -163,7 +163,7 @@ class NetBoxInventory:
 
         else:
             this_object.update(data, read_from_netbox=read_from_netbox, source=source)
-            log.debug("Updated %s object: %s" % (this_object.name, this_object.get_display_name()))
+            log.debug2("Updated %s object: %s" % (this_object.name, this_object.get_display_name()))
 
         return this_object
 
@@ -181,10 +181,29 @@ class NetBoxInventory:
     def get_all_items(self, object_type):
 
         if object_type not in NetBoxObject.__subclasses__():
-            raise AttributeError("'%s' object must be a sub class of '%s'." %
+            raise ValueError("'%s' object must be a sub class of '%s'." %
                                  (object_type.__name__, NetBoxObject.__name__))
 
         return self.base_structure.get(object_type.name, list())
+
+
+    def get_all_interfaces(self, object):
+
+        if not isinstance(object, (NBVMs, NBDevices)):
+            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+
+        interfaces = list()
+        if isinstance(object, NBVMs):
+            for int in self.get_all_items(NBVMInterfaces):
+                if grab(int, "data.virtual_machine") == object:
+                    interfaces.append(int)
+
+        if isinstance(object, NBDevices):
+            for int in self.get_all_items(NBInterfaces):
+                if grab(int, "data.device") == object:
+                    interfaces.append(int)
+
+        return interfaces
 
 
     def tag_all_the_things(self, netbox_handler):
