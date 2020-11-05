@@ -457,6 +457,7 @@ class NetBoxObject():
         return self.nb_id
 
 
+
 class NBTags(NetBoxObject):
     name = "tag"
     api_path = "extras/tags"
@@ -609,12 +610,12 @@ class NBVMInterfaces(NetBoxObject):
     primary_key = "name"
     secondary_key = "virtual_machine"
     enforce_secondary_key = True
-    is_primary = False
     data_model = {
         "name": 64,
         "virtual_machine": NBVMs,
         "enabled": bool,
         "mac_address": str,
+        "mtu": int,
         "description": 200,
         "tags": NBTags
     }
@@ -625,7 +626,6 @@ class NBInterfaces(NetBoxObject):
     primary_key = "name"
     secondary_key = "device"
     enforce_secondary_key = True
-    is_primary = False
     data_model = {
         "name": 64,
         "device": NBDevices,
@@ -645,6 +645,7 @@ class NBIPAddresses(NetBoxObject):
     name = "IP address"
     api_path = "ipam/ip-addresses"
     primary_key = "address"
+    is_primary = False
     data_model = {
         "address": str,
         "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
