@@ -193,9 +193,15 @@ class NetBoxHandler:
 
             action = "created" if response.status_code == 201 else "deleted"
 
-            log.info(
-                f"NetBox successfully {action} {object_class.name} object '%s'." % (result.get(object_class.primary_key))
-            )
+            object_name = None
+            if req_type == "DELETE":
+                object_name = self.inventory.get_by_id(object_class, nb_id)
+                if object_name is not None:
+                    object_name = object_name.get_display_name()
+            else:
+                object_name = result.get(object_class.primary_key)
+
+            log.info(f"NetBox successfully {action} {object_class.name} object '{object_name}'.")
 
         # token issues
         elif response.status_code == 403:
@@ -441,9 +447,7 @@ class NetBoxHandler:
 
                     log.info(f"{nb_object_sub_class.name.capitalize()} '{object.get_display_name()}' is orphaned for {days_since_last_update} days and will be deleted.")
 
-                    # Todo:
-                    # * Needs testing
-                    #self.request(nb_object_sub_class, req_type="DELETE", nb_id=object.nb_id)
+                    self.request(nb_object_sub_class, req_type="DELETE", nb_id=object.nb_id)
 
         return
 

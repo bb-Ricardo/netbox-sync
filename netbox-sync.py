@@ -33,7 +33,6 @@ default_config_file_path = "./settings.ini"
 
 """
 ToDo:
-* host "Management" interface is Primary
 * documentation
     * describe migration (rename tags)
     * proper naming to assign sites to clusters
@@ -47,8 +46,8 @@ ToDo:
     * thanks to original Owner of ideas
     * ensure NTP is set up properly between all instances (pruning delay)
 * primary IP assignment
-* complain about prefix length mismatch
 * test all log levels
+* check for ToDo/Fixme/pprint statements
 """
 
 def main():

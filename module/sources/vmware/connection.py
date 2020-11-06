@@ -202,8 +202,6 @@ class VMWareHandler():
 
     def apply(self):
 
-        self.inizialize_basic_data()
-
         log.info(f"Query data from vCenter: '{self.host_fqdn}'")
 
         """
@@ -289,6 +287,8 @@ class VMWareHandler():
                 view_details.get("view_handler")(obj)
 
             container_view.Destroy()
+
+        self.update_basic_data()
 
     @staticmethod
     def passes_filter(name, include_filter, exclude_filter):
@@ -1174,7 +1174,8 @@ class VMWareHandler():
 
         return
 
-    def inizialize_basic_data(self):
+
+    def update_basic_data(self):
 
         # add source identification tag
         self.inventory.add_update_object(NBTags, data={
@@ -1183,25 +1184,36 @@ class VMWareHandler():
                            f"({self.host_fqdn}) to this NetBox Instance."
         })
 
-        self.inventory.add_update_object(NBSites, data={
-            "name": self.site_name,
-            "comments": f"A default virtual site created to house objects "
-                        "that have been synced from this vCenter instance."
-        })
+        # update virtual site if present
+        this_site_object = self.inventory.get_by_data(NBSites, data = {"name": self.site_name})
 
-        self.inventory.add_update_object(NBClusters, data={
-            "name": "Standalone ESXi Host",
-            "type": {"name": "VMware ESXi"},
-            "comments": "A default cluster created to house standalone "
-                        "ESXi hosts and VMs that have been synced from "
-                        "vCenter."
-        })
+        if this_site_object is not None:
+            this_site_object.update(data={
+                "name": self.site_name,
+                "comments": f"A default virtual site created to house objects "
+                            "that have been synced from this vCenter instance "
+                            "and have no predefined site assigned."
+            })
 
-        self.inventory.add_update_object(NBDeviceRoles, data={
-            "name": "Server",
-            "color": "9e9e9e",
-            "vm_role": True
-        })
+        standalone_cluster_object = self.inventory.get_by_data(NBClusters, data = {"name": "Standalone ESXi Host"})
+
+        if standalone_cluster_object is not None:
+            standalone_cluster_object.update(data={
+                "name": "Standalone ESXi Host",
+                "type": {"name": "VMware ESXi"},
+                "comments": "A default cluster created to house standalone "
+                            "ESXi hosts and VMs that have been synced from "
+                            "vCenter."
+            })
+
+        server_role_object = self.inventory.get_by_data(NBDeviceRoles, data = {"name": "Server"})
+
+        if server_role_object is not None:
+            server_role_object.update(data={
+                "name": "Server",
+                "color": "9e9e9e",
+                "vm_role": True
+            })
 
 
 # EOF
