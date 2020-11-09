@@ -48,6 +48,7 @@ ToDo:
 * primary IP assignment
 * test all log levels
 * check for ToDo/Fixme/pprint statements
+
 """
 
 def main():
@@ -143,12 +144,6 @@ def main():
     inventory.update_all_ip_addresses()
 
     # update data in NetBox
-    NB_handler.update_instance()
-
-    # now see where we can update primary IPs
-    inventory.set_primary_ips()
-
-    # update data in NetBox again
     NB_handler.update_instance()
 
     # prune orphaned objects from NetBox

@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 import requests
 from http.client import HTTPConnection
+import urllib3
 import pickle
 
 from packaging import version
@@ -27,7 +28,7 @@ class NetBoxHandler:
     """
     minimum_api_version = "2.9"
 
-    # allowed settings and defaults
+    # permitted settings and defaults
     settings = {
         "api_token": None,
         "host_fqdn": None,
@@ -51,7 +52,7 @@ class NetBoxHandler:
     instance_virtual_interfaces = {}
 
     # testing option
-    use_netbox_caching_for_testing = True
+    use_netbox_caching_for_testing = False
 
     def __init__(self, settings=None, inventory=None):
 
@@ -72,6 +73,10 @@ class NetBoxHandler:
         proto = "https"
         if bool(self.disable_tls) is True:
             proto = "http"
+
+        # disable TLS insecure warnings if user explicitly switched off validation
+        if bool(self.validate_tls_certs) is False:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         port = ""
         if self.port is not None:
@@ -162,7 +167,9 @@ class NetBoxHandler:
         if params is None:
             params = dict()
 
-        params["limit"] = self.default_netbox_result_limit
+        if req_type == "GET":
+            params["limit"] = self.default_netbox_result_limit
+            params["exclude"] = "config_context"
 
         # prepare request
         this_request = self.session.prepare_request(
@@ -401,7 +408,6 @@ class NetBoxHandler:
         # update all items in NetBox accordingly
         for nb_object_sub_class in NetBoxObject.__subclasses__():
             self.update_object(nb_object_sub_class)
-
 
     def prune_data(self):
 

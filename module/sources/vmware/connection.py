@@ -52,8 +52,10 @@ class VMWareHandler():
         "permitted_subnets": None,
         "collect_hardware_asset_tag": True,
         "cluster_site_relation": None,
+        "host_site_relation": None,
         "dns_name_lookup": False,
-        "custom_dns_servers": None
+        "custom_dns_servers": None,
+        "set_primary_ip": "when-undefined"
     }
 
     init_successfull = False
@@ -67,12 +69,16 @@ class VMWareHandler():
 
     site_name = None
 
+    standalone_cluster_name = "Standalone ESXi Host"
+
     networks = dict()
     dvs_mtu = dict()
     standalone_hosts = list()
 
-    processed_host_names = list()
-    processed_vm_names = list()
+    permitted_clusters = dict()
+
+    processed_host_names = dict()
+    processed_vm_names = dict()
     processed_vm_uuid = list()
 
     parsing_vms_the_first_time = True
@@ -133,21 +139,36 @@ class VMWareHandler():
 
             config_settings[setting] = re_compiled
 
-        if config_settings.get("cluster_site_relation") is not None:
+        for relation_name in ["cluster_site_relation", "host_site_relation"]:
 
-            relation_data = dict()
-            for relation in config_settings.get("cluster_site_relation").split(","):
+            if config_settings.get(relation_name) is None:
+                continue
 
-                cluster_name = relation.split("=")[0].strip()
+            relation_data = list()
+
+            for relation in config_settings.get(relation_name).split(","):
+
+                object_name = relation.split("=")[0].strip()
                 site_name = relation.split("=")[1].strip()
 
-                if len(cluster_name) == 0 or len(site_name) == 0:
-                    log.error(f"Config option 'cluster_site_relation' malformed got '{cluster_name}' for cluster_name and '{site_name}' for site name.")
+                if len(object_name) == 0 or len(site_name) == 0:
+                    log.error(f"Config option '{relation}' malformed got '{object_name}' for object name and '{site_name}' for site name.")
                     validation_failed = True
 
-                relation_data[cluster_name] = site_name
+                re_compiled = None
+                try:
+                    re_compiled = re.compile(object_name)
+                except Exception as e:
+                    log.error(f"Problem parsing regular expression '{object_name}' for '{relation}': {e}")
+                    validation_failed = True
+                    continue
 
-            config_settings["cluster_site_relation"] = relation_data
+                relation_data.append({
+                    "object_regex": re_compiled,
+                    "site_name": site_name
+                })
+
+            config_settings[relation_name] = relation_data
 
         if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
 
@@ -304,6 +325,38 @@ class VMWareHandler():
             return False
 
         return True
+
+    def get_site_name(self, object_type, object_name, cluster_name=""):
+
+        if object_type not in [NBClusters, NBDevices]:
+            raise ValueError(f"Object must be a '{NBClusters.name}' or '{NBDevices.name}'.")
+
+        log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
+
+        site_name = None
+
+        # check if site was provided in config
+        config_name = "host_site_relation" if object_type == NBDevices else "cluster_site_relation"
+
+        site_relations = getattr(self, config_name, list())
+
+        for site_relation in site_relations:
+            object_regex = site_relation.get("object_regex")
+            if object_regex.match(object_name):
+                site_name = site_relation.get("site_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {object_name}, using site '{site_name}'")
+                break
+
+        if object_type == NBDevices and site_name is None:
+            site_name = self.permitted_clusters.get(cluster_name)
+            log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+
+        # set default site name
+        if site_name is None:
+            site_name = self.site_name
+            log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
+
+        return site_name
 
     def get_object_based_on_macs(self, object_type, mac_list=list()):
 
@@ -486,7 +539,10 @@ class VMWareHandler():
 
             if mathing_int is not None:
                 return_data[int_name] = mathing_int
-                current_object_interface_names.remove(grab(mathing_int, "data.name"))
+                # ToDo:
+                # check why sometimes names are not present anymore and remove fails
+                if grab(mathing_int, "data.name") in current_object_interface_names:
+                    current_object_interface_names.remove(grab(mathing_int, "data.name"))
 
             # no match found, we match the left overs just by #1 -> #1, #2 -> #2, ...
             else:
@@ -528,13 +584,7 @@ class VMWareHandler():
         if self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
             return
 
-        # set default site name
-        site_name = self.site_name
-
-        # check if site was provided in config
-        site_realtion = getattr(self, "cluster_site_relation", None)
-        if site_realtion is not None and site_realtion.get(name) is not None:
-            site_name = site_realtion.get(name)
+        site_name = self.get_site_name(NBClusters, name)
 
         data = {
             "name": name,
@@ -544,6 +594,8 @@ class VMWareHandler():
         }
 
         self.inventory.add_update_object(NBClusters, data = data, source=self)
+
+        self.permitted_clusters[name] = site_name
 
     def add_network(self, obj):
 
@@ -568,15 +620,51 @@ class VMWareHandler():
         # parse data
         log.debug2(f"Parsing vCenter host: {name}")
 
-        if name in self.processed_host_names:
-            log.warning(f"Host '{name}' already parsed. Make sure to use unique host names. Skipping")
+        ###### Filtering
+
+        # manage site and cluster
+        cluster_name = get_string_or_none(grab(obj, "parent.name"))
+
+        if cluster_name is None:
+            log.error(f"Requesting cluster for Host '{name}' failed. Skipping.")
             return
 
-        self.processed_host_names.append(name)
+        if log.level == DEBUG3:
+            try:
+                log.info("Cluster data")
+                dump(grab(obj, "parent"))
+            except Exception as e:
+                log.error(e)
 
-        # filter hosts
+        # handle standalone hosts
+        if cluster_name == name:
+            log.debug2(f"Host name and cluster name are equal '{cluster_name}'. Assuming this host is a 'standalone' host.")
+            # store the host so that we can check VMs against it
+            self.standalone_hosts.append(cluster_name)
+            cluster_name = self.standalone_cluster_name
+
+        elif self.permitted_clusters.get(cluster_name) is None:
+            log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
+            return
+
+        # get a site for this host
+        site_name = self.get_site_name(NBDevices, name, cluster_name)
+
+        if name in self.processed_host_names.get(site_name, list()):
+            log.warning(f"Host '{name}' for site '{site_name}' already parsed. Make sure to use unique host names. Skipping")
+            return
+
+        # add host to processed list
+        if self.processed_host_names.get(site_name) is None:
+            self.processed_host_names[site_name] = list()
+
+        self.processed_host_names[site_name].append(name)
+
+        # filter hosts by name
         if self.passes_filter(name, self.host_include_filter, self.host_exclude_filter) is False:
             return
+
+        ###### Collect data
 
         # collect all necessary data
         manufacturer =  get_string_or_none(grab(obj, "summary.hardware.vendor"))
@@ -619,22 +707,6 @@ class VMWareHandler():
             if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
                 asset_tag = this_asset_tag
 
-        # manage site and cluster
-        cluster = get_string_or_none(grab(obj, "parent.name"))
-
-        # set default site name
-        site_name = self.site_name
-
-        # check if site was provided in config
-        site_realtion = getattr(self, "cluster_site_relation", None)
-        if site_realtion is not None and site_realtion.get(cluster) is not None:
-            site_name = site_realtion.get(cluster)
-
-        # handle standalone hosts
-        if cluster == name:
-            # store the host so that we can check VMs against it
-            self.standalone_hosts.append(cluster)
-            cluster = "Standalone ESXi Host"
 
         # prepare host data model
         host_data = {
@@ -647,7 +719,7 @@ class VMWareHandler():
                 }
             },
             "site": {"name": site_name},
-            "cluster": {"name": cluster},
+            "cluster": {"name": cluster_name},
             "status": status
         }
 
@@ -911,10 +983,11 @@ class VMWareHandler():
 
         return
 
-
     def add_virtual_machine(self, obj):
 
         name = get_string_or_none(grab(obj, "name"))
+
+        ###### Filtering
 
         # get VM UUID
         vm_uuid = grab(obj, "config.uuid")
@@ -932,26 +1005,38 @@ class VMWareHandler():
             log.debug2(f"Ignoring {status} VM '{name}' on first run")
             return
 
-        # filter VMs
-        if self.passes_filter(name, self.vm_include_filter, self.vm_exclude_filter) is False:
-            return
-
-        cluster = get_string_or_none(grab(obj, "runtime.host.parent.name"))
-        if cluster is None:
+        # check VM cluster
+        cluster_name = get_string_or_none(grab(obj, "runtime.host.parent.name"))
+        if cluster_name is None:
             log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
             return
 
-        if name in self.processed_vm_names:
-            log.warning(f"Virtual machine '{name}' already parsed. Make sure to use unique VM names. Skipping")
+        if cluster_name in self.standalone_hosts:
+            cluster_name = self.standalone_cluster_name
+
+        elif self.permitted_clusters.get(cluster_name) is None:
+            log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
+            return
+
+        if name in self.processed_vm_names.get(cluster_name, list()):
+            log.warning(f"Virtual machine '{name}' for cluster '{cluster_name}' already parsed. Make sure to use unique VM names. Skipping")
+            return
+
+        # add host to processed list
+        if self.processed_vm_names.get(cluster_name) is None:
+            self.processed_vm_names[cluster_name] = list()
+
+        self.processed_vm_names[cluster_name].append(name)
+
+        # filter VMs by name
+        if self.passes_filter(name, self.vm_include_filter, self.vm_exclude_filter) is False:
             return
 
         # add to processed VMs
         self.processed_vm_uuid.append(vm_uuid)
-        self.processed_vm_names.append(name)
 
 
-        if cluster in self.standalone_hosts:
-            cluster = "Standalone ESXi Host"
+        ###### Collect data
 
         platform = grab(obj, "config.guestFullName")
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
@@ -966,7 +1051,7 @@ class VMWareHandler():
 
         vm_data = {
             "name": name,
-            "cluster": {"name": cluster},
+            "cluster": {"name": cluster_name},
             "role": {"name": self.settings.get("netbox_vm_device_role")},
             "status": status,
             "memory": grab(obj, "config.hardware.memoryMB"),
@@ -1195,11 +1280,11 @@ class VMWareHandler():
                             "and have no predefined site assigned."
             })
 
-        standalone_cluster_object = self.inventory.get_by_data(NBClusters, data = {"name": "Standalone ESXi Host"})
+        standalone_cluster_object = self.inventory.get_by_data(NBClusters, data = {"name": self.standalone_cluster_name})
 
         if standalone_cluster_object is not None:
             standalone_cluster_object.update(data={
-                "name": "Standalone ESXi Host",
+                "name": self.standalone_cluster_name,
                 "type": {"name": "VMware ESXi"},
                 "comments": "A default cluster created to house standalone "
                             "ESXi hosts and VMs that have been synced from "

@@ -16,6 +16,7 @@ class NetBoxObject():
         "is_new": True,
         "nb_id": 0,
         "updated_items": list(),
+        "unset_items": list(),
         "source": None,
     }
 
@@ -151,6 +152,7 @@ class NetBoxObject():
             self.is_new = False
             self.data = data
             self.updated_items = list()
+            self.unset_items = list()
 
             return
 
@@ -439,6 +441,17 @@ class NetBoxObject():
     def remove_tags(self, tags_to_remove):
         self.update_tags(tags_to_remove, remove=True)
 
+    def unset_attribute(self, attribute_name=None):
+
+        if data is None:
+            return
+
+        if attribute_name not in self.data_model.keys():
+            log.error(f"Found undefined data model key '{attribute_name}' for object '{self.__class__.__name__}'")
+            return
+
+        # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
+        self.unset_items.append(attribute_name)
 
     def get_nb_reference(self):
         """
@@ -450,9 +463,10 @@ class NetBoxObject():
         """
             FIXME
             does this work?
+            caller needs to check return value!!!
         """
         if self.nb_id == 0:
-            return self
+            return None
 
         return self.nb_id
 
