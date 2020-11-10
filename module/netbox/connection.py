@@ -52,7 +52,7 @@ class NetBoxHandler:
     instance_virtual_interfaces = {}
 
     # testing option
-    use_netbox_caching_for_testing = False
+    use_netbox_caching_for_testing = True
 
     def __init__(self, settings=None, inventory=None):
 
@@ -336,7 +336,7 @@ class NetBoxHandler:
                            "DO NOT change this tag, otherwise syncing can't keep track of deleted objects."
         })
 
-    def update_object(self, nb_object_sub_class):
+    def update_object(self, nb_object_sub_class, unset=False):
 
         for object in self.inventory.get_all_items(nb_object_sub_class):
 
@@ -346,11 +346,30 @@ class NetBoxHandler:
                     log.debug2("Resolving dependency: %s" % (dependency.name))
                     self.update_object(dependency)
 
+            # unset data if requested
+            if unset is True and len(object.unset_items) > 0:
+
+                unset_data = {x: None for x in object.unset_items}
+
+                log.info("Updating NetBox '%s' object '%s' with data: %s" % (object.name, object.get_display_name(), unset_data))
+
+                returned_object_data = self.request(nb_object_sub_class, req_type="PATCH", data=unset_data, nb_id=object.nb_id)
+
+                if returned_object_data is not None:
+
+                    object.update(data = returned_object_data, read_from_netbox=True)
+
+                    object.resolve_relations()
+
+                else:
+                    log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {unset_data}")
+
+                continue
 
             returned_object_data = None
 
-            patch_issue = False
             data_to_patch = dict()
+            unresolved_dependency_data = dict()
 
             if object.is_new is True:
                 object.updated_items = object.data.keys()
@@ -362,17 +381,14 @@ class NetBoxHandler:
                         data_to_patch[key] = [{"name": d.get_display_name()} for d in value]
 
                     elif isinstance(value, NetBoxObject):
-                        data_to_patch[key] = value.get_nb_reference()
 
-                        if value.nb_id == 0:
-                            log.error(f"Unable to find a NetBox reference to {value.name} '{value.get_display_name()}'. Might be a dependency issue.")
-                            patch_issue = True
+                        if value.get_nb_reference() is None:
+                            unresolved_dependency_data[key] = value
+                        else:
+                            data_to_patch[key] = value.get_nb_reference()
 
                     else:
                         data_to_patch[key] = value
-
-            if patch_issue == True:
-                continue
 
             issued_request = False
             if object.is_new is True:
@@ -393,6 +409,11 @@ class NetBoxHandler:
             if returned_object_data is not None:
 
                 object.update(data = returned_object_data, read_from_netbox=True)
+
+                # add unresolved dependencies back to object
+                if len(unresolved_dependency_data.keys()) > 0:
+                    object.update(data = unresolved_dependency_data)
+
                 object.resolve_relations()
 
             elif issued_request is True:
@@ -405,9 +426,21 @@ class NetBoxHandler:
 
         log.info("Updating changed data in NetBox")
 
-        # update all items in NetBox accordingly
+        # update all items in NetBox but unset items first
+        self.inventory.resolved_dependencies = list()
+        for nb_object_sub_class in NetBoxObject.__subclasses__():
+            self.update_object(nb_object_sub_class, unset=True)
+
+        # update all items
+        self.inventory.resolved_dependencies = list()
         for nb_object_sub_class in NetBoxObject.__subclasses__():
             self.update_object(nb_object_sub_class)
+
+        # run again to updated objects with previous unresolved dependencies
+        self.inventory.resolved_dependencies = list()
+        for nb_object_sub_class in NetBoxObject.__subclasses__():
+            self.update_object(nb_object_sub_class)
+
 
     def prune_data(self):
 

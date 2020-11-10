@@ -345,6 +345,33 @@ class NetBoxInventory:
                 assigned_device_vm = grab(ip, "data.assigned_object_id.data.virtual_machine")
 
             # set/update/remove primary IP addresses
+            ip_version = 6 if ":" in ip_a else 4
+            if grab(ip, "source.set_primary_ip") == "always" and ip.is_primary == True:
+
+                for object_type in [NBDevices, NBVMs]:
+
+                    for devices_vms in self.get_all_items(object_type):
+
+                        # device has no primary IP of this version
+                        this_primary_ip = grab(devices_vms, f"data.primary_ip{ip_version}")
+                        if this_primary_ip is None:
+                            continue
+
+                        if not isinstance(this_primary_ip, dict):
+                            continue
+
+                        # device has the same object assigned
+                        if ip.is_new is False and ip.nb_id == this_primary_ip.get("id") and devices_vms != assigned_device_vm:
+                            devices_vms.unset_attribute(f"primary_ip{ip_version}")
+
+                log.debug(f"Setting '{assigned_device_vm.get_display_name()}' attribute 'primary_ip{ip_version}' to '{ip.get_display_name()}'")
+                assigned_device_vm.update(data = {f"primary_ip{ip_version}": ip})
+
+            elif grab(ip, "source.set_primary_ip") != "never" and ip.is_primary == True:
+
+                if grab(assigned_device_vm, f"data.primary_ip{ip_version}") is None:
+                    log.debug(f"Setting '{assigned_device_vm.get_display_name()}' attribute 'primary_ip{ip_version}' to '{ip.get_display_name()}'")
+                    assigned_device_vm.update(data = {f"primary_ip{ip_version}": ip})
 
 
             log.debug2("Trying to find prefix for IP: %s" % ip.get_display_name())
@@ -422,71 +449,6 @@ class NetBoxInventory:
 
         log.debug("Finished to look up PTR records for IP addresses")
 
-    def set_primary_ips(self):
-
-        for nb_object_class in [NBDevices, NBVMs]:
-
-            for object in self.get_all_items(nb_object_class):
-
-                if object.source is None:
-                    continue
-
-                if nb_object_class == NBDevices:
-
-                    log.debug2(f"Trying to find ESXi Management Interface for '{object.get_display_name()}'")
-
-                    management_interface = None
-                    for interface in self.get_all_items(NBInterfaces):
-
-                        if grab(interface, "data.device") == object:
-
-                            if "management" in grab(interface, "data.description", fallback="").lower():
-                                management_interface = interface
-                                break
-
-                    if management_interface is None:
-                        continue
-
-                    log.debug2(f"Found Management interface '{management_interface.get_display_name()}'")
-
-                    ipv4_assigned = False
-                    ipv6_assigend = False
-
-                    for ip in self.get_all_items(NBIPAddresses):
-
-                        #if grab(ip, "data.address") == "10.100.5.28/24":
-                        #    print(ip)
-                         #   print(management_interface)
-
-                        if grab(ip, "data.assigned_object_id") == management_interface:
-
-                            log.debug2(f"Found Management IP '{ip.get_display_name()}'")
-
-                            ip_version = None
-
-                            try:
-                                ip_version = ip_address(grab(ip, "data.address", fallback="").split("/")[0]).version
-                            except ValueError:
-                                pass
-
-                            if ip_version == 4 and ipv4_assigned == False:
-                                log.debug2(f"Assigning IP '{ip.get_display_name()}' as primary IP v4 address to '{object.get_display_name()}'")
-                                if grab(object, "data.primary_ip4.address") != grab(ip, "data.address"):
-                                    object.update(data = {"primary_ip4": ip.nb_id})
-                                    ipv4_assigned = True
-                                else:
-                                    log.debug2("primary IP v4 did not change")
-
-                            if ip_version == 6 and ipv6_assigned == False:
-                                log.debug2(f"Assigning IP '{ip.get_display_name()}' as primary IP v6 address to '{object.get_display_name()}'")
-                                if grab(object, "data.primary_ip6.address") != grab(ip, "data.address"):
-                                    object.update(data = {"primary_ip6": ip.nb_id})
-                                    ipv6_assigned = True
-                                else:
-                                    log.debug2("primary IP v6 did not change")
-
-
-                #if nb_object_class == NBDevices:
 
     def to_dict(self):
 

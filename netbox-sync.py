@@ -45,7 +45,6 @@ ToDo:
     * how objects are abducted (taken over by this program)
     * thanks to original Owner of ideas
     * ensure NTP is set up properly between all instances (pruning delay)
-* primary IP assignment
 * test all log levels
 * check for ToDo/Fixme/pprint statements
 

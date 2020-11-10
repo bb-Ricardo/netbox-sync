@@ -208,7 +208,7 @@ class NetBoxObject():
 
             # just check the type of the value
             type_check_faild = False
-            for valid_type in [bool, str, int]:
+            for valid_type in [bool, str, int, object]:
 
                 if defined_value_type == valid_type and not isinstance(value, valid_type):
                     log.error(f"Invalid data type for '{key}' (must be {valid_type.__name__}), got: '{value}'")
@@ -265,6 +265,8 @@ class NetBoxObject():
                 elif isinstance(self.data_model.get(key), list) and isinstance(current_value, dict):
                     current_value_str = str(current_value.get("value"))
 
+                elif key.startswith("primary_ip") and isinstance(current_value, dict):
+                    current_value_str = str(current_value.get("address"))
                 else:
                     current_value_str = str(current_value).replace("\r","")
 
@@ -443,7 +445,7 @@ class NetBoxObject():
 
     def unset_attribute(self, attribute_name=None):
 
-        if data is None:
+        if attribute_name is None:
             return
 
         if attribute_name not in self.data_model.keys():
@@ -451,6 +453,7 @@ class NetBoxObject():
             return
 
         # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
+        log.debug(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
         self.unset_items.append(attribute_name)
 
     def get_nb_reference(self):
@@ -592,8 +595,8 @@ class NBDevices(NetBoxObject):
         "status": [ "offline", "active", "planned", "staged", "failed", "inventory", "decommissioning" ],
         "cluster": NBClusters,
         "asset_tag": 50,
-        "primary_ip4": int,
-        "primary_ip6": int,
+        "primary_ip4": object,
+        "primary_ip6": object,
         "tags": NBTags
     }
 
@@ -613,8 +616,8 @@ class NBVMs(NetBoxObject):
         "memory": int,
         "disk": int,
         "comments": str,
-        "primary_ip4": int,
-        "primary_ip6": int,
+        "primary_ip4": object,
+        "primary_ip6": object,
         "tags": NBTags
     }
 
