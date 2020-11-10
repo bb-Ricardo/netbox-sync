@@ -486,6 +486,69 @@ class NBTags(NetBoxObject):
         "description": 200
     }
 
+class NBTenants(NetBoxObject):
+    name = "tenant"
+    api_path = "tenancy/tenants"
+    primary_key = "name"
+    data_model = {
+        "name": 30,
+        "slug": 50,
+        "comments": str,
+        "description": 200,
+        "tags": NBTags
+    }
+
+class NBSites(NetBoxObject):
+    name = "site"
+    api_path = "dcim/sites"
+    primary_key = "name"
+    data_model = {
+        "name": 50,
+        "slug": 50,
+        "comments": str,
+        "tenant": NBTenants,
+        "tags": NBTags
+    }
+
+class NBVrfs(NetBoxObject):
+    name = "VRF"
+    api_path = "ipam/vrfs"
+    primary_key = "name"
+    data_model = {
+        "name": 50,
+        "description": 200,
+        "tenant": NBTenants,
+        "tags": NBTags
+    }
+
+class NBVLANs(NetBoxObject):
+    name = "VLAN"
+    api_path = "ipam/vlans"
+    primary_key = "vid"
+    secondary_key = "name"
+    data_model = {
+        "vid": int,
+        "name": 64,
+        "site": NBSites,
+        "description": 200,
+        "tenant": NBTenants,
+        "tags": NBTags
+    }
+
+class NBPrefixes(NetBoxObject):
+    name = "IP prefix"
+    api_path = "ipam/prefixes"
+    primary_key = "prefix"
+    data_model = {
+        "prefix": str,
+        "site": NBSites,
+        "tenant": NBTenants,
+        "vlan": NBVLANs,
+        "vrf": NBVrfs,
+        "description": 200,
+        "tags": NBTags
+    }
+
 
 class NBManufacturers(NetBoxObject):
     name = "manufacturer"
@@ -554,16 +617,6 @@ class NBDeviceRoles(NetBoxObject):
         "vm_role": bool
     }
 
-class NBSites(NetBoxObject):
-    name = "site"
-    api_path = "dcim/sites"
-    primary_key = "name"
-    data_model = {
-        "name": 50,
-        "slug": 50,
-        "comments": str,
-        "tags": NBTags
-    }
 
 
 class NBClusters(NetBoxObject):
@@ -633,6 +686,8 @@ class NBVMInterfaces(NetBoxObject):
         "enabled": bool,
         "mac_address": str,
         "mtu": int,
+        "mode": [ "access", "tagged", "tagged-all" ],
+        "untagged_vlan": NBVLANs,
         "description": 200,
         "tags": NBTags
     }
@@ -652,6 +707,8 @@ class NBInterfaces(NetBoxObject):
         "mac_address": str,
         "mgmt_only": bool,
         "mtu": int,
+        "mode": [ "access", "tagged", "tagged-all" ],
+        "untagged_vlan": NBVLANs,
         "description": 200,
         "connection_status": bool,
         "tags": NBTags
@@ -730,15 +787,6 @@ class NBIPAddresses(NetBoxObject):
         return [ NBInterfaces, NBVMInterfaces, NBTags ]
 
 
-class NBPrefixes(NetBoxObject):
-    name = "IP prefix"
-    api_path = "ipam/prefixes"
-    primary_key = "prefix"
-    data_model = {
-        "prefix": str,
-        "site": NBSites,
-        "description": 200,
-        "tags": NBTags
-    }
+    
 
 # EOF

@@ -13,7 +13,7 @@ from module.common.logging import setup_logging
 from module.common.configuration import get_config_file, open_config_file, get_config
 from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
-from module.netbox.object_classes import NBPrefixes
+from module.netbox.object_classes import *
 from module.sources import instanciate_sources
 
 
@@ -47,7 +47,7 @@ ToDo:
     * ensure NTP is set up properly between all instances (pruning delay)
 * test all log levels
 * check for ToDo/Fixme/pprint statements
-
+* vlan assignment to ESXi vnics
 """
 
 def main():
@@ -120,6 +120,9 @@ def main():
 
     # we need to collect prefixes as well to so which IP belongs to which prefix
     netbox_objects_to_query.append(NBPrefixes)
+    netbox_objects_to_query.append(NBTenants)
+    netbox_objects_to_query.append(NBVrfs)
+    netbox_objects_to_query.append(NBVLANs)
 
     # request NetBox data
     log.info("Querying necessary objects from Netbox. This might take a while.")

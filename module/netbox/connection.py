@@ -52,7 +52,7 @@ class NetBoxHandler:
     instance_virtual_interfaces = {}
 
     # testing option
-    use_netbox_caching_for_testing = True
+    use_netbox_caching_for_testing = False
 
     def __init__(self, settings=None, inventory=None):
 

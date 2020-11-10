@@ -71,6 +71,9 @@ class VMWareHandler():
 
     standalone_cluster_name = "Standalone ESXi Host"
 
+    dvs = dict()
+    dvs_ports = dict()
+
     networks = dict()
     dvs_mtu = dict()
     standalone_hosts = list()
@@ -249,9 +252,13 @@ class VMWareHandler():
                 "view_type": vim.ClusterComputeResource,
                 "view_handler": self.add_cluster
             },
+            "virtual switch": {
+                "view_type": vim.DistributedVirtualSwitch,
+                "view_handler": self.add_virtual_switch
+            },
             "network": {
-                "view_type": vim.Network,
-                "view_handler": self.add_network
+                "view_type": vim.dvs.DistributedVirtualPortgroup,
+                "view_handler": self.add_port_group
             },
             "host": {
                 "view_type": vim.HostSystem,
@@ -597,20 +604,55 @@ class VMWareHandler():
 
         self.permitted_clusters[name] = site_name
 
-    def add_network(self, obj):
+    def add_virtual_switch(self, obj):
+
+        uuid = get_string_or_none(grab(obj, "uuid"))
+        name = get_string_or_none(grab(obj, "name"))
+
+        if uuid is None or name is None:
+            return
+
+        log.debug2(f"Parsing vCenter virtual switch: {name}")
+
+        self.dvs[uuid] = obj
+
+        # add ports
+        self.dvs_ports[uuid] = dict()
+
+        criteria = vim.dvs.PortCriteria()
+        ports = obj.FetchDVPorts(criteria)
+
+        log.debug2(f"Found {len(ports)} vCenter virtual switch ports")
+
+        for port in ports:
+            self.dvs_ports[uuid][port.key] = port
+
+    def add_port_group(self, obj):
 
         key = get_string_or_none(grab(obj, "key"))
         name = get_string_or_none(grab(obj, "name"))
-        vlan_id = grab(obj, "config.defaultPortConfig.vlan.vlanId")
 
         if key is None or name is None:
             return
 
-        log.debug2(f"Parsing vCenter network: {name}")
+        log.debug2(f"Parsing vCenter port group: {name}")
+
+        vlan_info = grab(obj, "config.defaultPortConfig.vlan")
+
+        vlan_ids = list()
+        if isinstance(vlan_info, vim.dvs.VmwareDistributedVirtualSwitch.TrunkVlanSpec):
+            for item in grab(vlan_info, "vlanId", fallback=list()):
+                if item.start == item.end:
+                    vlan_ids.append(item.start)
+                else:
+                    vlan_ids.extend(range(item.start, item.end+1))
+
+        else:
+            vlan_ids.append(grab(vlan_info, "vlanId"))
 
         self.networks[key] = {
             "name": name,
-            "vlan_id": vlan_id
+            "vlan_ids": vlan_ids
         }
 
     def add_host(self, obj):
@@ -741,7 +783,7 @@ class VMWareHandler():
 
             if vswitch_name is not None:
 
-                log.debug2(f"Found vSwitch {vswitch_name}")
+                log.debug2(f"Found host vSwitch {vswitch_name}")
 
                 host_vswitches[vswitch_name] = {
                     "mtu": grab(vswitch, "mtu"),
@@ -759,7 +801,7 @@ class VMWareHandler():
 
             if pswitch_uuid is not None:
 
-                log.debug2(f"Found proxySwitch {pswitch_name}")
+                log.debug2(f"Found host proxySwitch {pswitch_name}")
 
                 host_pswitches[pswitch_uuid] = {
                     "name": pswitch_name,
@@ -777,13 +819,16 @@ class VMWareHandler():
 
             if pgroup_name is not None:
 
-                log.debug2(f"Found portGroup {pgroup_name}")
+                log.debug2(f"Found host portGroup {pgroup_name}")
+
+                nic_order = grab(pgroup, "computedPolicy.nicTeaming.nicOrder")
+                pgroup_nics = nic_order.activeNic + nic_order.standbyNic
 
                 host_portgroups[pgroup_name] = {
                     "vlan_id": grab(pgroup, "spec.vlanId"),
-                    "vswitch": grab(pgroup, "spec.vswitchName")
+                    "vswitch": grab(pgroup, "spec.vswitchName"),
+                    "nics": pgroup_nics
                 }
-
 
         # now iterate over all physical interfaces and collect data
         pnic_data_dict = dict()
@@ -812,6 +857,8 @@ class VMWareHandler():
 
             pnic_mtu = None
 
+            pnic_mode = None
+
             # check virtual switches for interface data
             for vs_name, vs_data in host_vswitches.items():
 
@@ -826,6 +873,26 @@ class VMWareHandler():
                     ps_name = ps_data.get("name")
                     pnic_description = f"{pnic_description} ({ps_name})"
                     pnic_mtu = ps_data.get("mtu")
+
+                    pnic_mode = "tagged-all"
+
+            # check vlans on this pnic
+            pnic_vlans = list()
+            for pg_name, pg_data in host_portgroups.items():
+
+                if pnic_name in pg_data.get("nics", list()):
+                    pnic_vlans.append(pg_data.get("vlan_id"))
+
+            # determine interface mode for non VM traffic NICs
+            if len(pnic_vlans) > 0:
+                if len(pnic_vlans) == 1 and pnic_vlans[0] == 0:
+                    pnic_mode = "access"
+                if len(pnic_vlans) > 1:
+                    if 0 in pnic_vlans:
+                        pnic_mode = "tagged"
+                    else:
+                        pnic_mode = "tagged-all"
+
 
             pnic_speed_type_mapping = {
                 100: "100base-tx",
@@ -846,6 +913,8 @@ class VMWareHandler():
 
             if pnic_mtu is not None:
                 pnic_data["mtu"] = pnic_mtu
+            if pnic_mode is not None:
+                pnic_data["mode"] = pnic_mode
 
             pnic_data_dict[pnic_name] = pnic_data
 
@@ -1038,6 +1107,8 @@ class VMWareHandler():
 
         ###### Collect data
 
+        site_name = self.get_site_name(NBClusters, cluster_name)
+
         platform = grab(obj, "config.guestFullName")
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
@@ -1102,11 +1173,13 @@ class VMWareHandler():
         # get vm interfaces
         for vm_device in hardware_devices:
 
-            int_mac = normalize_mac_address(grab(vm_device, "macAddress"))
+            # sample: https://github.com/vmware/pyvmomi-community-samples/blob/master/samples/getvnicinfo.py
 
             # not a network interface
-            if int_mac is None:
+            if not isinstance(vm_device, vim.vm.device.VirtualEthernetCard):
                 continue
+
+            int_mac = normalize_mac_address(grab(vm_device, "macAddress"))
 
             device_class = grab(vm_device, "_wsdlName")
 
@@ -1114,15 +1187,23 @@ class VMWareHandler():
 
             int_portgroup_data = self.networks.get(grab(vm_device, "backing.port.portgroupKey"))
 
-            int_network_name = grab(int_portgroup_data, "name")
-            int_network_vlan_id = grab(int_portgroup_data, "vlan_id")
+            int_mode = None
+            int_network_name = None
+            int_network_vlan_ids = None
+            if int_portgroup_data is not None:
+                print(int_portgroup_data)
+                int_network_name = grab(int_portgroup_data, "name")
+                int_network_vlan_ids = grab(int_portgroup_data, "vlan_ids")
 
+                if len(int_network_vlan_ids) == 1:
+                    int_mode == "access"
+                else:
+                    int_mode == "tagged-all"
 
-            int_dvswitch_uuid = grab(vm_device, "backing.port.switchUuid")
-
-            int_mtu = None
-            if int_dvswitch_uuid is not None:
-                int_mtu = self.dvs_mtu.get(int_dvswitch_uuid)
+            int_mtu = 1500
+            #int_dvswitch_uuid = grab(vm_device, "backing.port.switchUuid")
+            #if int_dvswitch_uuid is not None:
+            #    int_mtu = self.dvs_mtu.get(int_dvswitch_uuid)
 
             int_connected = grab(vm_device, "connectable.connected")
             int_label = grab(vm_device, "deviceInfo.label", fallback="")
@@ -1134,8 +1215,9 @@ class VMWareHandler():
                 int_full_name = f"{int_full_name} ({int_network_name})"
 
             int_description = f"{int_label} ({device_class})"
-            if int_network_vlan_id is not None:
-                int_description = f"{int_description} (vlan ID: {int_network_vlan_id})"
+            if int_network_vlan_ids is not None and len(int_network_vlan_ids) == 1:
+                int_description = f"{int_description} (vlan ID: {int_network_vlan_ids[0]})"
+
 
             # find corresponding guest NIC and get IP addresses and connected status
             for guest_nic in grab(obj, "guest.net", fallback=list()):
@@ -1183,6 +1265,22 @@ class VMWareHandler():
 
             if int_mtu is not None:
                 vm_nic_data["mtu"] = int_mtu
+            if int_mode is not None:
+                vm_nic_data["mode"] = int_mode
+
+            if int_network_vlan_ids is not None and len(int_network_vlan_ids) == 1:
+
+                vm_nic_data["untagged_vlan"] = {
+                    "name": int_network_name,
+                    "vid": int_network_vlan_ids[0],
+                    "site": {
+                        "name": site_name
+                    }
+                }
+
+            # ToDo: add tagged vlan list
+            else:
+                pass
 
             nic_data[int_full_name] = vm_nic_data
 
@@ -1258,7 +1356,6 @@ class VMWareHandler():
                     ip_object.is_primary = True
 
         return
-
 
     def update_basic_data(self):
 
