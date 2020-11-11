@@ -47,7 +47,9 @@ ToDo:
     * ensure NTP is set up properly between all instances (pruning delay)
 * test all log levels
 * check for ToDo/Fixme/pprint statements
-* vlan assignment to ESXi vnics
+* new netbox class list of objects
+  * add tagged_vlans list to interfaces
+  * change tags object to list object
 """
 
 def main():
@@ -119,12 +121,16 @@ def main():
         netbox_objects_to_query.extend(source.dependend_netbox_objects)
 
     # we need to collect prefixes as well to so which IP belongs to which prefix
+    # ToDo:
+    #   * add dependencies somewhere else
+    #   * might be obsolete if update_all_ip_addresses is removed
     netbox_objects_to_query.append(NBPrefixes)
     netbox_objects_to_query.append(NBTenants)
     netbox_objects_to_query.append(NBVrfs)
     netbox_objects_to_query.append(NBVLANs)
 
     # request NetBox data
+    # ToDo: remove set and check in function if data has already been fetched
     log.info("Querying necessary objects from Netbox. This might take a while.")
     NB_handler.query_current_data(list(set(netbox_objects_to_query)))
     log.info("Finished querying necessary objects from Netbox")

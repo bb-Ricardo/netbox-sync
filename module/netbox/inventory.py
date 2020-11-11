@@ -70,38 +70,6 @@ class NetBoxInventory:
                 if object_name_to_find == object.get_display_name(including_second_key=True):
                     return object
 
-            """
-                # Todo:
-                #   * try to compare second key if present.
-
-                if object_name_to_find is None:
-                    object_name_to_find = object.get_display_name(data)
-
-                if object_name_to_find == object.get_display_name():
-                    results.append(object)
-
-            # found exactly one match
-            # ToDo:
-            # * add force secondary key if one object has a secondary key
-
-            if len(results) == 1:
-                #print(f"found exact match: {object_name_to_find}")
-                return results[0]
-
-            # compare secondary key
-            elif len(results) > 1:
-
-                object_name_to_find = None
-                for object in results:
-
-                    if object_name_to_find is None:
-                        object_name_to_find = object.get_display_name(data, including_second_key=True)
-                        #print(f"get_by_data(): Object Display Name: {object_name_to_find}")
-
-                    if object_name_to_find == object.get_display_name(including_second_key=True):
-                        return object
-            """
-
         # try to match all data attributes
         else:
 
@@ -116,20 +84,6 @@ class NetBoxInventory:
                 if all_items_match == True:
                     return object
 
-                """
-                if data.get(object_type.primary_key) is not None and \
-                    object.resolve_attribute(object_type.primary_key) == object.resolve_attribute(object_type.primary_key, data=data):
-
-                    # object type has a secondary key, lets check if it matches
-                    if getattr(object_type, "secondary_key", None) is not None and data.get(object_type.secondary_key) is not None:
-
-                        if object.resolve_attribute(object_type.secondary_key) == object.resolve_attribute(object_type.secondary_key, data=data):
-                            return_data.append(object)
-
-                    # object has no secondary key but the same name, add to list
-                    else:
-                        return_data.append(object)
-                """
         return None
 
     def add_item_from_netbox(self, object_type, data=None):
@@ -186,7 +140,6 @@ class NetBoxInventory:
 
         return self.base_structure.get(object_type.name, list())
 
-
     def get_all_interfaces(self, object):
 
         if not isinstance(object, (NBVMs, NBDevices)):
@@ -204,7 +157,6 @@ class NetBoxInventory:
                     interfaces.append(int)
 
         return interfaces
-
 
     def tag_all_the_things(self, netbox_handler):
 
@@ -236,6 +188,7 @@ class NetBoxInventory:
 
     def update_all_ip_addresses(self):
 
+        """
         def _return_longest_match(ip_to_match=None, list_of_prefixes=None):
 
             if ip_to_match is None or list_of_prefixes is None:
@@ -273,16 +226,19 @@ class NetBoxInventory:
                     current_longest_matching_prefix = prefix
 
             return current_longest_matching_prefix
+        """
 
+        #log.info("Trying to math IPs to existing prefixes")
 
-        log.info("Trying to math IPs to existing prefixes")
-
+        """
         all_prefixes = self.get_all_items(NBPrefixes)
         all_addresses = self.get_all_items(NBIPAddresses)
+        """
 
         # store IP addresses to look them up in bulk
         ip_lookup_dict = dict()
 
+        """
         # prepare prefixes
         # dict of simple prefixes to pass to function for longest match
         prefixes_per_site = dict()
@@ -302,21 +258,17 @@ class NetBoxInventory:
             prefixes_per_site[prefix_site].append(prefix)
 
             prefixes_per_site_objects[prefix_site][str(prefix)] = this_prefix
-
+        """
 
         # iterate over all IP addresses and try to match them to a prefix
-        for ip in all_addresses:
+        for ip in self.get_all_items(NBIPAddresses):
 
             # ignore IPs which are not handled by any source
             if ip.source is None:
                 continue
 
-            # ignore unassigned IPs
-            if grab(ip, "data.assigned_object_id") is None:
-                continue
-
             # get IP and prefix length
-            ip_a, ip_prefix_length = grab(ip, "data.address", fallback="").split("/")
+            ip_a = grab(ip, "data.address", fallback="").split("/")[0]
 
             # check if we meant to look up DNS host name for this IP
             if grab(ip, "source.dns_name_lookup", fallback=False) is True:
@@ -330,7 +282,7 @@ class NetBoxInventory:
 
                 ip_lookup_dict[ip.source].get("ips").append(ip_a)
 
-
+            """
             object_site = "None"
             assigned_device_vm = None
             # name of the site or None (as string)
@@ -421,7 +373,7 @@ class NetBoxInventory:
 
             if len(data.keys()) > 0:
                 ip.update(data=data)
-
+            """
 
         log.debug("Starting to look up PTR records for IP addresses")
 
@@ -434,7 +386,7 @@ class NetBoxInventory:
             # get DNS names for IP addresses:
             records = perform_ptr_lookups(data.get("ips"), data.get("servers"))
 
-            for ip in all_addresses:
+            for ip in self.get_all_items(NBIPAddresses):
 
                 if ip.source != source:
                     continue
@@ -448,7 +400,6 @@ class NetBoxInventory:
                     ip.update(data = {"dns_name": dns_name})
 
         log.debug("Finished to look up PTR records for IP addresses")
-
 
     def to_dict(self):
 

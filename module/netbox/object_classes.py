@@ -2,6 +2,7 @@
 
 import json
 import logging
+from ipaddress import ip_network, IPv4Network, IPv6Network
 
 import pprint
 
@@ -66,7 +67,7 @@ class NetBoxObject():
                     if isinstance(dvalue, list):
                         new_dvalue = list()
                         for possible_option in dvalue:
-                            if possible_option in NetBoxObject.__subclasses__():
+                            if possible_option in NetBoxObject.__subclasses__() + [IPv4Network, IPv6Network]:
                                 new_dvalue.append(str(possible_option))
                             else:
                                 new_dvalue.append(possible_option)
@@ -86,7 +87,7 @@ class NetBoxObject():
                 data = dict()
                 for dkey, dvalue in value.items():
                     # if value is class name then print class name
-                    if isinstance(dvalue, NetBoxObject):
+                    if isinstance(dvalue, (NetBoxObject, IPv4Network, IPv6Network)):
                         dvalue = repr(dvalue)
 
                     if dkey == "tags":
@@ -208,6 +209,7 @@ class NetBoxObject():
 
             # just check the type of the value
             type_check_faild = False
+            # ToDo: object here is just a hack to accommodate primary IP addresses for devices and VMs
             for valid_type in [bool, str, int, object]:
 
                 if defined_value_type == valid_type and not isinstance(value, valid_type):
@@ -229,6 +231,9 @@ class NetBoxObject():
                 if not isinstance(value, NetBoxObject):
                     # try to find object.
                     value = self.inventory.add_update_object(defined_value_type, data=value)
+                    # add source if item was created via this source
+                    if value.is_new is True:
+                        value.source = source
 
             # add to parsed data dict
             parsed_data[key] = value
@@ -287,7 +292,6 @@ class NetBoxObject():
 
             self.resolve_relations()
 
-
     def get_display_name(self, data=None, including_second_key=False):
 
         this_data_set = data
@@ -319,13 +323,15 @@ class NetBoxObject():
 
         return my_name
 
-
     def resolve_relations(self):
 
         for key, value in self.data_model.items():
 
             if self.data.get(key) is None:
                 continue
+
+            if key.startswith("primary_ip"):
+                value = NBIPAddresses
 
             # continue if value is not an NetBox object
             if value not in NetBoxObject.__subclasses__():
@@ -371,7 +377,6 @@ class NetBoxObject():
     def raw(self):
 
         return self.data
-
 
     def get_dependencies(self):
 
@@ -526,6 +531,7 @@ class NBVLANs(NetBoxObject):
     api_path = "ipam/vlans"
     primary_key = "vid"
     secondary_key = "name"
+    enforce_secondary_key = True
     data_model = {
         "vid": int,
         "name": 64,
@@ -535,12 +541,56 @@ class NBVLANs(NetBoxObject):
         "tags": NBTags
     }
 
+    def get_display_name(self, data=None, including_second_key=False):
+        """
+            for VLANs we change the behavior of display name.
+
+            It is important to get the VLAN for the same site. And we don't want
+            to change the name if it's already in NetBox.
+
+            Even though the secondary key is the name we change it to site. If site
+            is not present we fall back to name.
+        """
+
+        # run just to check input data
+        my_name = super().get_display_name(data=data, including_second_key=including_second_key)
+
+        this_data_set = data
+        if data is None:
+            this_data_set = self.data
+
+        # we use "site" as secondary key, otherwise fall back to "name"
+        this_site = this_data_set.get("site")
+        if this_site is not None:
+            vlan_id = this_data_set.get(self.primary_key)
+
+            site_name = None
+            if isinstance(this_site, NetBoxObject):
+                site_name = this_site.get_display_name()
+
+            if isinstance(this_site, dict):
+                site_name = this_site.get("name")
+
+            if site_name is not None:
+                my_name = f"{vlan_id} ({site_name})"
+
+        return my_name
+
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        # don't change the name of the VLAN if it already exists
+        if read_from_netbox is False and grab(self, "data.name") is not None:
+            data["name"] = grab(self, "data.name")
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+
 class NBPrefixes(NetBoxObject):
     name = "IP prefix"
     api_path = "ipam/prefixes"
     primary_key = "prefix"
     data_model = {
-        "prefix": str,
+        "prefix": [IPv4Network, IPv6Network],
         "site": NBSites,
         "tenant": NBTenants,
         "vlan": NBVLANs,
@@ -549,6 +599,21 @@ class NBPrefixes(NetBoxObject):
         "tags": NBTags
     }
 
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        # prefixes are parsed into ip_networks
+        data_prefix = data.get(self.primary_key)
+        if data_prefix is not None and not isinstance(data_prefix, (IPv4Network, IPv6Network)):
+            try:
+                data[self.primary_key] = ip_network(data_prefix)
+            except ValueError as e:
+                log.error(f"Failed to parse {self.name} '{data_prefix}': {e}")
+                return
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+        if read_from_netbox is False:
+            raise ValueError(f"Adding {self.name} by this program is currently not implemented.")
 
 class NBManufacturers(NetBoxObject):
     name = "manufacturer"
@@ -653,7 +718,6 @@ class NBDevices(NetBoxObject):
         "tags": NBTags
     }
 
-
 class NBVMs(NetBoxObject):
     name = "virtual machine"
     api_path = "virtualization/virtual-machines"
@@ -727,8 +791,8 @@ class NBIPAddresses(NetBoxObject):
         "description": 200,
         "dns_name": 255,
         "tags": NBTags,
-        "tenant": int,
-        "vrf": int
+        "tenant": NBTenants,
+        "vrf": NBVrfs
     }
     # add relation between two attributes
     data_model_relation = {
@@ -787,6 +851,6 @@ class NBIPAddresses(NetBoxObject):
         return [ NBInterfaces, NBVMInterfaces, NBTags ]
 
 
-    
+
 
 # EOF
