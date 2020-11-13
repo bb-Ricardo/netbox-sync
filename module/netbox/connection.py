@@ -5,6 +5,7 @@ import requests
 from http.client import HTTPConnection
 import urllib3
 import pickle
+import os
 
 from packaging import version
 
@@ -16,9 +17,6 @@ from module.netbox.object_classes import *
 from module.common.logging import get_logger, DEBUG3
 
 log = get_logger()
-
-# ToDo:
-#   * primary ip
 
 class NetBoxHandler:
     """
@@ -45,14 +43,16 @@ class NetBoxHandler:
     primary_tag = "NetBox-synced"
     orphaned_tag = f"{primary_tag}: Orphaned"
 
+    cache_directory = None
+    use_netbox_caching = True
+
     inventory = None
 
     instance_tags = None
     instance_interfaces = {}
     instance_virtual_interfaces = {}
 
-    # testing option
-    use_netbox_caching_for_testing = False
+    resolved_dependencies = set()
 
     def __init__(self, settings=None, inventory=None):
 
@@ -90,6 +90,45 @@ class NetBoxHandler:
         if version.parse(self.get_api_version()) < version.parse(self.minimum_api_version):
             do_error_exit(f"Netbox API version '{self.api_version}' not supported. "
                           f"Minimum API version: {self.minimum_api_version}")
+
+        self.setup_caching()
+
+    def setup_caching(self):
+
+        cache_folder_name = "cache"
+
+        base_dir = os.sep.join(__file__.split(os.sep)[0:-3])
+        if cache_folder_name[0] != os.sep:
+            cache_folder_name = f"{base_dir}/{cache_folder_name}"
+
+        self.cache_directory = os.path.realpath(cache_folder_name)
+
+        # check if directory is a file
+        if os.path.isfile(self.cache_directory):
+            log.warning(f"The cache directory ({self.cache_directory}) seems to be file.")
+            self.use_netbox_caching = False
+
+        # check if directory exists
+        if not os.path.exists(self.cache_directory):
+            # try to create directory
+            try:
+                os.makedirs(self.cache_directory, 0o700)
+            except OSError:
+                log.warning(f"Unable to create cache directory: {self.cache_directory}")
+                self.use_netbox_caching = False
+            except Exception as e:
+                log.warning(f"Unknown exception while creating cache directory {self.cache_directory}: {e}")
+                self.use_netbox_caching = False
+
+         # check if directory is writable
+        if not os.access(self.cache_directory, os.X_OK | os.W_OK):
+            log.warning(f"Error writing to cache directory: {self.cache_directory}")
+            self.use_netbox_caching = False
+
+        if self.use_netbox_caching is False:
+            log.warning("NetBox caching DISABLED")
+        else:
+            log.debug(f"Successfully configured cache directory: {self.cache_directory}")
 
     def parse_config_settings(self, config_settings):
 
@@ -153,7 +192,7 @@ class NetBoxHandler:
 
         return result
 
-    def request(self, object_class, req_type="GET", data=None, params=None, nb_id=None):
+    def request(self, object_class, req_type="GET", data=None, params=dict(), nb_id=None):
 
 
         result = None
@@ -164,11 +203,15 @@ class NetBoxHandler:
         if nb_id is not None:
             request_url += f"{nb_id}/"
 
-        if params is None:
+        if not isinstance(params, dict):
+            log.debug(f"Params passed to NetBox request need to be a dict, got: {params}")
             params = dict()
 
         if req_type == "GET":
-            params["limit"] = self.default_netbox_result_limit
+            if "limit" not in params.keys():
+                params["limit"] = self.default_netbox_result_limit
+
+            # always exclude config context
             params["exclude"] = "config_context"
 
         # prepare request
@@ -178,7 +221,6 @@ class NetBoxHandler:
 
         # issue request
         response = self.single_request(this_request)
-
 
         try:
             result = response.json()
@@ -209,6 +251,9 @@ class NetBoxHandler:
                 object_name = result.get(object_class.primary_key)
 
             log.info(f"NetBox successfully {action} {object_class.name} object '{object_name}'.")
+
+            if response.status_code == 204:
+                result = True
 
         # token issues
         elif response.status_code == 403:
@@ -271,6 +316,7 @@ class NetBoxHandler:
 
     def query_current_data(self, netbox_objects_to_query=None):
 
+
         if netbox_objects_to_query is None:
             raise AttributeError(f"Attribute netbox_objects_to_query is: '{netbox_objects_to_query}'")
 
@@ -280,33 +326,110 @@ class NetBoxHandler:
             if nb_object_class not in NetBoxObject.__subclasses__():
                 raise AttributeError(f"Class '{nb_object_class.__name__}' must be a subclass of '{NetBoxObject.__name__}'")
 
+            # if objects are multiple times requested but already retrieved
+            if nb_object_class in self.resolved_dependencies:
+                continue
+
+            # initialize cache variables
             cached_nb_data = None
-            if self.use_netbox_caching_for_testing is True:
+            cache_file = f"{self.cache_directory}{os.sep}{nb_object_class.__name__}.cache"
+            cache_this_class = False
+            latest_update = None
+
+            # check if cache file is accessible
+            if self.use_netbox_caching is True:
+                cache_this_class = True
+
+                if os.path.exists(cache_file) and not os.access(cache_file, os.R_OK):
+                    log.warning("Got no permission to read existing cache file: {cache_file}")
+                    cache_this_class = False
+
+                if os.path.exists(cache_file) and not os.access(cache_file, os.W_OK):
+                    log.warning("Got no permission to write to existing cache file: {cache_file}")
+                    cache_this_class = False
+
+            # read data from cache file
+            if cache_this_class is True:
                 try:
-                    cached_nb_data = pickle.load( open( f"cache/{nb_object_class.__name__}.cache", "rb" ) )
+                    cached_nb_data = pickle.load( open( cache_file, "rb" ) )
                 except Exception:
                     pass
 
-            nb_data = dict()
-            if cached_nb_data is None:
+                # get date of latest update in cache file
+                if cached_nb_data is not None:
+                    latest_update_list = [x.get("last_updated") for x in cached_nb_data if x.get("last_updated") is not None]
+                    if len(latest_update_list) > 0:
+                        latest_update = sorted(latest_update_list)[-1]
+
+                        log.debug(f"Successfully read cached data with {len(cached_nb_data)} '{nb_object_class.name}%s', last updated '{latest_update}'" % plural(len(cached_nb_data)))
+
+                    else:
+                        cache_this_class = False
+
+
+            full_nb_data = None
+            brief_nb_data = None
+            updated_nb_data = None
+
+            # no cache data found
+            if latest_update is None:
+
                 # get all objects of this class
-                log.debug(f"Requesting {nb_object_class.name}s from NetBox")
-                nb_data = self.request(nb_object_class)
+                log.debug(f"Requesting all {nb_object_class.name}s from NetBox")
+                full_nb_data = self.request(nb_object_class)
 
-                if self.use_netbox_caching_for_testing is True:
-                    pickle.dump(nb_data.get("results"), open( f"cache/{nb_object_class.__name__}.cache", "wb" ) )
+                if full_nb_data.get("results") is None:
+                    log.error(f"Result data from NetBox for object {nb_object_class.__name__} missing!")
+                    do_error_exit("Reading data from NetBox failed.")
+
             else:
-                nb_data["results"] = cached_nb_data
 
+                # request a brief list of existing objects
+                log.debug(f"Requesting a brief list of {nb_object_class.name}s from NetBox")
+                brief_nb_data = self.request(nb_object_class, params={"brief":1, "limit": 500})
+                log.debug("NetBox returned %d results." % len(brief_nb_data.get("results", list())))
 
-            if nb_data.get("results") is None:
-                log.warning(f"Result data from NetBox for object {nb_object_class.__name__} missing!")
-                continue
+                log.debug(f"Requesting the last updates since {latest_update} of {nb_object_class.name}s from NetBox")
+                updated_nb_data = self.request(nb_object_class, params={"last_updated__gte": latest_update})
+                log.debug("NetBox returned %d results." % len(updated_nb_data.get("results", list())))
 
-            log.debug(f"Processing %s returned {nb_object_class.name}%s" % (len(nb_data.get("results")),plural(len(nb_data.get("results")))))
+                if brief_nb_data.get("results") is None or updated_nb_data.get("results") is None:
+                    log.error(f"Result data from NetBox for object {nb_object_class.__name__} missing!")
+                    do_error_exit("Reading data from NetBox failed.")
 
-            for object_data in nb_data.get("results"):
+            # read a full set from NetBox
+            nb_objects = list()
+            if full_nb_data is not None:
+                nb_objects = full_nb_data.get("results")
+
+            # read the delta from NetBox and
+            else:
+
+                currently_existing_ids = [x.get("id") for x in brief_nb_data.get("results")]
+                changed_ids = [x.get("id") for x in updated_nb_data.get("results")]
+
+                for object in cached_nb_data:
+
+                    if object.get("id") in currently_existing_ids and object.get("id") not in changed_ids:
+                        nb_objects.append(object)
+
+                nb_objects.extend(updated_nb_data.get("results"))
+
+            if cache_this_class is True:
+                try:
+                    pickle.dump(nb_objects, open( cache_file, "wb" ) )
+                    log.debug("Successfully cached %d objects." % (len(nb_objects)))
+                except Exception as e:
+                    log.warning(f"Failed to write NetBox data to cache file: {e}")
+
+            log.debug(f"Processing %s returned {nb_object_class.name}%s" % (len(nb_objects),plural(len(nb_objects))))
+
+            for object_data in nb_objects:
                 self.inventory.add_item_from_netbox(nb_object_class, data=object_data)
+
+            # mark this object class as retrieved
+            self.resolved_dependencies.add(nb_object_class)
+
 
         return
 
@@ -342,12 +465,15 @@ class NetBoxHandler:
 
             # resolve dependencies
             for dependency in object.get_dependencies():
-                if dependency not in self.inventory.resolved_dependencies:
+                if dependency not in self.resolved_dependencies:
                     log.debug2("Resolving dependency: %s" % (dependency.name))
                     self.update_object(dependency)
 
             # unset data if requested
-            if unset is True and len(object.unset_items) > 0:
+            if unset is True:
+
+                if len(object.unset_items) == 0:
+                    continue
 
                 unset_data = {x: None for x in object.unset_items}
 
@@ -366,21 +492,14 @@ class NetBoxHandler:
 
                 continue
 
-            returned_object_data = None
 
             data_to_patch = dict()
             unresolved_dependency_data = dict()
 
-            if object.is_new is True:
-                object.updated_items = object.data.keys()
-
             for key, value in object.data.items():
                 if key in object.updated_items:
 
-                    if key == "tags":
-                        data_to_patch[key] = [{"name": d.get_display_name()} for d in value]
-
-                    elif isinstance(value, NetBoxObject):
+                    if isinstance(value, (NetBoxObject,NBObjectList)):
 
                         if value.get_nb_reference() is None:
                             unresolved_dependency_data[key] = value
@@ -391,18 +510,23 @@ class NetBoxHandler:
                         data_to_patch[key] = value
 
             issued_request = False
-            if object.is_new is True:
-                log.info("Creating new NetBox '%s' object: %s" % (object.name, object.get_display_name()))
+            returned_object_data = None
+            if len(data_to_patch.keys()) > 0:
 
-                returned_object_data = self.request(nb_object_sub_class, req_type="POST", data=data_to_patch)
+                # default is a new object
+                nb_id = None
+                req_type = "POST"
+                action = "Creating new"
 
-                issued_request = True
+                # if its not a new object then update it
+                if object.is_new is False:
+                    nb_id = object.nb_id
+                    req_type = "PATCH"
+                    action = "Updating"
 
-            if object.is_new is False and len(object.updated_items) > 0:
+                log.info("%s NetBox '%s' object '%s' with data: %s" % (action, object.name, object.get_display_name(), data_to_patch))
 
-                log.info("Updating NetBox '%s' object '%s' with data: %s" % (object.name, object.get_display_name(), data_to_patch))
-
-                returned_object_data = self.request(nb_object_sub_class, req_type="PATCH", data=data_to_patch, nb_id=object.nb_id)
+                returned_object_data = self.request(nb_object_sub_class, req_type=req_type, data=data_to_patch, nb_id=nb_id)
 
                 issued_request = True
 
@@ -410,37 +534,42 @@ class NetBoxHandler:
 
                 object.update(data = returned_object_data, read_from_netbox=True)
 
-                # add unresolved dependencies back to object
-                if len(unresolved_dependency_data.keys()) > 0:
-                    object.update(data = unresolved_dependency_data)
-
-                object.resolve_relations()
-
             elif issued_request is True:
                 log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {data_to_patch}")
 
+            # add unresolved dependencies back to object
+            if len(unresolved_dependency_data.keys()) > 0:
+                log.debug2("Adding unresolved dependencies back to object: %s" % list(unresolved_dependency_data.keys()))
+                object.update(data=unresolved_dependency_data)
+
+            object.resolve_relations()
+
         # add class to resolved dependencies
-        self.inventory.resolved_dependencies = list(set(self.inventory.resolved_dependencies + [nb_object_sub_class] ))
+        self.resolved_dependencies.add(nb_object_sub_class)
 
     def update_instance(self):
 
         log.info("Updating changed data in NetBox")
 
         # update all items in NetBox but unset items first
-        self.inventory.resolved_dependencies = list()
+        log.debug("First run, unset attributes if necessary.")
+        self.resolved_dependencies = set()
         for nb_object_sub_class in NetBoxObject.__subclasses__():
             self.update_object(nb_object_sub_class, unset=True)
 
         # update all items
-        self.inventory.resolved_dependencies = list()
+        log.debug("Second run, update all items")
+        self.resolved_dependencies = set()
         for nb_object_sub_class in NetBoxObject.__subclasses__():
             self.update_object(nb_object_sub_class)
 
         # run again to updated objects with previous unresolved dependencies
-        self.inventory.resolved_dependencies = list()
+        log.debug("Third run, update all items with previous unresolved items")
+        self.resolved_dependencies = set()
         for nb_object_sub_class in NetBoxObject.__subclasses__():
             self.update_object(nb_object_sub_class)
 
+        # ToDo: check for objects with unresolved relations
 
     def prune_data(self):
 
@@ -470,7 +599,7 @@ class NetBoxHandler:
                 # only need the date including seconds
                 date_last_update = date_last_update[0:19]
 
-                log.debug2(f"Object '{object.get_display_name()}' is Orphaned. Last time changed: {date_last_update}")
+                log.debug2(f"Object '{object.name}' '{object.get_display_name()}' is Orphaned. Last time changed: {date_last_update}")
 
                 # check prune delay.
                 last_updated = None
@@ -516,8 +645,8 @@ class NetBoxHandler:
                 if nb_object_sub_class == NBTags:
                     continue
 
-                # object has no tags so we can't be sure it was created with this tool
-                if NBTags not in nb_object_sub_class.data_model.values():
+                # object has no tags so we can't be sure it was created with this program
+                if NBTagList not in nb_object_sub_class.data_model.values():
                     continue
 
                 for object in self.inventory.get_all_items(nb_object_sub_class):
@@ -526,36 +655,32 @@ class NetBoxHandler:
                     if getattr(object, "deleted", False) is True:
                         continue
 
-
                     found_objects_to_delete = True
 
                     if self.primary_tag in object.get_tags():
                         log.info(f"{nb_object_sub_class.name} '{object.get_display_name()}' will be deleted now")
 
-                        """
-                        # Todo:
-                        # * Needs testing
                         result = self.request(nb_object_sub_class, req_type="DELETE", nb_id=object.nb_id)
 
                         if result is not None:
                             object.deleted = True
-                        """
 
 
             if found_objects_to_delete is False:
 
+                # ToDo: test delete all
                 # get tag objects
-                primary_tag = self.inventory.add_update_object(NBTags, data = {"name": self.primary_tag})
+                primary_tag = self.inventory.get_by_data(NBTags, data = {"name": self.primary_tag})
                 orpahned_tag = self.inventory.get_by_data(NBTags, data = {"name": self.orphaned_tag})
 
                 # try to delete them
                 log.info(f"{NBTags.name} '{primary_tag.get_display_name()}' will be deleted now")
-                #self.request(NBTags, req_type="DELETE", nb_id=primary_tag.nb_id)
+                self.request(NBTags, req_type="DELETE", nb_id=primary_tag.nb_id)
 
                 log.info(f"{NBTags.name} '{orpahned_tag.get_display_name()}' will be deleted now")
-                #self.request(NBTags, req_type="DELETE", nb_id=orpahned_tag.nb_id)
+                self.request(NBTags, req_type="DELETE", nb_id=orpahned_tag.nb_id)
 
-                log.info("Successfully deleted all objects which were sync by this program.")
+                log.info("Successfully deleted all objects which were synced and tagged by this program.")
                 break
         else:
 

@@ -186,79 +186,12 @@ class NetBoxInventory:
                     if netbox_handler.primary_tag in object.get_tags():
                         object.add_tags(netbox_handler.orphaned_tag)
 
-    def update_all_ip_addresses(self):
+    def query_ptr_records_for_all_ips(self):
 
-        """
-        def _return_longest_match(ip_to_match=None, list_of_prefixes=None):
-
-            if ip_to_match is None or list_of_prefixes is None:
-                return
-
-            if not isinstance(ip_to_match, (IPv4Address, IPv6Address)):
-                try:
-                    ip_to_match = ip_address(ip_to_match)
-                except ValueError:
-                    return
-
-            if not isinstance(list_of_prefixes, list):
-                return
-
-            sanatized_list_of_prefixes = list()
-            for prefix in list_of_prefixes:
-
-                if not isinstance(prefix, (IPv4Network, IPv6Network)):
-                    try:
-                        sanatized_list_of_prefixes.append(ip_network(prefix))
-                    except ValueError:
-                        return
-                else:
-                    sanatized_list_of_prefixes.append(prefix)
-
-            current_longest_matching_prefix_length = 0
-            current_longest_matching_prefix = None
-
-            for prefix in sanatized_list_of_prefixes:
-
-                if ip_to_match in prefix and \
-                    prefix.prefixlen >= current_longest_matching_prefix_length:
-
-                    current_longest_matching_prefix_length = prefix.prefixlen
-                    current_longest_matching_prefix = prefix
-
-            return current_longest_matching_prefix
-        """
-
-        #log.info("Trying to math IPs to existing prefixes")
-
-        """
-        all_prefixes = self.get_all_items(NBPrefixes)
-        all_addresses = self.get_all_items(NBIPAddresses)
-        """
+        log.debug("Starting to look up PTR records for IP addresses")
 
         # store IP addresses to look them up in bulk
         ip_lookup_dict = dict()
-
-        """
-        # prepare prefixes
-        # dict of simple prefixes to pass to function for longest match
-        prefixes_per_site = dict()
-        # dict of prefix objects so we don't need to search for them again
-        prefixes_per_site_objects = dict()
-        for this_prefix in all_prefixes:
-
-            # name of the site or None (as string)
-            prefix_site = str(grab(this_prefix, "data.site.data.name"))
-
-            if prefixes_per_site.get(prefix_site) is None:
-                prefixes_per_site[prefix_site] = list()
-                prefixes_per_site_objects[prefix_site] = dict()
-
-            prefix = ip_network(grab(this_prefix, "data.prefix"))
-
-            prefixes_per_site[prefix_site].append(prefix)
-
-            prefixes_per_site_objects[prefix_site][str(prefix)] = this_prefix
-        """
 
         # iterate over all IP addresses and try to match them to a prefix
         for ip in self.get_all_items(NBIPAddresses):
@@ -282,100 +215,6 @@ class NetBoxInventory:
 
                 ip_lookup_dict[ip.source].get("ips").append(ip_a)
 
-            """
-            object_site = "None"
-            assigned_device_vm = None
-            # name of the site or None (as string)
-            # -> NBInterfaces -> NBDevices -> NBSites
-            if grab(ip, "data.assigned_object_type") == "dcim.interface":
-                object_site = str(grab(ip, "data.assigned_object_id.data.device.data.site.data.name"))
-                assigned_device_vm = grab(ip, "data.assigned_object_id.data.device")
-
-            # -> NBVMInterfaces -> NBVMs -> NBClusters -> NBSites
-            elif grab(ip, "data.assigned_object_type") == "virtualization.vminterface":
-                object_site = str(grab(ip, "data.assigned_object_id.data.virtual_machine.data.cluster.data.site.data.name"))
-                assigned_device_vm = grab(ip, "data.assigned_object_id.data.virtual_machine")
-
-            # set/update/remove primary IP addresses
-            ip_version = 6 if ":" in ip_a else 4
-            if grab(ip, "source.set_primary_ip") == "always" and ip.is_primary == True:
-
-                for object_type in [NBDevices, NBVMs]:
-
-                    for devices_vms in self.get_all_items(object_type):
-
-                        # device has no primary IP of this version
-                        this_primary_ip = grab(devices_vms, f"data.primary_ip{ip_version}")
-                        if this_primary_ip is None:
-                            continue
-
-                        if not isinstance(this_primary_ip, dict):
-                            continue
-
-                        # device has the same object assigned
-                        if ip.is_new is False and ip.nb_id == this_primary_ip.get("id") and devices_vms != assigned_device_vm:
-                            devices_vms.unset_attribute(f"primary_ip{ip_version}")
-
-                log.debug(f"Setting '{assigned_device_vm.get_display_name()}' attribute 'primary_ip{ip_version}' to '{ip.get_display_name()}'")
-                assigned_device_vm.update(data = {f"primary_ip{ip_version}": ip})
-
-            elif grab(ip, "source.set_primary_ip") != "never" and ip.is_primary == True:
-
-                if grab(assigned_device_vm, f"data.primary_ip{ip_version}") is None:
-                    log.debug(f"Setting '{assigned_device_vm.get_display_name()}' attribute 'primary_ip{ip_version}' to '{ip.get_display_name()}'")
-                    assigned_device_vm.update(data = {f"primary_ip{ip_version}": ip})
-
-
-            log.debug2("Trying to find prefix for IP: %s" % ip.get_display_name())
-
-            log.debug2(f"Site name for this IP: {object_site}")
-
-
-            # test site prefixes first
-            matching_site_name = object_site
-            matching_site_prefix = _return_longest_match(ip_a, prefixes_per_site.get(object_site))
-
-            # nothing was found then check prefixes with site name
-            if matching_site_prefix is None:
-
-                matching_site_name = "None"
-                matching_site_prefix = _return_longest_match(ip_a, prefixes_per_site.get(matching_site_name))
-
-            # no matching prefix found, give up
-            if matching_site_prefix is None:
-                continue
-
-            log.debug2(f"Found IP '{ip_a}' matches prefix '{matching_site_prefix}' in site '{matching_site_name.replace('None', 'undefined')}'")
-
-            # get matching prefix object
-            prefix_object = prefixes_per_site_objects.get(matching_site_name).get(str(matching_site_prefix))
-
-            if prefix_object is None:
-                continue
-
-            # check if prefix net size and ip address prefix length match
-            if matching_site_prefix.prefixlen != int(ip_prefix_length):
-                interface_object = grab(ip, "data.assigned_object_id")
-                log.warning(f"IP prefix length of '{ip_a}/{ip_prefix_length}' ({interface_object.get_display_name()}) doesn't match network prefix length '{matching_site_prefix}'!")
-
-            data = dict()
-
-            vrf = grab(prefix_object, "data.vrf.id")
-            tenant = grab(prefix_object, "data.tenant.id")
-
-            if vrf is not None and str(vrf) != str(grab(ip, "data.vrf.id")):
-                data["vrf"] = vrf
-
-            # only overwrite tenant if not already defined
-            # ToDo: document behavior
-            if tenant is not None and grab(ip, "data.tenant.id") is None and str(tenant) != str(grab(ip, "data.tenant.id")):
-                data["tenant"] = tenant
-
-            if len(data.keys()) > 0:
-                ip.update(data=data)
-            """
-
-        log.debug("Starting to look up PTR records for IP addresses")
 
         # now perform DNS requests to look up DNS names for IP addresses
         for source, data in ip_lookup_dict.items():

@@ -41,6 +41,7 @@ class VMWareHandler():
     ]
 
     settings = {
+        "enabled": True,
         "host_fqdn": None,
         "port": 443,
         "username": None,
@@ -100,13 +101,20 @@ class VMWareHandler():
 
         self.parse_config_settings(settings)
 
-        self.create_session()
-
         self.source_tag = f"Source: {name}"
         self.site_name = f"vCenter: {name}"
 
-        if self.session is not None:
-            self.init_successfull = True
+        if self.enabled is False:
+            log.info(f"Source '{name}' is currently disabled. Skipping")
+            return
+
+        self.create_session()
+
+        if self.session is None:
+            log.info(f"Source '{name}' is currently unavailable. Skipping")
+            return
+
+        self.init_successfull = True
 
     def parse_config_settings(self, config_settings):
 
@@ -215,13 +223,14 @@ class VMWareHandler():
             atexit.register(Disconnect, instance)
             self.session = instance.RetrieveContent()
 
-        except (gaierror, vim.fault.InvalidLogin, OSError) as e:
-
+        except (gaierror, OSError) as e:
             log.error(
                 f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}. "
                 f"Reason: {e}"
             )
-
+            return False
+        except vim.fault.InvalidLogin as e:
+            log.error(f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}. {e.msg}")
             return False
 
         log.info(f"Successfully connected to vCenter '{self.host_fqdn}'")
@@ -256,10 +265,10 @@ class VMWareHandler():
                 "view_type": vim.ClusterComputeResource,
                 "view_handler": self.add_cluster
             },
-            "virtual switch": {
-                "view_type": vim.DistributedVirtualSwitch,
-                "view_handler": self.add_virtual_switch
-            },
+#            "virtual switch": {
+#                "view_type": vim.DistributedVirtualSwitch,
+#                "view_handler": self.add_virtual_switch
+#            },
             "network": {
                 "view_type": vim.dvs.DistributedVirtualPortgroup,
                 "view_handler": self.add_port_group
@@ -276,6 +285,7 @@ class VMWareHandler():
                 "view_type": vim.VirtualMachine,
                 "view_handler": self.add_virtual_machine
             }
+
         }
 
         for view_name, view_details in object_mapping.items():
@@ -349,7 +359,7 @@ class VMWareHandler():
         # check if site was provided in config
         config_name = "host_site_relation" if object_type == NBDevices else "cluster_site_relation"
 
-        site_relations = getattr(self, config_name, list())
+        site_relations = grab(self, config_name, fallback=list())
 
         for site_relation in site_relations:
             object_regex = site_relation.get("object_regex")
@@ -436,6 +446,7 @@ class VMWareHandler():
 
         def _matches_device_primary_ip(device_primary_ip, ip_needle):
 
+            ip = None
             if device_primary_ip is not None and ip_needle is not None:
                 if isinstance(device_primary_ip, dict):
                     ip = grab(device_primary_ip, "address")
@@ -653,7 +664,8 @@ class VMWareHandler():
 
 
         if device_vm_object is None:
-            log.debug(f"No exiting {object_type.name} object. Creating a new {object_type.name}.")
+            object_name = object_data.get(object_type.primary_key)
+            log.debug(f"No exiting {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
             device_vm_object = self.inventory.add_update_object(object_type, data=object_data, source=self)
         else:
             device_vm_object.update(data=object_data, source=self)
@@ -1113,6 +1125,7 @@ class VMWareHandler():
 
             # check vlans on this pnic
             pnic_vlans = list()
+
             for pg_name, pg_data in host_portgroups.items():
 
                 if pnic_name in pg_data.get("nics", list()):
@@ -1145,12 +1158,11 @@ class VMWareHandler():
 
             # determine interface mode for non VM traffic NICs
             if len(pnic_vlans) > 0:
-                if len(pnic_vlans) == 1 and pnic_vlans[0].get("vid") == 0:
+                vlan_ids = list(set([x.get("vid") for x in pnic_vlans]))
+                if len(vlan_ids) == 1 and vlan_ids[0] == 0:
                     pnic_data["mode"] = "access"
-                elif 0 in [x.get("vid") for x in pnic_vlans]:
-                    pnic_mode = "tagged"
                 else:
-                    pnic_mode = "tagged-all"
+                    pnic_data["mode"] = "tagged"
 
                 tagged_vlan_list = list()
                 for pnic_vlan in pnic_vlans:
@@ -1192,7 +1204,10 @@ class VMWareHandler():
             if vnic_portgroup_data is not None:
                 vnic_vlan_id = vnic_portgroup_data.get("vlan_id")
                 vnic_vswitch = vnic_portgroup_data.get("vswitch")
-                vnic_description = f"{vnic_description} ({vnic_vswitch}, vlan ID: {vnic_vlan_id})"
+                if vnic_vlan_id != 0:
+                    vnic_description = f"{vnic_description} ({vnic_vswitch}, vlan ID: {vnic_vlan_id})"
+                else:
+                    vnic_description = f"{vnic_description} ({vnic_vswitch})"
 
             vnic_data = {
                 "name": vnic_name,
@@ -1204,7 +1219,7 @@ class VMWareHandler():
                 "mode": "access",
             }
 
-            if vnic_portgroup_data is not None:
+            if vnic_portgroup_data is not None and vnic_vlan_id != 0:
 
                 vnic_data["untagged_vlan"] = {
                     "name": f"ESXi {vnic_portgroup} (ID: {vnic_vlan_id}) ({site_name})",
@@ -1218,7 +1233,10 @@ class VMWareHandler():
 
             # check if interface has the default route or is described as management interface
             vnic_is_primary = False
-            if "management" in vnic_description.lower() or grab(vnic, "spec.ipRouteSpec") is not None:
+            if "management" in vnic_description.lower() or \
+               "mgmt" in vnic_description.lower() or \
+               grab(vnic, "spec.ipRouteSpec") is not None:
+
                 vnic_is_primary = True
 
             vnic_ips[vnic_name] = list()
@@ -1399,9 +1417,9 @@ class VMWareHandler():
                 int_network_vlan_ids = grab(int_portgroup_data, "vlan_ids")
 
                 if len(int_network_vlan_ids) == 1:
-                    int_mode == "access"
+                    int_mode = "access"
                 else:
-                    int_mode == "tagged-all"
+                    int_mode = "tagged-all"
 
             # ToDo:
             #   reading mtu from settings for host DVS is unreliable

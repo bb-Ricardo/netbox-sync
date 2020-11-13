@@ -47,9 +47,6 @@ ToDo:
     * ensure NTP is set up properly between all instances (pruning delay)
 * test all log levels
 * check for ToDo/Fixme/pprint statements
-* new netbox class list of objects
-  * add tagged_vlans list to interfaces
-  * change tags object to list object
 """
 
 def main():
@@ -113,26 +110,14 @@ def main():
 
     # all sources are unavailable
     if len(sources) == 0:
-        do_error_exit("No working sources found. Exit.")
+        log.error("No working sources found. Exit.")
+        exit(1)
 
     # collect all dependent object classes
-    netbox_objects_to_query = list()
-    for source in sources:
-        netbox_objects_to_query.extend(source.dependend_netbox_objects)
-
-    # we need to collect prefixes as well to so which IP belongs to which prefix
-    # ToDo:
-    #   * add dependencies somewhere else
-    #   * might be obsolete if update_all_ip_addresses is removed
-    netbox_objects_to_query.append(NBPrefixes)
-    netbox_objects_to_query.append(NBTenants)
-    netbox_objects_to_query.append(NBVrfs)
-    netbox_objects_to_query.append(NBVLANs)
-
-    # request NetBox data
-    # ToDo: remove set and check in function if data has already been fetched
     log.info("Querying necessary objects from Netbox. This might take a while.")
-    NB_handler.query_current_data(list(set(netbox_objects_to_query)))
+    for source in sources:
+        NB_handler.query_current_data(source.dependend_netbox_objects)
+
     log.info("Finished querying necessary objects from Netbox")
 
     # resolve object relations within the initial inventory
@@ -149,7 +134,7 @@ def main():
     inventory.tag_all_the_things(NB_handler)
 
     # update all IP addresses
-    inventory.update_all_ip_addresses()
+    inventory.query_ptr_records_for_all_ips()
 
     # update data in NetBox
     NB_handler.update_instance()

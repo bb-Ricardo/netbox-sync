@@ -36,6 +36,14 @@ class NetBoxObject():
         # store provided inventory handle
         self.inventory = inventory
 
+        # initialize empty data dict
+        self.data = dict()
+
+        # add empty lists for list items
+        for key, data_type in self.data_model.items():
+            if data_type in NBObjectList.__subclasses__():
+                self.data[key] = data_type()
+
         # store source handle
         if source is not None:
             self.source = source
@@ -67,7 +75,7 @@ class NetBoxObject():
                     if isinstance(dvalue, list):
                         new_dvalue = list()
                         for possible_option in dvalue:
-                            if possible_option in NetBoxObject.__subclasses__() + [IPv4Network, IPv6Network]:
+                            if type(possible_option) == type:
                                 new_dvalue.append(str(possible_option))
                             else:
                                 new_dvalue.append(possible_option)
@@ -86,12 +94,12 @@ class NetBoxObject():
 
                 data = dict()
                 for dkey, dvalue in value.items():
-                    # if value is class name then print class name
+                    # if value is class name then print class representation
                     if isinstance(dvalue, (NetBoxObject, IPv4Network, IPv6Network)):
                         dvalue = repr(dvalue)
 
-                    if dkey == "tags":
-                        dvalue = [x.get_display_name() for x in dvalue]
+                    if isinstance(dvalue, NBObjectList):
+                        dvalue = [repr(x) for x in dvalue]
 
                     data[dkey] = dvalue
 
@@ -220,13 +228,16 @@ class NetBoxObject():
             if type_check_faild is True:
                 continue
 
+            # tags need to be treated as list of dictionaries, tags are only added
+            if defined_value_type == NBTagList:
+                value = self.compile_tags(value)
+
+            # VLANs will overwrite the whole list of current VLANs
+            if defined_value_type == NBVLANList:
+                value = self.compile_vlans(value)
+
             # this is meant to be reference to a different object
             if defined_value_type in NetBoxObject.__subclasses__():
-
-                # tags need to be treated as list of dictionaries
-                if defined_value_type == NBTags:
-                    self.add_tags(value)
-                    continue
 
                 if not isinstance(value, NetBoxObject):
                     # try to find object.
@@ -244,50 +255,42 @@ class NetBoxObject():
 
             parsed_data["slug"] = self.format_slug(text=parsed_data.get(self.primary_key), max_len=self.data_model.get("slug"))
 
-        # this is a new set of data
-        if self.data is None:
-            self.data = parsed_data
+        # update all data items
+        for key, new_value in parsed_data.items():
 
-            # add empty tag list if not tags were provided
-            if "tags" in self.data_model.keys() and data.get("tags") is None:
-                self.data["tags"] = list()
+            # nothing changed, continue with next key
+            current_value = self.data.get(key)
+            if current_value == new_value:
+                continue
 
-        # see if data just got updated and mark it as such.
-        else:
+            # get current value str
+            if isinstance(current_value, (NetBoxObject, NBObjectList)):
+                current_value_str = str(current_value.get_display_name())
 
-            for key, new_value in parsed_data.items():
+            # if data model is a list then we need to read the netbox data value
+            elif isinstance(self.data_model.get(key), list) and isinstance(current_value, dict):
+                current_value_str = str(current_value.get("value"))
 
-                # nothing changed, continue with next key
-                current_value = self.data.get(key)
-                if current_value == new_value:
-                    continue
+            elif key.startswith("primary_ip") and isinstance(current_value, dict):
+                current_value_str = str(current_value.get("address"))
 
-                # get current value str
-                if isinstance(current_value, NetBoxObject):
-                    current_value_str = str(current_value.get_display_name())
+            else:
+                current_value_str = str(current_value).replace("\r","")
 
-                # if data model is a list then we need to read the netbox data value
-                elif isinstance(self.data_model.get(key), list) and isinstance(current_value, dict):
-                    current_value_str = str(current_value.get("value"))
+            # get new value str
+            if isinstance(new_value, (NetBoxObject, NBObjectList)):
+                new_value_str = str(new_value.get_display_name())
+            else:
+                new_value_str = str(new_value).replace("\r","")
 
-                elif key.startswith("primary_ip") and isinstance(current_value, dict):
-                    current_value_str = str(current_value.get("address"))
-                else:
-                    current_value_str = str(current_value).replace("\r","")
+            # just check again if values might match now
+            if current_value_str == new_value_str:
+                continue
 
-                # get new value str
-                if isinstance(new_value, NetBoxObject):
-                    new_value_str = str(new_value.get_display_name())
-                else:
-                    new_value_str = str(new_value).replace("\r","")
+            self.data[key] = new_value
+            self.updated_items.append(key)
 
-                # just check again if values might match now
-                if current_value_str == new_value_str:
-                    continue
-
-                self.data[key] = new_value
-                self.updated_items.append(key)
-
+            if self.is_new is False:
                 log.debug(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from '{current_value_str}' to '{new_value_str}'")
 
             self.resolve_relations()
@@ -325,35 +328,36 @@ class NetBoxObject():
 
     def resolve_relations(self):
 
-        for key, value in self.data_model.items():
+        for key, data_type in self.data_model.items():
 
             if self.data.get(key) is None:
                 continue
 
             if key.startswith("primary_ip"):
-                value = NBIPAddresses
+                data_type = NBIPAddresses
 
-            # continue if value is not an NetBox object
-            if value not in NetBoxObject.__subclasses__():
+            # continue if data_type is not an NetBox object
+            if data_type not in NetBoxObject.__subclasses__() + NBObjectList.__subclasses__():
                 continue
 
             data_value = self.data.get(key)
 
             resolved_data = None
-            if value == NBTags:
+            if data_type in NBObjectList.__subclasses__():
 
-                resolved_tag_list = list()
-                for tag in data_value:
+                resolved_object_list = data_type()
+                for item in data_value:
 
-                    if isinstance(tag, NetBoxObject):
-                        tag_object = tag
+                    if isinstance(item, data_type.member_type):
+                        item_object = item
                     else:
-                        tag_object = self.inventory.get_by_data(value, data=tag)
+                        item_object = self.inventory.get_by_data(data_type.member_type, data=item)
 
-                    if tag_object is not None:
-                        resolved_tag_list.append(tag_object)
+                    if item_object is not None:
+                        resolved_object_list.append(item_object)
 
-                resolved_data = resolved_tag_list
+                resolved_data = resolved_object_list
+
             else:
                 if data_value is None:
                     continue
@@ -367,7 +371,7 @@ class NetBoxObject():
                     elif isinstance(data_value, dict):
                         data_to_find = data_value
 
-                    resolved_data = self.inventory.get_by_data(value, data=data_to_find)
+                    resolved_data = self.inventory.get_by_data(data_type, data=data_to_find)
 
             if resolved_data is not None:
                 self.data[key] = resolved_data
@@ -380,27 +384,33 @@ class NetBoxObject():
 
     def get_dependencies(self):
 
-        return [x for x in self.data_model.values() if x in NetBoxObject.__subclasses__()]
+        r = [x for x in self.data_model.values() if x in NetBoxObject.__subclasses__()]
+        r.extend([x.member_type for x in self.data_model.values() if x in NBObjectList.__subclasses__()])
+        return r
 
     def get_tags(self):
 
         return [x.get_display_name() for x in self.data.get("tags", list())]
 
-    def update_tags(self, tags, remove=False):
+    def compile_tags(self, tags, remove=False):
 
-        if tags is None or NBTags not in self.data_model.values():
+        if tags is None or NBTagList not in self.data_model.values():
             return
 
-        action = "Adding" if remove is False else "Removing"
+        # list of parsed tag strings
+        sanatized_tag_strings = list()
 
-        log.debug2(f"{action} Tags: {tags}")
-        new_tags = list()
+        log.debug2(f"Compiling TAG list")
+
+        new_tag_list = NBTagList()
 
         def extract_tags(this_tags):
-            if isinstance(this_tags, str):
-                new_tags.append(this_tags)
+            if isinstance(this_tags, NBTags):
+                sanatized_tag_strings.append(this_tags.get_display_name())
+            elif isinstance(this_tags, str):
+                sanatized_tag_strings.append(this_tags)
             elif isinstance(this_tags, dict) and this_tags.get("name") is not None:
-                new_tags.append(this_tags.get("name"))
+                sanatized_tag_strings.append(this_tags.get("name"))
 
         if isinstance(tags, list):
             for tag in tags:
@@ -408,45 +418,97 @@ class NetBoxObject():
         else:
             extract_tags(tags)
 
+        # current list of tag strings
+        current_tag_strings = self.get_tags()
 
-        log.debug2(f"Parsed tag list: {new_tags}")
+        new_tags = list()
+        removed_tags = list()
 
-        current_tags = self.get_tags()
+        for tag_name in sanatized_tag_strings:
 
-        tag_has_changed = False
-        for tag_name in new_tags:
-
-            if tag_name not in current_tags and remove == False:
-                # add tag
+            # add tag
+            if tag_name not in current_tag_strings and remove == False:
 
                 tag = self.inventory.add_update_object(NBTags, data={"name": tag_name})
 
-                self.data["tags"].append(tag)
-                if self.is_new is False:
-                    self.updated_items.append("tags")
+                new_tags.append(tag)
 
-                tag_has_changed = True
-
-            if tag_name in current_tags and remove == True:
+            if tag_name in current_tag_strings and remove == True:
 
                 tag = self.inventory.get_by_data(NBTags, data={"name": tag_name})
 
-                self.data["tags"].remove(tag)
-                if self.is_new is False:
-                    self.updated_items.append("tags")
+                removed_tags.append(tag)
 
-                tag_has_changed = True
+        current_tags = grab(self, "data.tags", fallback=NBTagList())
 
-        new_tags = self.get_tags()
+        if len(new_tags) > 0:
 
-        if tag_has_changed is True:
-            log.debug(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from '{current_tags}' to '{new_tags}'")
+            for tag in new_tags + current_tags:
+                new_tag_list.append(tag)
+
+        elif len(removed_tags) > 0:
+
+            for tag in current_tags:
+                if tag not in removed_tags:
+                    new_tag_list.append(tag)
+        else:
+            new_tag_list = current_tags
+
+        return new_tag_list
+
+    def update_tags(self, tags, remove=False):
+
+        if tags is None or NBTagList not in self.data_model.values():
+            return
+
+        action = "Adding" if remove is False else "Removing"
+
+        log.debug2(f"{action} Tags: {tags}")
+
+        current_tags = grab(self, "data.tags", fallback=NBTagList())
+
+        new_tags = self.compile_tags(tags, remove=remove)
+
+        if str(current_tags.get_display_name()) != str(new_tags.get_display_name()):
+
+            self.data["tags"] = new_tags
+            self.updated_items.append("tags")
+
+            log.debug(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from '{current_tags.get_display_name()}' to '{new_tags.get_display_name()}'")
 
     def add_tags(self, tags_to_add):
         self.update_tags(tags_to_add)
 
     def remove_tags(self, tags_to_remove):
         self.update_tags(tags_to_remove, remove=True)
+
+    def compile_vlans(self, vlans):
+
+        if vlans is None or NBVLANList not in self.data_model.values():
+            return
+
+        data_key = "tagged_vlans"
+
+        log.debug2(f"Compiling VLAN list")
+        new_vlan_list = NBVLANList()
+
+        for vlan in vlans:
+
+            if isinstance(vlan, NBVLANs):
+                new_vlan_object = vlan
+            elif isinstance(vlan, dict):
+                new_vlan_object = self.inventory.add_update_object(NBVLANs, data=vlan)
+            else:
+                log.error(f"Unable to parse provided VLAN data: {vlan}")
+                continue
+
+            # VLAN already in list, must have been submitted twice
+            if new_vlan_object in new_vlan_list:
+                continue
+
+            new_vlan_list.append(new_vlan_object)
+
+        return new_vlan_list
 
     def unset_attribute(self, attribute_name=None):
 
@@ -479,6 +541,18 @@ class NetBoxObject():
         return self.nb_id
 
 
+class NBObjectList(list):
+    pass
+   # def __int__(slef, *args, **kwargs):
+ #       self.members = super().__init__(args[0])
+
+  #  def __iter__(self):
+  #      for item in self.members:
+  #          yield item
+
+    def get_display_name(self):
+
+        return sorted([x.get_display_name() for x in self])
 
 class NBTags(NetBoxObject):
     name = "tag"
@@ -491,6 +565,25 @@ class NBTags(NetBoxObject):
         "description": 200
     }
 
+class NBTagList(NBObjectList):
+    member_type = NBTags
+
+    def get_nb_reference(self):
+        """
+            return None if one tag is unresolvable
+
+            Once the tag was created in NetBox it can be assigned to objects
+        """
+        return_list = list()
+        for tag in self:
+            if tag.nb_id == 0:
+                return None
+
+            return_list.append({"name": tag.get_display_name()})
+
+        return return_list
+
+
 class NBTenants(NetBoxObject):
     name = "tenant"
     api_path = "tenancy/tenants"
@@ -500,7 +593,7 @@ class NBTenants(NetBoxObject):
         "slug": 50,
         "comments": str,
         "description": 200,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBSites(NetBoxObject):
@@ -512,7 +605,7 @@ class NBSites(NetBoxObject):
         "slug": 50,
         "comments": str,
         "tenant": NBTenants,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBVrfs(NetBoxObject):
@@ -523,7 +616,7 @@ class NBVrfs(NetBoxObject):
         "name": 50,
         "description": 200,
         "tenant": NBTenants,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBVLANs(NetBoxObject):
@@ -538,7 +631,7 @@ class NBVLANs(NetBoxObject):
         "site": NBSites,
         "description": 200,
         "tenant": NBTenants,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
     def get_display_name(self, data=None, including_second_key=False):
@@ -585,6 +678,24 @@ class NBVLANs(NetBoxObject):
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
 
+class NBVLANList(NBObjectList):
+    member_type = NBVLANs
+
+    def get_nb_reference(self):
+        """
+            return None if one VLAN is unresolvable
+
+            Once the VLAN was created in NetBox it can be assigned to objects
+        """
+        return_list = list()
+        for vlan in self:
+            if vlan.nb_id == 0:
+                return None
+
+            return_list.append(vlan.nb_id)
+
+        return return_list
+
 class NBPrefixes(NetBoxObject):
     name = "IP prefix"
     api_path = "ipam/prefixes"
@@ -596,7 +707,7 @@ class NBPrefixes(NetBoxObject):
         "vlan": NBVLANs,
         "vrf": NBVrfs,
         "description": 200,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
     def update(self, data=None, read_from_netbox=False, source=None):
@@ -636,7 +747,7 @@ class NBDeviceTypes(NetBoxObject):
         "part_number": 50,
         "description": 200,
         "manufacturer": NBManufacturers,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBPlatforms(NetBoxObject):
@@ -694,7 +805,7 @@ class NBClusters(NetBoxObject):
         "type": NBClusterTypes,
         "group": NBClusterGroups,
         "site": NBSites,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 
@@ -715,7 +826,7 @@ class NBDevices(NetBoxObject):
         "asset_tag": 50,
         "primary_ip4": object,
         "primary_ip6": object,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBVMs(NetBoxObject):
@@ -735,7 +846,7 @@ class NBVMs(NetBoxObject):
         "comments": str,
         "primary_ip4": object,
         "primary_ip6": object,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBVMInterfaces(NetBoxObject):
@@ -752,8 +863,9 @@ class NBVMInterfaces(NetBoxObject):
         "mtu": int,
         "mode": [ "access", "tagged", "tagged-all" ],
         "untagged_vlan": NBVLANs,
+        "tagged_vlans": NBVLANList,
         "description": 200,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 class NBInterfaces(NetBoxObject):
@@ -773,9 +885,10 @@ class NBInterfaces(NetBoxObject):
         "mtu": int,
         "mode": [ "access", "tagged", "tagged-all" ],
         "untagged_vlan": NBVLANs,
+        "tagged_vlans": NBVLANList,
         "description": 200,
         "connection_status": bool,
-        "tags": NBTags
+        "tags": NBTagList
     }
 
 
@@ -790,7 +903,7 @@ class NBIPAddresses(NetBoxObject):
         "assigned_object_id": [ NBInterfaces, NBVMInterfaces ],
         "description": 200,
         "dns_name": 255,
-        "tags": NBTags,
+        "tags": NBTagList,
         "tenant": NBTenants,
         "vrf": NBVrfs
     }
@@ -848,7 +961,7 @@ class NBIPAddresses(NetBoxObject):
             This is hard coded in here. Updated if data_model attribute changes!!!!
         """
 
-        return [ NBInterfaces, NBVMInterfaces, NBTags ]
+        return [ NBInterfaces, NBVMInterfaces, NBTags, NBTenants, NBVrfs ]
 
 
 

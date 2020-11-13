@@ -1,13 +1,4 @@
-aiodns==2.0.0
-certifi==2019.11.28
-cffi==1.14.0
-chardet==3.0.4
-idna==2.8
-pycares==3.1.1
-pycparser==2.19
-pyvmomi==6.7.3
-requests==2.24.0
-six==1.13.0
-typing==3.7.4.1
-urllib3==1.25.7
 packaging
+requests==2.24.0
+pyvmomi==6.7.3
+aiodns==2.0.0
