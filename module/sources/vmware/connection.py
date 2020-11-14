@@ -624,6 +624,17 @@ class VMWareHandler():
         if object_type not in [NBDevices, NBVMs]:
             raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
 
+        if log.level == DEBUG3:
+
+            log.debug3("function: add_device_vm_to_inventory")
+            log.debug3("Object type {object_type}")
+            pprint.pprint(object_data)
+            pprint.pprint(pnic_data)
+            pprint.pprint(vnic_data)
+            pprint.pprint(nic_ips)
+            pprint.pprint(p_ipv4)
+            pprint.pprint(p_ipv6)
+
         ##################
         # Now we have to find the correct object, we will try out multiple ways
         #   * try to find by name and cluster

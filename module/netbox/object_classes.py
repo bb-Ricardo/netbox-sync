@@ -312,6 +312,7 @@ class NetBoxObject():
         if secondary_key is not None and (enforce_secondary_key is True or including_second_key is True):
 
             secondary_key_value = this_data_set.get(secondary_key)
+            org_secondary_key_value = str(secondary_key_value)
 
             if isinstance(secondary_key_value, NetBoxObject):
                 secondary_key_value = secondary_key_value.get_display_name()
@@ -320,7 +321,8 @@ class NetBoxObject():
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
 
             if secondary_key_value is None:
-                raise ValueError(f"Unable to determine second key for {this_data_set.get(secondary_key)}")
+                log.error(f"Unable to determine second key '{secondary_key}' for {self.name} '{name}', got: {org_secondary_key_value}")
+                log.error("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
             my_name = f"{my_name} ({secondary_key_value})"
 
@@ -542,13 +544,6 @@ class NetBoxObject():
 
 
 class NBObjectList(list):
-    pass
-   # def __int__(slef, *args, **kwargs):
- #       self.members = super().__init__(args[0])
-
-  #  def __iter__(self):
-  #      for item in self.members:
-  #          yield item
 
     def get_display_name(self):
 
