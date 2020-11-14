@@ -321,7 +321,7 @@ class NetBoxObject():
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
 
             if secondary_key_value is None:
-                log.error(f"Unable to determine second key '{secondary_key}' for {self.name} '{name}', got: {org_secondary_key_value}")
+                log.error(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', got: {org_secondary_key_value}")
                 log.error("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
             my_name = f"{my_name} ({secondary_key_value})"
