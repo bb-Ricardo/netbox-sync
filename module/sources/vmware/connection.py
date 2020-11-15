@@ -74,14 +74,11 @@ class VMWareHandler():
 
     site_name = None
 
-    standalone_cluster_name = "Standalone ESXi Host"
-
     dvs = dict()
     dvs_ports = dict()
 
     networks = dict()
     dvs_mtu = dict()
-    standalone_hosts = list()
 
     permitted_clusters = dict()
 
@@ -926,7 +923,7 @@ class VMWareHandler():
         cluster_name = get_string_or_none(grab(obj, "parent.name"))
 
         if cluster_name is None:
-            log.error(f"Requesting cluster for Host '{name}' failed. Skipping.")
+            log.error(f"Requesting cluster for host '{name}' failed. Skipping.")
             return
 
         if log.level == DEBUG3:
@@ -939,9 +936,6 @@ class VMWareHandler():
         # handle standalone hosts
         if cluster_name == name:
             log.debug2(f"Host name and cluster name are equal '{cluster_name}'. Assuming this host is a 'standalone' host.")
-            # store the host so that we can check VMs against it
-            self.standalone_hosts.append(cluster_name)
-            cluster_name = self.standalone_cluster_name
 
         elif self.permitted_clusters.get(cluster_name) is None:
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
@@ -964,7 +958,23 @@ class VMWareHandler():
         if self.passes_filter(name, self.host_include_filter, self.host_exclude_filter) is False:
             return
 
-        ###### Collect data
+        # add host as single cluster to cluster list
+        if cluster_name == name:
+            self.permitted_clusters[cluster_name] = site_name
+            # add cluster to NetBox
+            cluster_data = {
+                "name": cluster_name,
+                "type": {
+                    "name": "VMware ESXi"
+                },
+                "site": {
+                    "name": site_name
+                }
+            }
+            self.inventory.add_update_object(NBClusters, data=cluster_data, source=self)
+
+
+        ###### Collecting data
 
         # collect all necessary data
         manufacturer =  get_string_or_none(grab(obj, "summary.hardware.vendor"))
@@ -1172,14 +1182,16 @@ class VMWareHandler():
                 vlan_ids = list(set([x.get("vid") for x in pnic_vlans]))
                 if len(vlan_ids) == 1 and vlan_ids[0] == 0:
                     pnic_data["mode"] = "access"
+                if 4095 in vlan_ids:
+                    pnic_data["mode"] = "tagged-all"
                 else:
                     pnic_data["mode"] = "tagged"
 
                 tagged_vlan_list = list()
                 for pnic_vlan in pnic_vlans:
 
-                    # don't add VLAN 0 to access port
-                    if pnic_data.get("mode") == "access":
+                    # only add VLANs if port is tagged
+                    if pnic_data.get("mode") != "tagged":
                         break
 
                     tagged_vlan_list.append({
@@ -1310,9 +1322,6 @@ class VMWareHandler():
             log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
             return
 
-        if cluster_name in self.standalone_hosts:
-            cluster_name = self.standalone_cluster_name
-
         elif self.permitted_clusters.get(cluster_name) is None:
             log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
             return
@@ -1337,7 +1346,10 @@ class VMWareHandler():
 
         ###### Collect data
 
-        site_name = self.get_site_name(NBClusters, cluster_name)
+        # check if cluster is a Standalone ESXi
+        site_name = self.permitted_clusters.get(cluster_name)
+        if site_name is None:
+            site_name = self.get_site_name(NBClusters, cluster_name)
 
         platform = grab(obj, "config.guestFullName")
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
@@ -1558,17 +1570,6 @@ class VMWareHandler():
                 "comments": f"A default virtual site created to house objects "
                             "that have been synced from this vCenter instance "
                             "and have no predefined site assigned."
-            })
-
-        standalone_cluster_object = self.inventory.get_by_data(NBClusters, data = {"name": self.standalone_cluster_name})
-
-        if standalone_cluster_object is not None:
-            standalone_cluster_object.update(data={
-                "name": self.standalone_cluster_name,
-                "type": {"name": "VMware ESXi"},
-                "comments": "A default cluster created to house standalone "
-                            "ESXi hosts and VMs that have been synced from "
-                            "vCenter."
             })
 
         server_role_object = self.inventory.get_by_data(NBDeviceRoles, data = {"name": "Server"})

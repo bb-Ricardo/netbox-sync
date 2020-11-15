@@ -54,6 +54,8 @@ class NetBoxHandler:
 
     resolved_dependencies = set()
 
+    testing_cache = False
+
     def __init__(self, settings=None, inventory=None):
 
         self.settings = settings
@@ -193,7 +195,6 @@ class NetBoxHandler:
         return result
 
     def request(self, object_class, req_type="GET", data=None, params=dict(), nb_id=None):
-
 
         result = None
 
@@ -363,9 +364,17 @@ class NetBoxHandler:
 
                         log.debug(f"Successfully read cached data with {len(cached_nb_data)} '{nb_object_class.name}%s', last updated '{latest_update}'" % plural(len(cached_nb_data)))
 
-                    else:
+                    elif self.testing_cache is False:
                         cache_this_class = False
 
+            if self.testing_cache is True and cached_nb_data is not None:
+                for object_data in cached_nb_data:
+                    self.inventory.add_item_from_netbox(nb_object_class, data=object_data)
+
+                # mark this object class as retrieved
+                self.resolved_dependencies.add(nb_object_class)
+
+                continue
 
             full_nb_data = None
             brief_nb_data = None
@@ -401,6 +410,9 @@ class NetBoxHandler:
             nb_objects = list()
             if full_nb_data is not None:
                 nb_objects = full_nb_data.get("results")
+
+            elif self.testing_cache is True:
+                nb_objects = cached_nb_data
 
             # read the delta from NetBox and
             else:

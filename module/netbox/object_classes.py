@@ -788,8 +788,6 @@ class NBDeviceRoles(NetBoxObject):
         "vm_role": bool
     }
 
-
-
 class NBClusters(NetBoxObject):
     name = "cluster"
     api_path = "virtualization/clusters"
@@ -802,7 +800,6 @@ class NBClusters(NetBoxObject):
         "site": NBSites,
         "tags": NBTagList
     }
-
 
 class NBDevices(NetBoxObject):
     name = "device"
