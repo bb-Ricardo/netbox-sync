@@ -45,7 +45,7 @@ ToDo:
     * thanks to original Owner of ideas
     * ensure NTP is set up properly between all instances (pruning delay)
 * test all log levels
-* check for ToDo/Fixme/pprint statements
+* check/fix ToDo statements
 """
 
 

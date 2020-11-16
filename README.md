@@ -2,24 +2,43 @@
 # WARNING
 This Script syncs data from various sources to NetBox
 
-WIP: THIS IS PRE ALPHA, DON'T USE IN PRODUCTION!!!
+WIP: THIS IS STILL UNDER DEVELOPMENT, DON'T USE IN PRODUCTION!!!
 
-CURRENTLY TESTING ONLY
+BUT TESTING IS MORE THEN WELCOME
 
-## Known Bugs
-* assignment/reassignment of primary IP addresses
-* --purge is completely untested
 
-## Installation
+# Installing
+* here we assume we install in ```/opt```
 
+## Ubuntu 18.04
 ```
+sudo apt-get install virtualenv
+cd /opt
 git clone https://github.com/bb-Ricardo/netbox-sync.git
 cd netbox-sync
-virtualenv .env
+virtualenv -p python3 .env
 . .env/bin/activate
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
+## RedHat based OS
+* on RedHat/CentOS 7 you need to install python3.6 and pip from EPEL first
+* on RedHat/CentOS 8 systems the package name changed to `python3-pip`
+```
+yum install python36-pip
+```
+
+* download and setup of virtual environment
+```
+cd /opt
+git clone https://github.com/bb-Ricardo/netbox-sync.git
+cd netbox-sync
+virtualenv-3 .env || virtualenv .env
+. .env/bin/activate
+pip3 install -r requirements.txt || pip install -r requirements.txt
+```
+
+## Setup
 Now copy the sample settings file to `settings.ini`
 
 You should define the var `cluster_site_relation` which maps a vCenter Cluster to an exiting Site in NetBox.

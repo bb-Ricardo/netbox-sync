@@ -778,18 +778,64 @@ class VMWareHandler:
     def add_device_vm_to_inventory(self, object_type, object_data, site_name, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None):
         """
-        Add/update object in inventory based on gathered data.
+        Add/update device/VM object in inventory based on gathered data.
+
+        Try to find object first based on the object data, interface MAC addresses and primary IPs.
+            1. try to find by name and cluster/site
+            2. try to find by mac addresses interfaces
+            3. try to find by primary IP
+
+        IP addresses for each interface are added here as well. First they will be checked and added
+        if all checks pass. For each IP address a matching IP prefix will be searched for. First we
+        look for longest matching IP Prefix in the same site. If this failed we try to find the longest
+        matching global IP Prefix.
+
+        If a IP Prefix was found then we try to get the VRF and VLAN for this prefix. Now we compare
+        if interface VLAN and prefix VLAN match up and warn if they don't. Then we try to add data to
+        the IP address if not already set:
+
+            add prefix VRF if VRF for this IP is undefined
+            add tenant if tenant for this IP is undefined
+                1. try prefix tenant
+                2. if prefix tenant is undefined try VLAN tenant
+
+        And we also set primary IP4/6 for this object depending on the "set_primary_ip" setting.
+
+        If a IP address is set as primary IP for another device then using this IP on another
+        device will be rejected by NetBox.
+
+        Setting "always":
+            check all NBDevice and NBVM objects if this IP address is set as primary IP to any
+            other object then this one. If we found another object, then we unset the primary_ip*
+            for the found object and assign it to this object.
+
+            This setting will also reset the primary IP if it has been changed in NetBox
+
+        Setting "when-undefined":
+            Will set the primary IP for this object if primary_ip4/6 is undefined. Will cause a
+            NetBox error if IP has been assigned to a different object as well
+
+        Setting "never":
+            Well, the attribute primary_ip4/6 will never be touched/changed.
 
         Parameters
         ----------
-        object_type
-        object_data
-        site_name
-        pnic_data
-        vnic_data
-        nic_ips
-        p_ipv4
-        p_ipv6
+        object_type: (NBDevice, NBVM)
+            NetBoxObject sub class of object to add
+        object_data: dict
+            data of object to add/update
+        site_name: str
+            site name this object is part of
+        pnic_data: dict
+            data of physical interfaces of this object, interface name as key
+        vnic_data: dict
+            data of virtual interfaces of this object, interface name as key
+        nic_ips: dict
+            dict of ips per interface of this object, interface name as key
+        p_ipv4: str
+            primary IPv4 as string including netmask/prefix
+        p_ipv6: str
+            primary IPv6 as string including netmask/prefix
 
         """
 
@@ -806,13 +852,6 @@ class VMWareHandler:
             pprint.pprint(nic_ips)
             pprint.pprint(p_ipv4)
             pprint.pprint(p_ipv6)
-
-        ##################
-        # Now we have to find the correct object, we will try out multiple ways
-        #   * try to find by name and cluster
-        #   * try to find by mac addresses interfaces
-        #   * try to find by primary IP
-        ##################
 
         # check existing Devices for matches
         log.debug2(f"Trying to find a {object_type.name} based on the collected name, cluster, IP and MAC addresses")
@@ -861,6 +900,7 @@ class VMWareHandler:
             nic_data = {**pnic_data, **vnic_data}
             interface_class = NBInterface
 
+        # map interfaces of existing object with discovered interfaces
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
 
         for int_name, int_data in nic_data.items():
@@ -934,11 +974,6 @@ class VMWareHandler:
                         log.warning(f"Prefix vlan '{prefix_vlan.get_display_name()}' does not match interface vlan "
                                     f"'{nic_vlan.get_display_name()}' for '{nic_object.get_display_name()}")
 
-                    # ToDo: document behavior
-                    # set prefix VRF if undefined for this IP
-                    # set tenant if undefined
-                    #   * try prefix tenant first
-                    #   * try VLAN tenant second
                     data_dict = dict()
 
                     if grab(ip_object, "data.vrf") is None and prefix_vrf is not None:
@@ -996,13 +1031,12 @@ class VMWareHandler:
 
     def add_datacenter(self, obj):
         """
+        Add a vCenter datacenter as a NBClusterGroup to NetBox
 
         Parameters
         ----------
-        obj
-
-        Returns
-        -------
+        obj: vim.Datacenter
+            datacenter object
 
         """
 
@@ -1017,14 +1051,15 @@ class VMWareHandler:
 
     def add_cluster(self, obj):
         """
+        Add a vCenter cluster as a NBCluster to NetBox. Cluster name is checked against
+        cluster_include_filter and cluster_exclude_filter config setting. Also adds
+        cluster and site_name to "self.permitted_clusters" so hosts and VMs can be
+        checked if they are part of a permitted cluster.
 
         Parameters
         ----------
-        obj
-
-        Returns
-        -------
-
+        obj: vim.ClusterComputeResource
+            cluster to add
         """
 
         name = get_string_or_none(grab(obj, "name"))
@@ -1053,14 +1088,14 @@ class VMWareHandler:
 
     def add_virtual_switch(self, obj):
         """
+        CURRENTLY UNUSED
+
+        Parses port data of each distributed virtual switch.
 
         Parameters
         ----------
-        obj
-
-        Returns
-        -------
-
+        obj: vim.DistributedVirtualSwitch
+            dvs to retrieve port data from
         """
 
         uuid = get_string_or_none(grab(obj, "uuid"))
@@ -1086,14 +1121,12 @@ class VMWareHandler:
 
     def add_port_group(self, obj):
         """
+        Parse distributed virtual port group to extract VLAN IDs from each port group
 
         Parameters
         ----------
-        obj
-
-        Returns
-        -------
-
+        obj: vim.dvs.DistributedVirtualPortgroup
+            portgroup to parse
         """
 
         key = get_string_or_none(grab(obj, "key"))
@@ -1124,14 +1157,26 @@ class VMWareHandler:
 
     def add_host(self, obj):
         """
+        Parse a vCenter host (ESXi) add to NetBox once all data is gathered.
+
+        First host is filtered:
+             host has a cluster and is it permitted
+             was host with same name and site already parsed
+             does the host pass the host_include_filter and host_exclude_filter
+
+        Then all necessary host data will be collected.
+            host model, manufacturer, serial, physical interfaces, virtual interfaces,
+            virtual switches, proxy switches, host port groups, interface VLANs, IP addresses
+
+        Primary IPv4/6 will be determined by
+            1. if the interface port group name contains
+                "management" or "mngt"
+            2. interface is the default route of this host
 
         Parameters
         ----------
-        obj
-
-        Returns
-        -------
-
+        obj: vim.HostSystem
+            host object to parse
         """
 
         name = get_string_or_none(grab(obj, "name"))
@@ -1520,14 +1565,29 @@ class VMWareHandler:
 
     def add_virtual_machine(self, obj):
         """
+        Parse a vCenter VM  add to NetBox once all data is gathered.
+
+        VMs are parsed twice. First only "online" VMs are parsed and added. In the second
+        round also "offline" VMs will be parsed. This helps of VMs are cloned and used
+        for upgrades but then have the same name.
+
+        First VM is filtered:
+             VM has a cluster and is it permitted
+             was VM with same name and cluster already parsed
+             does the VM pass the vm_include_filter and vm_exclude_filter
+
+        Then all necessary VM data will be collected.
+            platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addresses
+
+        Primary IPv4/6 will be determined by interface that provides the default route for this VM
+
+        Note:
+            IP address information can only be extracted if guest tools are installed and running.
 
         Parameters
         ----------
-        obj
-
-        Returns
-        -------
-
+        obj: vim.VirtualMachine
+            virtual machine object to parse
         """
 
         name = get_string_or_none(grab(obj, "name"))
