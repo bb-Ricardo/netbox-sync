@@ -1,20 +1,29 @@
 
 from ipaddress import ip_interface
-import aiodns
 import asyncio
+
+import aiodns
 
 from module.common.logging import get_logger
 
 log = get_logger()
 
-def normalize_ip_to_string(ip_addr):
-
-    try:
-        return ip_interface(ip_addr).compressed
-    except ValueError:
-        return None
 
 def normalize_mac_address(mac_address=None):
+    """
+    normalize a MAC address
+        * format letters to upper case
+        * add colons if missing
+
+    Parameters
+    ----------
+    mac_address: str
+        MAC address to normalize
+
+    Returns
+    -------
+    str: result of normalization
+    """
 
     if mac_address is None:
         return None
@@ -27,7 +36,30 @@ def normalize_mac_address(mac_address=None):
 
     return mac_address
 
+
 def ip_valid_to_add_to_netbox(ip, permitted_subnets, interface_name=None):
+    """
+    performs a couple of checks to see if an IP address is valid and allowed
+    to be added to NetBox
+
+    IP address must always be passed as interface notation
+        * 192.168.0.1/24
+        * fd00::0/64
+        * 192.168.23.24/255.255.255.24
+
+    Parameters
+    ----------
+    ip: str
+        IP address to validate
+    permitted_subnets:
+        list of permitted subnets where each subnet/prefix is an instance of IP4Network or IP6Network
+    interface_name: str
+        name of the interface this IP shall be added. Important for meaningful log messages
+
+    Returns
+    -------
+    bool: if IP address is valid
+    """
 
     if ip is None:
         log.error("No IP address provided")
@@ -71,8 +103,22 @@ def ip_valid_to_add_to_netbox(ip, permitted_subnets, interface_name=None):
 
     return True
 
-def perform_ptr_lookups(ips, dns_servers=None):
 
+def perform_ptr_lookups(ips, dns_servers=None):
+    """
+    Perform DNS reverse lookups for IP addresses to find corresponding DNS name
+
+    Parameters
+    ----------
+    ips: list
+        list of IP addresses to look up
+    dns_servers: list
+        list of DNS servers to use to look up list of IP addresses
+
+    Returns
+    -------
+    dict: of {"ip": "hostname"} for requested ips, hostname will be None if no hostname returned
+    """
 
     loop = asyncio.get_event_loop()
 
@@ -93,6 +139,20 @@ def perform_ptr_lookups(ips, dns_servers=None):
 
 
 async def reverse_lookup(resolver, ip):
+    """
+    Perform actual revers lookup
+
+    Parameters
+    ----------
+    resolver: aiodns.DNSResolver
+        handler to DNS resolver
+    ip: str
+        IP address to look up
+
+    Returns
+    -------
+    dict: of {"ip": "hostname"} for requested ip, hostname will be None if no hostname returned
+    """
 
     valid_hostname_characters = "abcdefghijklmnopqrstuvwxyz0123456789-."
 
@@ -111,10 +171,10 @@ async def reverse_lookup(resolver, ip):
         # validate record to check if this is a valid host name
         if all([bool(c.lower() in valid_hostname_characters) for c in response.name]):
             resolved_name = response.name.lower()
-            log.debug(f"PTR record for {ip}: {resolved_name}")
+            log.debug2(f"PTR record for {ip}: {resolved_name}")
 
         else:
-            log.debug(f"PTR record contains invalid characters: {response.name}")
+            log.waring(f"PTR record contains invalid characters: {response.name}")
 
     return {ip: resolved_name}
 

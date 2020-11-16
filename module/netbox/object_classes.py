@@ -1,17 +1,57 @@
 
-
 import json
-import logging
 from ipaddress import ip_network, IPv4Network, IPv6Network
-
-import pprint
 
 from module.common.misc import grab, do_error_exit, dump
 from module.common.logging import get_logger
 
 log = get_logger()
 
-class NetBoxObject():
+
+class NetBoxObject:
+    """
+    Base class for all NetBox object types. Implements all methods used on a NetBox object.
+
+    Sub classes need to have following attributes:
+        name:
+            name of the object type (i.e. "virtual machine")
+        api_path:
+            NetBox api path of object type (i.e: "virtualization/virtual-machines")
+        primary_key:
+            name of the data model key which represents the primary key of this object besides id (i.e: "name")
+        data_model:
+            dict of permitted data keys and possible values (see description below)
+
+    optional attributes
+        secondary_key:
+            name of the data model key which represents the secondary key of this object besides id
+        enforce_secondary_key:
+            bool if secondary key of an object shall be added to name when get_display_name() method is called
+
+    The data_model attribute needs to be a dict describing the data model in NetBox.
+    Key must be string.
+    Value can be following types:
+        int (instance):
+            value of this attribute must be a string and will be truncated if string exceeds max length of "int"
+        int (class):
+            value must be an integer
+        str (class):
+            can be a string with an undefined length
+        bool (class):
+            attribute must be True or False
+        NetBoxObject sub class:
+            value of this key is a reference to another NetBoxObject of exact defined type
+        list (instance):
+            value can be one of the predefined values in that list
+        list of NetBoxObject sub classes:
+            value must be an instance of predefined netBoxObject classes in list
+        NBObjectList sub class:
+            value mast be the defined sub class of NBObjectList
+
+
+    """
+
+    # list of default attributes which are added to every netbox object during init
     default_attributes = {
         "data": None,
         "is_new": True,
@@ -44,16 +84,20 @@ class NetBoxObject():
             if data_type in NBObjectList.__subclasses__():
                 self.data[key] = data_type()
 
-        # store source handle
-        if source is not None:
-            self.source = source
-
-        self.update(data=data, read_from_netbox=read_from_netbox)
+        # add data to this object
+        self.update(data=data, read_from_netbox=read_from_netbox, source=source)
 
     def __repr__(self):
         return "<%s instance '%s' at %s>" % (self.__class__.__name__, self.get_display_name(), id(self))
 
     def to_dict(self):
+        """
+        returns this object as a dictionary
+
+        Returns
+        -------
+        dict: dictionary of all relevant items of this object instance
+        """
 
         out = dict()
 
@@ -71,37 +115,37 @@ class NetBoxObject():
             if key == "data_model":
 
                 data_model = dict()
-                for dkey, dvalue in value.items():
-                    if isinstance(dvalue, list):
-                        new_dvalue = list()
-                        for possible_option in dvalue:
+                for data_key, data_value in value.items():
+                    if isinstance(data_value, list):
+                        new_data_value = list()
+                        for possible_option in data_value:
                             if type(possible_option) == type:
-                                new_dvalue.append(str(possible_option))
+                                new_data_value.append(str(possible_option))
                             else:
-                                new_dvalue.append(possible_option)
+                                new_data_value.append(possible_option)
 
-                        dvalue = new_dvalue
+                        data_value = new_data_value
 
                     # if value is class name then print class name
-                    if type(dvalue) == type:
-                        dvalue = str(dvalue)
+                    if type(data_value) == type:
+                        data_value = str(data_value)
 
-                    data_model[dkey] = dvalue
+                    data_model[data_key] = data_value
 
                 value = data_model
 
             if key == "data":
 
                 data = dict()
-                for dkey, dvalue in value.items():
+                for data_key, data_value in value.items():
                     # if value is class name then print class representation
-                    if isinstance(dvalue, (NetBoxObject, IPv4Network, IPv6Network)):
-                        dvalue = repr(dvalue)
+                    if isinstance(data_value, (NetBoxObject, IPv4Network, IPv6Network)):
+                        data_value = repr(data_value)
 
-                    if isinstance(dvalue, NBObjectList):
-                        dvalue = [repr(x) for x in dvalue]
+                    if isinstance(data_value, NBObjectList):
+                        data_value = [repr(x) for x in data_value]
 
-                    data[dkey] = dvalue
+                    data[data_key] = data_value
 
                 value = data
 
@@ -110,30 +154,40 @@ class NetBoxObject():
         return out
 
     def __str__(self):
-        return json.dumps(self.to_dict(), sort_keys=True, indent=4)
+        """
+        formats this object as a dict in JSON format
 
-    def __iter__(self):
-        for key, value in self.to_dict():
-            yield (key, value)
+        Returns
+        -------
+        str: object dict as JSON
+        """
+
+        return json.dumps(self.to_dict(), sort_keys=True, indent=4)
 
     @staticmethod
     def format_slug(text=None, max_len=50):
         """
         Format string to comply to NetBox slug acceptable pattern and max length.
 
-        :param text: Text to be formatted into an acceptable slug
-        :type text: str
-        :return: Slug of allowed characters [-a-zA-Z0-9_] with max length of 50
-        :rtype: str
+        Parameters
+        ----------
+        text: str
+            name to format into a NetBox slug
+        max_len: int
+            maximum possible length of slug
+
+        Returns
+        -------
+        str: input name formatted as slug und truncated if necessary
         """
 
         if text is None or len(text) == 0:
             raise AttributeError("Argument 'text' can't be None or empty!")
 
         permitted_chars = (
-            "abcdefghijklmnopqrstuvwxyz" # alphabet
-            "0123456789" # numbers
-            "_-" # symbols
+            "abcdefghijklmnopqrstuvwxyz"  # alphabet
+            "0123456789"  # numbers
+            "_-"  # symbols
         )
 
         # Replace separators with dash
@@ -146,7 +200,24 @@ class NetBoxObject():
         # Enforce max length
         return text[0:max_len]
 
+    # noinspection PyAttributeOutsideInit
     def update(self, data=None, read_from_netbox=False, source=None):
+        """
+        parse data dictionary and validate input. Add data to object if valid.
+
+        Parameters
+        ----------
+        data: dict
+            dictionary with data to add/update
+        read_from_netbox: bool
+            True if data was gathered from NetBox via request
+        source: source handler
+            object handler of source
+
+        Returns
+        -------
+        None
+        """
 
         if data is None:
             return
@@ -190,6 +261,10 @@ class NetBoxObject():
             # check data model to see how we have to parse the value
             defined_value_type = self.data_model.get(key)
 
+            #  setting data value for primary_ip here to avoid/circumvent circular dependencies
+            if key.startswith("primary_ip"):
+                defined_value_type = NBIPAddress
+
             # value must be a string witch a certain max length
             if isinstance(defined_value_type, int):
                 if not isinstance(value, str):
@@ -208,24 +283,25 @@ class NetBoxObject():
                 if isinstance(value, NetBoxObject):
 
                     if type(value) not in defined_value_type:
-                        log.error(f"Invalid data type for '{key}' (must be one of {defined_value_type}), got: '{type(value)}'")
+                        log.error(f"Invalid data type for '{key}' (must be one of {defined_value_type}), "
+                                  f"got: '{type(value)}'")
                         continue
 
+                # check if value is in defined list
                 elif value not in defined_value_type:
                     log.error(f"Invalid data type for '{key}' (must be one of {defined_value_type}), got: '{value}'")
                     continue
 
             # just check the type of the value
-            type_check_faild = False
-            # ToDo: object here is just a hack to accommodate primary IP addresses for devices and VMs
-            for valid_type in [bool, str, int, object]:
+            type_check_failed = False
+            for valid_type in [bool, str, int]:
 
                 if defined_value_type == valid_type and not isinstance(value, valid_type):
                     log.error(f"Invalid data type for '{key}' (must be {valid_type.__name__}), got: '{value}'")
-                    type_check_faild = True
+                    type_check_failed = True
                     break
 
-            if type_check_faild is True:
+            if type_check_failed is True:
                 continue
 
             # tags need to be treated as list of dictionaries, tags are only added
@@ -251,9 +327,12 @@ class NetBoxObject():
 
         # add/update slug
         # if data model contains a slug we need to handle it
-        if "slug" in self.data_model.keys() and parsed_data.get("slug") is None and parsed_data.get(self.primary_key) is not None:
+        if "slug" in self.data_model.keys() and \
+                parsed_data.get("slug") is None and \
+                parsed_data.get(self.primary_key) is not None:
 
-            parsed_data["slug"] = self.format_slug(text=parsed_data.get(self.primary_key), max_len=self.data_model.get("slug"))
+            parsed_data["slug"] = self.format_slug(text=parsed_data.get(self.primary_key),
+                                                   max_len=self.data_model.get("slug"))
 
         # update all data items
         for key, new_value in parsed_data.items():
@@ -291,11 +370,26 @@ class NetBoxObject():
             self.updated_items.append(key)
 
             if self.is_new is False:
-                log.debug(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from '{current_value_str}' to '{new_value_str}'")
+                log.debug(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
+                          f"'{current_value_str}' to '{new_value_str}'")
 
             self.resolve_relations()
 
     def get_display_name(self, data=None, including_second_key=False):
+        """
+        return a name as string of this object based on primary/secondary key
+
+        Parameters
+        ----------
+        data: dict
+            optional data dictionary to format name from if object is not initialized
+        including_second_key: bool
+            if True adds second key if object has one
+
+        Returns
+        -------
+        str: name of object
+        """
 
         this_data_set = data
         if data is None:
@@ -305,6 +399,11 @@ class NetBoxObject():
             return None
 
         my_name = this_data_set.get(self.primary_key)
+
+        if my_name is None:
+            log.error(f"Unable to determine object name with primary key '{self.primary_key}' "
+                      f"from {str(this_data_set)}")
+            return None
 
         secondary_key = getattr(self, "secondary_key", None)
         enforce_secondary_key = getattr(self, "enforce_secondary_key", False)
@@ -321,7 +420,8 @@ class NetBoxObject():
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
 
             if secondary_key_value is None:
-                log.error(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', got: {org_secondary_key_value}")
+                log.error(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
+                          f"got: {org_secondary_key_value}")
                 log.error("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
             my_name = f"{my_name} ({secondary_key_value})"
@@ -329,6 +429,10 @@ class NetBoxObject():
         return my_name
 
     def resolve_relations(self):
+        """
+        Resolve object relations for this object. Substitute a dict of data with a id with the instantiated
+        reference of this object
+        """
 
         for key, data_type in self.data_model.items():
 
@@ -336,7 +440,7 @@ class NetBoxObject():
                 continue
 
             if key.startswith("primary_ip"):
-                data_type = NBIPAddresses
+                data_type = NBIPAddress
 
             # continue if data_type is not an NetBox object
             if data_type not in NetBoxObject.__subclasses__() + NBObjectList.__subclasses__():
@@ -344,7 +448,6 @@ class NetBoxObject():
 
             data_value = self.data.get(key)
 
-            resolved_data = None
             if data_type in NBObjectList.__subclasses__():
 
                 resolved_object_list = data_type()
@@ -378,41 +481,66 @@ class NetBoxObject():
             if resolved_data is not None:
                 self.data[key] = resolved_data
             else:
-                log.error(f"Problems resolving relation '{key}' for object '%s' and value '%s'" % (self.get_display_name(), data_value))
-
-    def raw(self):
-
-        return self.data
+                log.error(f"Problems resolving relation '{key}' for object '{self.get_display_name()}' and "
+                          f"value '{data_value}'")
 
     def get_dependencies(self):
+        """
+        returns a list of NetBoxObject sub classes this object depends on
+
+        Returns
+        -------
+        list: of NetBoxObject sub classes
+        """
 
         r = [x for x in self.data_model.values() if x in NetBoxObject.__subclasses__()]
         r.extend([x.member_type for x in self.data_model.values() if x in NBObjectList.__subclasses__()])
+
         return r
 
     def get_tags(self):
+        """
+        returns a list of strings of tag names
+
+        Returns
+        -------
+        list: of strings of tga names
+        """
 
         return [x.get_display_name() for x in self.data.get("tags", list())]
 
     def compile_tags(self, tags, remove=False):
+        """
+
+        Parameters
+        ----------
+        tags: (str, list, dict, NBTag)
+            tags to parse and add/remove to/from current list of object tags
+        remove: bool
+            True if tags shall be removed, otherwise they will be added
+
+        Returns
+        -------
+        NBTagList: with added/removed tags
+        """
 
         if tags is None or NBTagList not in self.data_model.values():
             return
 
         # list of parsed tag strings
-        sanatized_tag_strings = list()
+        sanitized_tag_strings = list()
 
         log.debug2(f"Compiling TAG list")
 
         new_tag_list = NBTagList()
 
         def extract_tags(this_tags):
-            if isinstance(this_tags, NBTags):
-                sanatized_tag_strings.append(this_tags.get_display_name())
+            if isinstance(this_tags, NBTag):
+                sanitized_tag_strings.append(this_tags.get_display_name())
             elif isinstance(this_tags, str):
-                sanatized_tag_strings.append(this_tags)
+                sanitized_tag_strings.append(this_tags)
             elif isinstance(this_tags, dict) and this_tags.get("name") is not None:
-                sanatized_tag_strings.append(this_tags.get("name"))
+                sanitized_tag_strings.append(this_tags.get("name"))
 
         if isinstance(tags, list):
             for tag in tags:
@@ -426,18 +554,18 @@ class NetBoxObject():
         new_tags = list()
         removed_tags = list()
 
-        for tag_name in sanatized_tag_strings:
+        for tag_name in sanitized_tag_strings:
 
             # add tag
-            if tag_name not in current_tag_strings and remove == False:
+            if tag_name not in current_tag_strings and remove is False:
 
-                tag = self.inventory.add_update_object(NBTags, data={"name": tag_name})
+                tag = self.inventory.add_update_object(NBTag, data={"name": tag_name})
 
                 new_tags.append(tag)
 
-            if tag_name in current_tag_strings and remove == True:
+            if tag_name in current_tag_strings and remove is True:
 
-                tag = self.inventory.get_by_data(NBTags, data={"name": tag_name})
+                tag = self.inventory.get_by_data(NBTag, data={"name": tag_name})
 
                 removed_tags.append(tag)
 
@@ -459,6 +587,20 @@ class NetBoxObject():
         return new_tag_list
 
     def update_tags(self, tags, remove=False):
+        """
+        Update list of object tags
+
+        Parameters
+        ----------
+        tags: (str, list, dict, NBTag)
+            tags to parse and add/remove to/from current list of object tags
+        remove: bool
+            True if tags shall be removed, otherwise they will be added
+
+        Returns
+        -------
+        None
+        """
 
         if tags is None or NBTagList not in self.data_model.values():
             return
@@ -476,30 +618,70 @@ class NetBoxObject():
             self.data["tags"] = new_tags
             self.updated_items.append("tags")
 
-            log.debug(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from '{current_tags.get_display_name()}' to '{new_tags.get_display_name()}'")
+            log.debug(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from "
+                      f"'{current_tags.get_display_name()}' to '{new_tags.get_display_name()}'")
 
     def add_tags(self, tags_to_add):
+        """
+        Add tag(s) to object
+
+        Parameters
+        ----------
+        tags_to_add: (str, list, dict, NBTag)
+            tags to parse and add to current list of object tags
+
+        Returns
+        -------
+        None
+        """
+
         self.update_tags(tags_to_add)
 
     def remove_tags(self, tags_to_remove):
+        """
+        remove tag(s) to object
+
+        Parameters
+        ----------
+        tags_to_remove: (str, list, dict, NBTag)
+            tags to parse and remove from current list of object tags
+
+        Returns
+        -------
+        None
+        """
+
         self.update_tags(tags_to_remove, remove=True)
 
     def compile_vlans(self, vlans):
+        """
+        Read list of VLANs and return a new and sanitized list of VLANs
+
+        Parameters
+        ----------
+        vlans: list of (dict, NBVLAN)
+            list of VLANs that should be in the returned list
+
+        Returns
+        -------
+        NBVLANList: of parsed VLANs
+        """
 
         if vlans is None or NBVLANList not in self.data_model.values():
             return
 
-        data_key = "tagged_vlans"
+        if not isinstance(vlans, list):
+            raise ValueError("Value for vlans must be a list")
 
         log.debug2(f"Compiling VLAN list")
         new_vlan_list = NBVLANList()
 
         for vlan in vlans:
 
-            if isinstance(vlan, NBVLANs):
+            if isinstance(vlan, NBVLAN):
                 new_vlan_object = vlan
             elif isinstance(vlan, dict):
-                new_vlan_object = self.inventory.add_update_object(NBVLANs, data=vlan)
+                new_vlan_object = self.inventory.add_update_object(NBVLAN, data=vlan)
             else:
                 log.error(f"Unable to parse provided VLAN data: {vlan}")
                 continue
@@ -513,6 +695,19 @@ class NetBoxObject():
         return new_vlan_list
 
     def unset_attribute(self, attribute_name=None):
+        """
+        Unset a certain attribute. This will delete the value of this attribute in NetBox on the first run of
+        updating data in NetBox
+
+        Parameters
+        ----------
+        attribute_name: str
+            name of the attribute to unset
+
+        Returns
+        -------
+        None
+        """
 
         if attribute_name is None:
             return
@@ -527,16 +722,13 @@ class NetBoxObject():
 
     def get_nb_reference(self):
         """
-        Default class to return reference of how this object is usually referenced.
+        return reference of how this object is referenced in NetBox
 
-        default: return NetBox ID
+        Returns
+        -------
+        (None, int): if NetBox ID is 0 (new object) return None otherwise return ID
         """
 
-        """
-            FIXME
-            does this work?
-            caller needs to check return value!!!
-        """
         if self.nb_id == 0:
             return None
 
@@ -544,12 +736,23 @@ class NetBoxObject():
 
 
 class NBObjectList(list):
+    """
+    Base class of listed NetBox objects. Extends list(). Currently used for tags and untagged VLANs
+
+    Mandatory attributes:
+        member_type: NetBoxObject sub class
+            defines the type objects contained in this type of list
+    """
 
     def get_display_name(self):
 
         return sorted([x.get_display_name() for x in self])
 
-class NBTags(NetBoxObject):
+    def __iter__(self):
+        super().__iter__()
+
+
+class NBTag(NetBoxObject):
     name = "tag"
     api_path = "extras/tags"
     primary_key = "name"
@@ -560,8 +763,9 @@ class NBTags(NetBoxObject):
         "description": 200
     }
 
+
 class NBTagList(NBObjectList):
-    member_type = NBTags
+    member_type = NBTag
 
     def get_nb_reference(self):
         """
@@ -579,7 +783,7 @@ class NBTagList(NBObjectList):
         return return_list
 
 
-class NBTenants(NetBoxObject):
+class NBTenant(NetBoxObject):
     name = "tenant"
     api_path = "tenancy/tenants"
     primary_key = "name"
@@ -591,7 +795,8 @@ class NBTenants(NetBoxObject):
         "tags": NBTagList
     }
 
-class NBSites(NetBoxObject):
+
+class NBSite(NetBoxObject):
     name = "site"
     api_path = "dcim/sites"
     primary_key = "name"
@@ -599,22 +804,24 @@ class NBSites(NetBoxObject):
         "name": 50,
         "slug": 50,
         "comments": str,
-        "tenant": NBTenants,
+        "tenant": NBTenant,
         "tags": NBTagList
     }
 
-class NBVrfs(NetBoxObject):
+
+class NBVRF(NetBoxObject):
     name = "VRF"
     api_path = "ipam/vrfs"
     primary_key = "name"
     data_model = {
         "name": 50,
         "description": 200,
-        "tenant": NBTenants,
+        "tenant": NBTenant,
         "tags": NBTagList
     }
 
-class NBVLANs(NetBoxObject):
+
+class NBVLAN(NetBoxObject):
     name = "VLAN"
     api_path = "ipam/vlans"
     primary_key = "vid"
@@ -623,9 +830,9 @@ class NBVLANs(NetBoxObject):
     data_model = {
         "vid": int,
         "name": 64,
-        "site": NBSites,
+        "site": NBSite,
         "description": 200,
-        "tenant": NBTenants,
+        "tenant": NBTenant,
         "tags": NBTagList
     }
 
@@ -674,7 +881,7 @@ class NBVLANs(NetBoxObject):
 
 
 class NBVLANList(NBObjectList):
-    member_type = NBVLANs
+    member_type = NBVLAN
 
     def get_nb_reference(self):
         """
@@ -691,16 +898,17 @@ class NBVLANList(NBObjectList):
 
         return return_list
 
-class NBPrefixes(NetBoxObject):
+
+class NBPrefix(NetBoxObject):
     name = "IP prefix"
     api_path = "ipam/prefixes"
     primary_key = "prefix"
     data_model = {
         "prefix": [IPv4Network, IPv6Network],
-        "site": NBSites,
-        "tenant": NBTenants,
-        "vlan": NBVLANs,
-        "vrf": NBVrfs,
+        "site": NBSite,
+        "tenant": NBTenant,
+        "vlan": NBVLAN,
+        "vrf": NBVRF,
         "description": 200,
         "tags": NBTagList
     }
@@ -721,7 +929,8 @@ class NBPrefixes(NetBoxObject):
         if read_from_netbox is False:
             raise ValueError(f"Adding {self.name} by this program is currently not implemented.")
 
-class NBManufacturers(NetBoxObject):
+
+class NBManufacturer(NetBoxObject):
     name = "manufacturer"
     api_path = "dcim/manufacturers"
     primary_key = "name"
@@ -732,8 +941,8 @@ class NBManufacturers(NetBoxObject):
     }
 
 
-class NBDeviceTypes(NetBoxObject):
-    name ="device type"
+class NBDeviceType(NetBoxObject):
+    name = "device type"
     api_path = "dcim/device-types"
     primary_key = "model"
     data_model = {
@@ -741,22 +950,24 @@ class NBDeviceTypes(NetBoxObject):
         "slug": 50,
         "part_number": 50,
         "description": 200,
-        "manufacturer": NBManufacturers,
+        "manufacturer": NBManufacturer,
         "tags": NBTagList
     }
 
-class NBPlatforms(NetBoxObject):
+
+class NBPlatform(NetBoxObject):
     name = "platform"
     api_path = "dcim/platforms"
     primary_key = "name"
     data_model = {
         "name": 100,
         "slug": 100,
-        "manufacturer": NBManufacturers,
+        "manufacturer": NBManufacturer,
         "description": 200
     }
 
-class NBClusterTypes(NetBoxObject):
+
+class NBClusterType(NetBoxObject):
     name = "cluster type"
     api_path = "virtualization/cluster-types"
     primary_key = "name"
@@ -766,7 +977,8 @@ class NBClusterTypes(NetBoxObject):
         "description": 200
     }
 
-class NBClusterGroups(NetBoxObject):
+
+class NBClusterGroup(NetBoxObject):
     name = "cluster group"
     api_path = "virtualization/cluster-groups"
     primary_key = "name"
@@ -776,7 +988,8 @@ class NBClusterGroups(NetBoxObject):
         "description": 200
     }
 
-class NBDeviceRoles(NetBoxObject):
+
+class NBDeviceRole(NetBoxObject):
     name = "device role"
     api_path = "dcim/device-roles"
     primary_key = "name"
@@ -788,50 +1001,67 @@ class NBDeviceRoles(NetBoxObject):
         "vm_role": bool
     }
 
-class NBClusters(NetBoxObject):
+
+class NBCluster(NetBoxObject):
     name = "cluster"
     api_path = "virtualization/clusters"
     primary_key = "name"
     data_model = {
         "name": 100,
         "comments": str,
-        "type": NBClusterTypes,
-        "group": NBClusterGroups,
-        "site": NBSites,
+        "type": NBClusterType,
+        "group": NBClusterGroup,
+        "site": NBSite,
         "tags": NBTagList
     }
 
-class NBDevices(NetBoxObject):
+
+class NBDevice(NetBoxObject):
+    """
+    data key "primary_ip*" has "object" assigned as valid data type.
+    This has been done to avoid circular dependencies.
+
+    would be happy if someone could come up with a proper solution
+    """
+
     name = "device"
     api_path = "dcim/devices"
     primary_key = "name"
     secondary_key = "site"
     data_model = {
         "name": 64,
-        "device_type": NBDeviceTypes,
-        "device_role": NBDeviceRoles,
-        "platform": NBPlatforms,
+        "device_type": NBDeviceType,
+        "device_role": NBDeviceRole,
+        "platform": NBPlatform,
         "serial": 50,
-        "site": NBSites,
-        "status": [ "offline", "active", "planned", "staged", "failed", "inventory", "decommissioning" ],
-        "cluster": NBClusters,
+        "site": NBSite,
+        "status": ["offline", "active", "planned", "staged", "failed", "inventory", "decommissioning"],
+        "cluster": NBCluster,
         "asset_tag": 50,
         "primary_ip4": object,
         "primary_ip6": object,
         "tags": NBTagList
     }
 
-class NBVMs(NetBoxObject):
+
+class NBVM(NetBoxObject):
+    """
+    data key "primary_ip*" has "object" assigned as valid data type.
+    This has been done to avoid circular dependencies.
+
+    would be happy if someone could come up with a proper solution
+    """
+
     name = "virtual machine"
     api_path = "virtualization/virtual-machines"
     primary_key = "name"
     secondary_key = "cluster"
     data_model = {
         "name": 64,
-        "status": [ "offline", "active", "planned", "staged", "failed", "decommissioning" ],
-        "cluster": NBClusters,
-        "role": NBDeviceRoles,
-        "platform": NBPlatforms,
+        "status": ["offline", "active", "planned", "staged", "failed", "decommissioning"],
+        "cluster": NBCluster,
+        "role": NBDeviceRole,
+        "platform": NBPlatform,
         "vcpus": int,
         "memory": int,
         "disk": int,
@@ -841,7 +1071,8 @@ class NBVMs(NetBoxObject):
         "tags": NBTagList
     }
 
-class NBVMInterfaces(NetBoxObject):
+
+class NBVMInterface(NetBoxObject):
     name = "virtual machine interface"
     api_path = "virtualization/interfaces"
     primary_key = "name"
@@ -849,18 +1080,19 @@ class NBVMInterfaces(NetBoxObject):
     enforce_secondary_key = True
     data_model = {
         "name": 64,
-        "virtual_machine": NBVMs,
+        "virtual_machine": NBVM,
         "enabled": bool,
         "mac_address": str,
         "mtu": int,
-        "mode": [ "access", "tagged", "tagged-all" ],
-        "untagged_vlan": NBVLANs,
+        "mode": ["access", "tagged", "tagged-all"],
+        "untagged_vlan": NBVLAN,
         "tagged_vlans": NBVLANList,
         "description": 200,
         "tags": NBTagList
     }
 
-class NBInterfaces(NetBoxObject):
+
+class NBInterface(NetBoxObject):
     name = "interface"
     api_path = "dcim/interfaces"
     primary_key = "name"
@@ -868,15 +1100,15 @@ class NBInterfaces(NetBoxObject):
     enforce_secondary_key = True
     data_model = {
         "name": 64,
-        "device": NBDevices,
+        "device": NBDevice,
         "label": 64,
-        "type": [ "virtual", "100base-tx", "1000base-t", "10gbase-t", "25gbase-x-sfp28", "40gbase-x-qsfpp", "other" ],
+        "type": ["virtual", "100base-tx", "1000base-t", "10gbase-t", "25gbase-x-sfp28", "40gbase-x-qsfpp", "other"],
         "enabled": bool,
         "mac_address": str,
         "mgmt_only": bool,
         "mtu": int,
-        "mode": [ "access", "tagged", "tagged-all" ],
-        "untagged_vlan": NBVLANs,
+        "mode": ["access", "tagged", "tagged-all"],
+        "untagged_vlan": NBVLAN,
         "tagged_vlans": NBVLANList,
         "description": 200,
         "connection_status": bool,
@@ -884,7 +1116,7 @@ class NBInterfaces(NetBoxObject):
     }
 
 
-class NBIPAddresses(NetBoxObject):
+class NBIPAddress(NetBoxObject):
     name = "IP address"
     api_path = "ipam/ip-addresses"
     primary_key = "address"
@@ -892,19 +1124,19 @@ class NBIPAddresses(NetBoxObject):
     data_model = {
         "address": str,
         "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
-        "assigned_object_id": [ NBInterfaces, NBVMInterfaces ],
+        "assigned_object_id": [NBInterface, NBVMInterface],
         "description": 200,
         "dns_name": 255,
         "tags": NBTagList,
-        "tenant": NBTenants,
-        "vrf": NBVrfs
+        "tenant": NBTenant,
+        "vrf": NBVRF
     }
     # add relation between two attributes
     data_model_relation = {
-        "dcim.interface": NBInterfaces,
-        "virtualization.vminterface": NBVMInterfaces,
-        NBInterfaces: "dcim.interface",
-        NBVMInterfaces: "virtualization.vminterface"
+        "dcim.interface": NBInterface,
+        "virtualization.vminterface": NBVMInterface,
+        NBInterface: "dcim.interface",
+        NBVMInterface: "virtualization.vminterface"
     }
 
     def resolve_relations(self):
@@ -915,16 +1147,13 @@ class NBIPAddresses(NetBoxObject):
         # this needs special treatment as the object type depends on a second model key
         if o_type is not None and o_type not in self.data_model.get("assigned_object_type"):
 
-            log.error("Attribute 'assigned_object_type' for '%s' invalid: %s" % \
-                (self.get_display_name(), o_type))
-            do_error_exit("Error while resolving relations for %s" % self.get_display_name())
-
+            log.error(f"Attribute 'assigned_object_type' for '{self.get_display_name()}' invalid: {o_type}")
+            do_error_exit(f"Error while resolving relations for {self.get_display_name()}")
 
         if isinstance(o_id, int):
             self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), id=o_id)
 
         super().resolve_relations()
-
 
     def update(self, data=None, read_from_netbox=False, source=None):
 
@@ -953,9 +1182,6 @@ class NBIPAddresses(NetBoxObject):
             This is hard coded in here. Updated if data_model attribute changes!!!!
         """
 
-        return [ NBInterfaces, NBVMInterfaces, NBTags, NBTenants, NBVrfs ]
-
-
-
+        return [NBInterface, NBVMInterface, NBTag, NBTenant, NBVRF]
 
 # EOF

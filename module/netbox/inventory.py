@@ -1,10 +1,5 @@
 
-import pprint
-
 import json
-
-from ipaddress import ip_address, ip_network, ip_interface, IPv6Network, IPv4Network, IPv4Address, IPv6Address
-
 
 from module.netbox.object_classes import *
 from module.common.logging import get_logger
@@ -12,20 +7,34 @@ from module.common.support import perform_ptr_lookups
 
 log = get_logger()
 
+
 class NetBoxInventory:
+    """
+    Class to manage a inventory of NetBoxObject objects
+    """
 
     base_structure = dict()
-    resolved_dependencies = list()
-
-    primary_tag = None
 
     def __init__(self):
         for object_type in NetBoxObject.__subclasses__():
 
             self.base_structure[object_type.name] = list()
 
-
     def get_by_id(self, object_type, id=None):
+        """
+        Try to find an object of $object_type with ID $id in inventory
+
+        Parameters
+        ----------
+        object_type: NetBoxObject sub class
+            object type to find
+        id: int
+            NetBox ID of object
+
+        Returns
+        -------
+        (NetBoxObject sub class, None): return object instance if object was found, None otherwise
+        """
 
         if object_type not in NetBoxObject.__subclasses__():
             raise AttributeError("'%s' object must be a sub class of '%s'." %
@@ -39,13 +48,25 @@ class NetBoxInventory:
             if object.nb_id == id:
                 return object
 
-
     def get_by_data(self, object_type, data=None):
+        """
+        Try to find an object of $object_type which match params defined in $data
+
+        Parameters
+        ----------
+        object_type: NetBoxObject sub class
+            object type to find
+        data: dict
+            params of object to match
+
+        Returns
+        -------
+        (NetBoxObject sub class, None): return object instance if object was found, None otherwise
+        """
 
         if object_type not in NetBoxObject.__subclasses__():
             raise AttributeError("'%s' object must be a sub class of '%s'." %
                                  (object_type.__name__, NetBoxObject.__name__))
-
 
         if data is None or len(self.get_all_items(object_type)) == 0:
             return
@@ -58,10 +79,9 @@ class NetBoxInventory:
         if data_id is not None and data_id != 0:
             return self.get_by_id(object_type, id=data_id)
 
-        # try to find by name
+        # try to find by primary/secondary key
         if data.get(object_type.primary_key) is not None:
             object_name_to_find = None
-            results = list()
             for object in self.get_all_items(object_type):
 
                 if object_name_to_find is None:
@@ -81,14 +101,25 @@ class NetBoxInventory:
                         all_items_match = False
                         break
 
-                if all_items_match == True:
+                if all_items_match is True:
                     return object
 
         return None
 
     def add_item_from_netbox(self, object_type, data=None):
         """
-        only to be used if data is read from NetBox and added to inventory
+        Adds objects which are directly returned from NetBox. We assume
+        all fields are valid and skip validating data and add it directly to the inventory.
+
+        Only to be used if data is read from NetBox and added to inventory
+
+        Parameters
+        ----------
+        object_type: NetBoxObject sub class
+            object type to add
+        data: dict
+            Object data to add to the inventory
+
         """
 
         # create new object
@@ -100,13 +131,30 @@ class NetBoxInventory:
         return
 
     def add_update_object(self, object_type, data=None, read_from_netbox=False, source=None):
+        """
+        Adds new object or updates existing object with data, based on the content of data.
+
+        Parameters
+        ----------
+        object_type: NetBoxObject sub class
+            object type to add/update
+        data: dict
+            data used to create a new object or update a existing object
+        read_from_netbox: bool
+            True if data was read directly from NetBox
+        source: object handler of source
+            the object source which should be added to the object
+
+        Returns
+        -------
+        NetBoxObject sub class: of the created/updated object
+        """
 
         if data is None:
-            # ToDo:
-            #   * proper error handling
-            log.error("NO DATA")
-            return
+            log.error(f"Unable to find {object_type.name} object, parameter 'data' is 'None'")
+            return None
 
+        # try to find exiting object based on submitted data
         this_object = self.get_by_data(object_type, data=data)
 
         if this_object is None:
@@ -122,6 +170,9 @@ class NetBoxInventory:
         return this_object
 
     def resolve_relations(self):
+        """
+        Resolve relations of all objects in the inventory. Used after data is read from NetBox.
+        """
 
         log.debug("Start resolving relations")
         for object_type in NetBoxObject.__subclasses__():
@@ -133,40 +184,68 @@ class NetBoxInventory:
         log.debug("Finished resolving relations")
 
     def get_all_items(self, object_type):
+        """
+        Returns list of all $object_type items inventory.
+
+        Parameters
+        ----------
+        object_type: NetBoxObject sub class
+            object type to find
+
+        Returns
+        -------
+        list: of all $object_type items
+        """
 
         if object_type not in NetBoxObject.__subclasses__():
-            raise ValueError("'%s' object must be a sub class of '%s'." %
-                                 (object_type.__name__, NetBoxObject.__name__))
+            raise ValueError(f"'{object_type.__name__}' object must be a sub class of '{NetBoxObject.__name__}'.")
 
         return self.base_structure.get(object_type.name, list())
 
     def get_all_interfaces(self, object):
+        """
+        Return all interfaces items for a NBVM, NBDevice object
 
-        if not isinstance(object, (NBVMs, NBDevices)):
-            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+        Parameters
+        ----------
+        object: (NBVM, NBDevice)
+            object instance to return interfaces for
+
+        Returns
+        -------
+        list: of all interfaces found for this object
+        """
+
+        if not isinstance(object, (NBVM, NBDevice)):
+            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         interfaces = list()
-        if isinstance(object, NBVMs):
-            for int in self.get_all_items(NBVMInterfaces):
+        if isinstance(object, NBVM):
+            for int in self.get_all_items(NBVMInterface):
                 if grab(int, "data.virtual_machine") == object:
                     interfaces.append(int)
 
-        if isinstance(object, NBDevices):
-            for int in self.get_all_items(NBInterfaces):
+        if isinstance(object, NBDevice):
+            for int in self.get_all_items(NBInterface):
                 if grab(int, "data.device") == object:
                     interfaces.append(int)
 
         return interfaces
 
     def tag_all_the_things(self, netbox_handler):
+        """
+        Tag all items which have been created/updated/inherited by this program
+        * add main tag (Netbox: Synced) to all objects retrieved from a source
+        * add source tag (source: $name) all objects of that source
+        * check for orphaned objects
+            * objects tagged by main tag but not present in source anymore (add)
+            * objects tagged as orphaned but are present again (remove)
 
-        # ToDo:
-        # * DONE: add main tag to all objects retrieved from a source
-        # * Done: add source tag all objects of that source
-        # * check for orphaned objects
-        #   * DONE: objects tagged by a source but not present in source anymore (add)
-        #   * DONE: objects tagged as orphaned but are present again (remove)
-
+        Parameters
+        ----------
+        netbox_handler: NetBoxHandler
+            tha object instance of a NetBox handler to get the tag names from
+        """
 
         for object_type in NetBoxObject.__subclasses__():
 
@@ -187,6 +266,9 @@ class NetBoxInventory:
                         object.add_tags(netbox_handler.orphaned_tag)
 
     def query_ptr_records_for_all_ips(self):
+        """
+        Perform a DNS lookup for all IP address of a certain source if desired.
+        """
 
         log.debug("Starting to look up PTR records for IP addresses")
 
@@ -194,7 +276,7 @@ class NetBoxInventory:
         ip_lookup_dict = dict()
 
         # iterate over all IP addresses and try to match them to a prefix
-        for ip in self.get_all_items(NBIPAddresses):
+        for ip in self.get_all_items(NBIPAddress):
 
             # ignore IPs which are not handled by any source
             if ip.source is None:
@@ -215,7 +297,6 @@ class NetBoxInventory:
 
                 ip_lookup_dict[ip.source].get("ips").append(ip_a)
 
-
         # now perform DNS requests to look up DNS names for IP addresses
         for source, data in ip_lookup_dict.items():
 
@@ -225,7 +306,7 @@ class NetBoxInventory:
             # get DNS names for IP addresses:
             records = perform_ptr_lookups(data.get("ips"), data.get("servers"))
 
-            for ip in self.get_all_items(NBIPAddresses):
+            for ip in self.get_all_items(NBIPAddress):
 
                 if ip.source != source:
                     continue
@@ -236,11 +317,18 @@ class NetBoxInventory:
 
                 if dns_name is not None:
 
-                    ip.update(data = {"dns_name": dns_name})
+                    ip.update(data={"dns_name": dns_name})
 
         log.debug("Finished to look up PTR records for IP addresses")
 
     def to_dict(self):
+        """
+        Return the whole inventory as one dictionary
+
+        Returns
+        -------
+        dict: of all items in inventory
+        """
 
         output = dict()
         for nb_object_class in NetBoxObject.__subclasses__():
@@ -253,6 +341,13 @@ class NetBoxInventory:
         return output
 
     def __str__(self):
+        """
+        Return a dictionary of whole inventory as JSON formatted string
+
+        Returns
+        -------
+        str: JSON formatted string of the whole inventory
+        """
 
         return json.dumps(self.to_dict(), sort_keys=True, indent=4)
 

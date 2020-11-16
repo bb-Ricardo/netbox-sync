@@ -3,7 +3,7 @@
 from .vmware.connection import VMWareHandler
 
 # list of valid sources
-valid_sources = [ VMWareHandler ]
+valid_sources = [VMWareHandler]
 
 ###############
 from module.common.configuration import get_config
@@ -12,10 +12,24 @@ from module.netbox.inventory import NetBoxInventory
 
 
 def validate_source(source_class_object=None, state="pre"):
+    """
+    Validate class and object attributes of a $source_class_object
+    Check if all needed attributes in class definition are present before initialization.
+    Check if all needed attributes and their type in object are present
+    after initialization
 
-    necessary_atrtributes = {
-        "dependend_netbox_objects": list,
-        "init_successfull": bool,
+    Parameters
+    ----------
+    source_class_object: Source handler class/object
+        class/object to investigate
+    state: str
+        pre if validating a class, post if validating a initialized object
+
+    """
+
+    necessary_attributes = {
+        "dependent_netbox_objects": list,
+        "init_successful": bool,
         "inventory": NetBoxInventory,
         "name": str,
         "settings": dict,
@@ -23,7 +37,7 @@ def validate_source(source_class_object=None, state="pre"):
         "source_type": str,
     }
 
-    for attr in necessary_atrtributes.keys():
+    for attr in necessary_attributes.keys():
 
         # raise exception if attribute not present
         getattr(source_class_object, attr)
@@ -32,7 +46,7 @@ def validate_source(source_class_object=None, state="pre"):
         return
 
     # post initialization validation
-    for attr, value_type in necessary_atrtributes.items():
+    for attr, value_type in necessary_attributes.items():
 
         value = getattr(source_class_object, attr)
 
@@ -43,7 +57,22 @@ def validate_source(source_class_object=None, state="pre"):
             raise ValueError(f"Value for attribute '{attr}' can't be empty.")
 
 
-def instanciate_sources(config_handler=None, inventory=None):
+def instantiate_sources(config_handler=None, inventory=None):
+    """
+    Instantiate a source handler and add necessary attributes. Also
+    validate source handler pre and post initialization.
+
+    Parameters
+    ----------
+    config_handler: ConfigParser
+        a config file handler to read config data from
+    inventory: inventory object
+        inventory to be passed to source handler
+
+    Returns
+    -------
+    source handler object: instantiated source handler
+    """
 
     log = get_logger()
 
@@ -71,15 +100,13 @@ def instanciate_sources(config_handler=None, inventory=None):
 
         if source_type is None:
             log.error(f"Source {source_section} option 'type' is undefined")
-            config_error = True
 
         source_class = None
         for possible_source_class in valid_sources:
             validate_source(possible_source_class)
             source_class_type = getattr(possible_source_class, "source_type", None)
             if source_class_type is None:
-                raise AttributeError("'%s' class attribute 'source_type' not defined." %
-                                 (source_class_type.__name__))
+                raise AttributeError("'%s' class attribute 'source_type' not defined." % source_class_type.__name__)
 
             if source_class_type == source_type:
                 source_class = possible_source_class
@@ -87,7 +114,6 @@ def instanciate_sources(config_handler=None, inventory=None):
 
         if source_class is None:
             log.error(f"Unknown source type '{source_type}' defined for '{source_section}'")
-            config_error = True
             continue
 
         source_config = get_config(config_handler, section=source_section, valid_settings=source_class.settings)
@@ -99,7 +125,7 @@ def instanciate_sources(config_handler=None, inventory=None):
         validate_source(source_handler, "post")
 
         # add to list of source handlers
-        if source_handler.init_successfull is True:
+        if source_handler.init_successful is True:
             sources.append(source_handler)
 
     return sources

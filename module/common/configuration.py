@@ -1,7 +1,6 @@
 
-
 import configparser
-from os.path import realpath
+import os
 
 from module.common.misc import grab, do_error_exit
 from module.common.logging import get_logger
@@ -10,18 +9,42 @@ log = get_logger()
 
 
 def get_config_file(config_file):
+    """
+    get absolute path to provided config file string
+
+    Parameters
+    ----------
+    config_file: str
+        config file path
+
+    Returns
+    -------
+    str: absolute path to config file
+    """
 
     if config_file is None or config_file == "":
         do_error_exit("ERROR: Config file not defined.")
 
-    base_dir = "/".join(__file__.split("/")[0:-3])
-    if config_file[0] != "/":
-        config_file = f"{base_dir}/{config_file}"
+    base_dir = os.sep.join(__file__.split(os.sep)[0:-3])
+    if config_file[0] != os.sep:
+        config_file = f"{base_dir}{os.sep}{config_file}"
 
-    return realpath(config_file)
+    return os.path.realpath(config_file)
 
 
 def open_config_file(config_file):
+    """
+    Open config file with a ConfigParser and return handler. Bail out of opening or parsing fails
+
+    Parameters
+    ----------
+    config_file: str
+        absolute path of config file to open
+
+    Returns
+    -------
+    ConfigParser: handler with supplied config file
+    """
 
     if config_file is None or config_file == "":
         do_error_exit("ERROR: Config file not defined.")
@@ -42,16 +65,24 @@ def open_config_file(config_file):
 
 
 def get_config(config_handler=None, section=None, valid_settings=None):
-    """parsing and basic validation of own config file
+    """
+    read config items from a defined section
+
     Parameters
     ----------
-    args : ArgumentParser object
-    default_log_level: str
-        default log level if log level is not set in config
+    config_handler: ConfigParser
+        a config file handler to read config data from
+    section: str
+        name of the section to read
+    valid_settings: dict
+        a dictionary with valid config items to read from this section.
+        key: is the config item name
+        value: default value if config option is undefined
+
     Returns
     -------
-    dict
-        a dictionary with all config options parsed from the config file
+    dict:   parsed config items from defined $section
+
     """
 
     def get_config_option(section, item, default=None):
@@ -76,10 +107,7 @@ def get_config(config_handler=None, section=None, valid_settings=None):
 
         log.debug(f"Config: {section}.{item} = {value}")
 
-
     config_dict = {}
-
-    config_error = False
 
     if valid_settings is None:
         log.error("No valid settings passed to config parser!")
@@ -87,14 +115,11 @@ def get_config(config_handler=None, section=None, valid_settings=None):
     # read specified section section
     if section is not None:
         if section not in config_handler.sections():
-            log.error("Section '{section}' not found in config_file")
-            config_error = True
+            log.error(f"Section '{section}' not found in config_file")
         else:
             for config_item, default_value in valid_settings.items():
                 get_config_option(section, config_item, default=default_value)
 
-
     return config_dict
 
 # EOF
-

@@ -1,6 +1,5 @@
 
 import sys
-from module import plural
 
 
 def grab(structure=None, path=None, separator=".", fallback=None):
@@ -37,7 +36,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
             path separator to use. Helpful if a path element
             contains the default (.) separator.
         fallback: dict, list, str, int
-            data to return if no match was found.
+            data to return if no match was found
 
         Returns
         -------
@@ -85,13 +84,25 @@ def grab(structure=None, path=None, separator=".", fallback=None):
 
 
 def dump(obj):
-   for attr in dir(obj):
-       if hasattr( obj, attr ):
-           print( "obj.%s = %s" % (attr, getattr(obj, attr)))
+    """
+    Dump content of a object to stdout
+
+    Parameters
+    ----------
+    obj: object
+        object to dump
+
+    """
+
+    for attr in dir(obj):
+        if hasattr(obj, attr):
+            print("obj.%s = %s" % (attr, getattr(obj, attr)))
 
 
 def do_error_exit(log_text):
-    """log an error and exit with return code 1
+    """
+    log an error and exit with return code 1
+
     Parameters
     ----------
     log_text : str
@@ -103,6 +114,18 @@ def do_error_exit(log_text):
 
 
 def get_relative_time(delta):
+    """
+    return a human readable string of a datetime object delta
+
+    Parameters
+    ----------
+    delta:  datetime delta
+        time delta to format
+
+    Returns
+    -------
+    str: formatted string of time delta
+    """
 
     parts = [float(x) for x in str(delta).split(":")]
 
@@ -120,10 +143,44 @@ def get_relative_time(delta):
 
 
 def get_string_or_none(text=None):
+    """
+    Only return stripped content of text if text is not None and not empty
+
+    Parameters
+    ----------
+    text: str
+        string to parse
+
+    Returns
+    -------
+    (str, None): content of text
+    """
 
     if text is not None and len(str(text).strip()) > 0:
         return str(text).strip()
 
     return None
+
+
+def plural(length):
+    """
+    return "s" if length is not 1 else return empty string
+
+    example:
+    0 items
+    1 item
+    2 items
+
+    Parameters
+    ----------
+    length: int
+        length of item list
+
+    Returns
+    -------
+    str: "s", ""
+    """
+
+    return "s" if length != 1 else ""
 
 # EOF

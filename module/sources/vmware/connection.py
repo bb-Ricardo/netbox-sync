@@ -1,43 +1,46 @@
 
 import atexit
-from socket import gaierror
-from ipaddress import ip_address, ip_network, ip_interface, IPv4Address, IPv6Address
-import re
-
 import pprint
+import re
+from ipaddress import ip_address, ip_network, ip_interface, IPv4Address, IPv6Address
+from socket import gaierror
 
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 
-from module.netbox.object_classes import *
-from module.common.misc import grab, do_error_exit, dump, get_string_or_none
-from module.common.support import normalize_mac_address, normalize_ip_to_string, ip_valid_to_add_to_netbox
-from module import plural
 from module.common.logging import get_logger, DEBUG3
+from module.common.misc import grab, dump, get_string_or_none, plural
+from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
+from module.netbox.object_classes import *
 
 log = get_logger()
 
-class VMWareHandler():
 
-    dependend_netbox_objects = [
-        NBTags,
-        NBManufacturers,
-        NBDeviceTypes,
-        NBPlatforms,
-        NBClusterTypes,
-        NBClusterGroups,
-        NBDeviceRoles,
-        NBSites,
-        NBClusters,
-        NBDevices,
-        NBVMs,
-        NBVMInterfaces,
-        NBInterfaces,
-        NBIPAddresses,
-        NBPrefixes,
-        NBTenants,
-        NBVrfs,
-        NBVLANs
+# noinspection PyTypeChecker
+class VMWareHandler:
+    """
+    Source class to import data from a vCenter instance and add/update NetBox objects based on gathered information
+    """
+
+    dependent_netbox_objects = [
+        NBTag,
+        NBManufacturer,
+        NBDeviceType,
+        NBPlatform,
+        NBClusterType,
+        NBClusterGroup,
+        NBDeviceRole,
+        NBSite,
+        NBCluster,
+        NBDevice,
+        NBVM,
+        NBVMInterface,
+        NBInterface,
+        NBIPAddress,
+        NBPrefix,
+        NBTenant,
+        NBVRF,
+        NBVLAN
     ]
 
     settings = {
@@ -63,7 +66,7 @@ class VMWareHandler():
         "set_primary_ip": "when-undefined"
     }
 
-    init_successfull = False
+    init_successful = False
     inventory = None
     name = None
     source_tag = None
@@ -91,7 +94,7 @@ class VMWareHandler():
     def __init__(self, name=None, settings=None, inventory=None):
 
         if name is None:
-            raise ValueError("Invalid value for attribute 'name': '{name}'.")
+            raise ValueError(f"Invalid value for attribute 'name': '{name}'.")
 
         self.inventory = inventory
         self.name = name
@@ -111,21 +114,32 @@ class VMWareHandler():
             log.info(f"Source '{name}' is currently unavailable. Skipping")
             return
 
-        self.init_successfull = True
+        self.init_successful = True
 
     def parse_config_settings(self, config_settings):
+        """
+        Validate parsed settings from config file
+
+        Parameters
+        ----------
+        config_settings: dict
+            dict of config settings
+
+        """
 
         validation_failed = False
-        for setting in ["host_fqdn", "port", "username", "password" ]:
+        for setting in ["host_fqdn", "port", "username", "password"]:
             if config_settings.get(setting) is None:
                 log.error(f"Config option '{setting}' in 'source/{self.name}' can't be empty/undefined")
                 validation_failed = True
 
         # check permitted ip subnets
         if config_settings.get("permitted_subnets") is None:
-            log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. No IP addresses will be populated to Netbox!")
+            log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
+                     f"No IP addresses will be populated to Netbox!")
         else:
-            config_settings["permitted_subnets"] = [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
+            config_settings["permitted_subnets"] = \
+                [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
 
             permitted_subnets = list()
             for permitted_subnet in config_settings["permitted_subnets"]:
@@ -164,10 +178,10 @@ class VMWareHandler():
                 site_name = relation.split("=")[1].strip()
 
                 if len(object_name) == 0 or len(site_name) == 0:
-                    log.error(f"Config option '{relation}' malformed got '{object_name}' for object name and '{site_name}' for site name.")
+                    log.error(f"Config option '{relation}' malformed got '{object_name}' for "
+                              f"object name and '{site_name}' for site name.")
                     validation_failed = True
 
-                re_compiled = None
                 try:
                     re_compiled = re.compile(object_name)
                 except Exception as e:
@@ -184,14 +198,16 @@ class VMWareHandler():
 
         if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
 
-            custom_dns_servers = [x.strip() for x in config_settings.get("custom_dns_servers").split(",") if x.strip() != ""]
+            custom_dns_servers = \
+                [x.strip() for x in config_settings.get("custom_dns_servers").split(",") if x.strip() != ""]
 
             tested_custom_dns_servers = list()
             for custom_dns_server in custom_dns_servers:
                 try:
                     tested_custom_dns_servers.append(str(ip_address(custom_dns_server)))
                 except ValueError:
-                    log.error(f"Config option 'custom_dns_servers' value '{custom_dns_server}' does not appear to be an IP address.")
+                    log.error(f"Config option 'custom_dns_servers' value '{custom_dns_server}' "
+                              f"does not appear to be an IP address.")
                     validation_failed = True
 
             config_settings["custom_dns_servers"] = tested_custom_dns_servers
@@ -204,6 +220,13 @@ class VMWareHandler():
             setattr(self, setting, config_settings.get(setting))
 
     def create_session(self):
+        """
+        Initialize session with vCenter
+
+        Returns
+        -------
+        bool: if initialization was successful or not
+        """
 
         if self.session is not None:
             return True
@@ -235,6 +258,12 @@ class VMWareHandler():
         return True
 
     def apply(self):
+        """
+        Main source handler method. This method is called for each source from "main" program
+        to retrieve data from it source and apply it to the netBox inventory.
+
+        Every update of new/existing objects fot this source has to happen here.
+        """
 
         log.info(f"Query data from vCenter: '{self.host_fqdn}'")
 
@@ -252,6 +281,13 @@ class VMWareHandler():
         where you create the same machines with a different setup
         like a new version or something. This way NetBox will be
         updated primarily with the actual active VM data.
+
+        # disabled, no useful information at this moment
+            "virtual switch": {
+                "view_type": vim.DistributedVirtualSwitch,
+                "view_handler": self.add_virtual_switch
+            },
+
         """
         object_mapping = {
             "datacenter": {
@@ -262,10 +298,6 @@ class VMWareHandler():
                 "view_type": vim.ClusterComputeResource,
                 "view_handler": self.add_cluster
             },
-#            "virtual switch": {
-#                "view_type": vim.DistributedVirtualSwitch,
-#                "view_handler": self.add_virtual_switch
-#            },
             "network": {
                 "view_type": vim.dvs.DistributedVirtualPortgroup,
                 "view_handler": self.add_port_group
@@ -282,7 +314,6 @@ class VMWareHandler():
                 "view_type": vim.VirtualMachine,
                 "view_handler": self.add_virtual_machine
             }
-
         }
 
         for view_name, view_details in object_mapping.items():
@@ -331,6 +362,22 @@ class VMWareHandler():
 
     @staticmethod
     def passes_filter(name, include_filter, exclude_filter):
+        """
+        checks if object name passes a defined object filter.
+
+        Parameters
+        ----------
+        name: str
+            name of the object to check
+        include_filter: regex object
+            regex object of include filter
+        exclude_filter: regex object
+            regex object of exclude filter
+
+        Returns
+        -------
+        bool: True if all filter passed, otherwise False
+        """
 
         # first includes
         if include_filter is not None and not include_filter.match(name):
@@ -345,16 +392,33 @@ class VMWareHandler():
         return True
 
     def get_site_name(self, object_type, object_name, cluster_name=""):
+        """
+        Return a site name for a NBCluster or NBDevice depending on config options
+        host_site_relation and cluster_site_relation
 
-        if object_type not in [NBClusters, NBDevices]:
-            raise ValueError(f"Object must be a '{NBClusters.name}' or '{NBDevices.name}'.")
+        Parameters
+        ----------
+        object_type: (NBCluster, NBDevice)
+            object type to check site relation for
+        object_name: str
+            object name to check site relation for
+        cluster_name: str
+            cluster name of NBDevice to check for site name
+
+        Returns
+        -------
+        str: site name if a relation was found
+        """
+
+        if object_type not in [NBCluster, NBDevice]:
+            raise ValueError(f"Object must be a '{NBCluster.name}' or '{NBDevice.name}'.")
 
         log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
 
         site_name = None
 
         # check if site was provided in config
-        config_name = "host_site_relation" if object_type == NBDevices else "cluster_site_relation"
+        config_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
 
         site_relations = grab(self, config_name, fallback=list())
 
@@ -365,7 +429,7 @@ class VMWareHandler():
                 log.debug2(f"Found a match ({object_regex.pattern}) for {object_name}, using site '{site_name}'")
                 break
 
-        if object_type == NBDevices and site_name is None:
+        if object_type == NBDevice and site_name is None:
             site_name = self.permitted_clusters.get(cluster_name)
             log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
 
@@ -377,18 +441,47 @@ class VMWareHandler():
         return site_name
 
     def get_object_based_on_macs(self, object_type, mac_list=list()):
+        """
+        Try to find a NetBox object based on list of MAC addresses.
+
+        Iterate over all interfaces of this object type and compare MAC address with list of desired MAC
+        addresses. If match was found store related machine object and count every correct match.
+
+        If exactly one machine with matching interfaces was found then this one will be returned.
+
+        If two or more machines with matching MACs are found compare the two machines with
+        the highest amount of matching interfaces. If the ration of matching interfaces
+        exceeds 2.0 then the top matching machine is chosen as desired object.
+
+        If the ration is below 2.0 then None will be returned. The probability is to low that
+        this one is the correct one.
+
+        None will also be returned if no machine was found at all.
+
+        Parameters
+        ----------
+        object_type: (NBDevice, NBVM)
+            type of NetBox device to find in inventory
+        mac_list: list
+            list of MAC addresses to compare against NetBox interface objects
+
+        Returns
+        -------
+        (NBDevice, NBVM, None): object instance of found device, otherwise None
+        """
 
         object_to_return = None
 
-        if object_type not in [NBDevices, NBVMs]:
-            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+        if object_type not in [NBDevice, NBVM]:
+            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         if len(mac_list) == 0:
             return
 
-        interface_typ = NBInterfaces if object_type == NBDevices else NBVMInterfaces
+        interface_typ = NBInterface if object_type == NBDevice else NBVMInterface
 
         objects_with_matching_macs = dict()
+        matching_object = None
 
         for int in self.inventory.get_all_items(interface_typ):
 
@@ -398,7 +491,9 @@ class VMWareHandler():
                 if matching_object is None:
                     continue
 
-                log.debug2("Found matching MAC '%s' on %s '%s'" % (grab(int, "data.mac_address"), object_type.name, matching_object.get_display_name(including_second_key=True)))
+                log.debug2("Found matching MAC '%s' on %s '%s'" %
+                           (grab(int, "data.mac_address"), object_type.name,
+                            matching_object.get_display_name(including_second_key=True)))
 
                 if objects_with_matching_macs.get(matching_object) is None:
                     objects_with_matching_macs[matching_object] = 1
@@ -410,7 +505,8 @@ class VMWareHandler():
 
         if num_devices_witch_matching_macs == 1:
 
-            log.debug2("Found one %s '%s' based on MAC addresses and using it" % (object_type.name, matching_object.get_display_name(including_second_key=True)))
+            log.debug2("Found one %s '%s' based on MAC addresses and using it" %
+                       (object_type.name, matching_object.get_display_name(including_second_key=True)))
 
             object_to_return = list(objects_with_matching_macs.keys())[0]
 
@@ -419,7 +515,8 @@ class VMWareHandler():
             log.debug2(f"Found {num_devices_witch_matching_macs} {object_type.name}s with matching MAC addresses")
 
             # now select the two top matches
-            first_choice, second_choice = sorted(objects_with_matching_macs, key=objects_with_matching_macs.get, reverse=True)[0:2]
+            first_choice, second_choice = \
+                sorted(objects_with_matching_macs, key=objects_with_matching_macs.get, reverse=True)[0:2]
 
             first_choice_matches = objects_with_matching_macs.get(first_choice)
             second_choice_matches = objects_with_matching_macs.get(second_choice)
@@ -432,14 +529,34 @@ class VMWareHandler():
 
             # only pick the first one if the ration exceeds 2
             if matching_ration >= 2.0:
-                log.debug2(f"The matching ratio of {matching_ration} is high enough to select {first_choice.get_display_name()} as desired {object_type.name}")
+                log.debug2(f"The matching ratio of {matching_ration} is high enough "
+                           f"to select {first_choice.get_display_name()} as desired {object_type.name}")
                 object_to_return = first_choice
             else:
-                log.debug2("Both candidates have a similar amount of matching interface MAC addresses. Using NONE of them!")
+                log.debug2("Both candidates have a similar amount of "
+                           "matching interface MAC addresses. Using NONE of them!")
 
         return object_to_return
 
     def get_object_based_on_primary_ip(self, object_type, primary_ip4=None, primary_ip6=None):
+        """
+        Try to find a NBDevice or NBVM based on the primary IP address. If an exact
+        match was found the device/vm object will be returned immediately without
+        checking of the other primary IP address (if defined).
+
+        Parameters
+        ----------
+        object_type: (NBDevice, NBVM)
+            object type to look for
+        primary_ip4: str
+            primary IPv4 address of object to find
+        primary_ip6: str
+            primary IPv6 address of object to find
+
+        Returns
+        -------
+
+        """
 
         def _matches_device_primary_ip(device_primary_ip, ip_needle):
 
@@ -449,7 +566,7 @@ class VMWareHandler():
                     ip = grab(device_primary_ip, "address")
 
                 elif isinstance(device_primary_ip, int):
-                    ip = self.inventory.get_by_id(NBIPAddresses, id=device_primary_ip)
+                    ip = self.inventory.get_by_id(NBIPAddress, id=device_primary_ip)
                     ip = grab(ip, "data.address")
 
                 if ip is not None and ip.split("/")[0] == ip_needle:
@@ -457,8 +574,8 @@ class VMWareHandler():
 
             return False
 
-        if object_type not in [NBDevices, NBVMs]:
-            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+        if object_type not in [NBDevice, NBVM]:
+            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         if primary_ip4 is None and primary_ip6 is None:
             return
@@ -472,28 +589,56 @@ class VMWareHandler():
         for device in self.inventory.get_all_items(object_type):
 
             if _matches_device_primary_ip(grab(device, "data.primary_ip4"), primary_ip4) is True:
-                log.debug2(f"Found existing host '{device.get_display_name()}' based on the primary IPv4 '{primary_ip4}'")
+                log.debug2(f"Found existing host '{device.get_display_name()}' "
+                           f"based on the primary IPv4 '{primary_ip4}'")
                 return device
 
             if _matches_device_primary_ip(grab(device, "data.primary_ip6"), primary_ip6) is True:
-                log.debug2(f"Found existing host '{device.get_display_name()}' based on the primary IPv6 '{primary_ip6}'")
+                log.debug2(f"Found existing host '{device.get_display_name()}' "
+                           f"based on the primary IPv6 '{primary_ip6}'")
                 return device
 
     def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=dict()):
         """
-            trying multiple ways to match interfaces
-            * by simple name
-            * by MAC address separated by physical and virtual NICs
-            * by MAC regardless of interface type
-            * by sorting current and new ones by name and matching 1:1
+        Try to match current object interfaces to discovered ones. This will be done
+        by multiple approaches. Order as following listing whatever matches first will be chosen.
+
+            by simple name:
+                both interface names match exactly
+            by MAC address separated by physical and virtual NICs:
+                MAC address of interfaces match exactly, distinguish between physical and virtual interfaces
+            by MAC regardless of interface type
+                MAC address of interfaces match exactly, type of interface does not matter
+
+            If there are interfaces which don't match at all then the unmatched interfaces will be
+            matched 1:1. Sort both lists (unmatched current interfaces, unmatched new new interfaces)
+            by name and assign them each other.
+
                 eth0 > vNIC 1
                 eth1 > vNIC 2
-            * interface virtual or not is compared as well if type is NBInterfaces
+                ens1 > vNIC 3
+                ...  > ...
+
+        Parameters
+        ----------
+        device_vm_object: (NBDevice, NBVM)
+            object type to look for
+        interface_data_dict: dict
+            dictionary with interface data to compare to existing machine
+
+        Returns
+        -------
+        dict: {"$interface_name": associated_interface_object}
+            if no current current interface was left to match "None" will be returned instead of
+            a matching interface object
         """
 
+        """
+            trying multiple ways to match interfaces
+        """
 
-        if not isinstance(device_vm_object, (NBDevices, NBVMs)):
-            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+        if not isinstance(device_vm_object, (NBDevice, NBVM)):
+            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         if not isinstance(interface_data_dict, dict):
             raise ValueError(f"Value for 'interface_data_dict' must be a dict, got: {interface_data_dict}")
@@ -514,7 +659,7 @@ class VMWareHandler():
             int_mac = grab(int, "data.mac_address")
             int_name = grab(int, "data.name")
             int_type = "virtual"
-            if not "virtual" in str(grab(int, "data.type", fallback="virtual")):
+            if "virtual" not in str(grab(int, "data.type", fallback="virtual")):
                 int_type = "physical"
 
             if int_mac is not None:
@@ -525,8 +670,8 @@ class VMWareHandler():
                 current_object_interfaces[int_name] = int
                 current_object_interface_names.append(int_name)
 
-
-        log.debug2("Found '%d' NICs in Netbox for '%s'" % (len(current_object_interface_names), device_vm_object.get_display_name()))
+        log.debug2("Found '%d' NICs in Netbox for '%s'" %
+                   (len(current_object_interface_names), device_vm_object.get_display_name()))
 
         unmatched_interface_names = list()
 
@@ -536,32 +681,32 @@ class VMWareHandler():
 
             int_mac = grab(int_data, "mac_address", fallback="XX:XX:YY:YY:ZZ:ZZ")
             int_type = "virtual"
-            if not "virtual" in str(grab(int_data, "type", fallback="virtual")):
+            if "virtual" not in str(grab(int_data, "type", fallback="virtual")):
                 int_type = "physical"
 
             # match simply by name
-            mathing_int = None
+            matching_int = None
             if int_name in current_object_interface_names is not None:
                 log.debug2(f"Found 1:1 name match for NIC '{int_name}'")
-                mathing_int = current_object_interfaces.get(int_name)
+                matching_int = current_object_interfaces.get(int_name)
 
             # match mac by interface type
             elif grab(current_object_interfaces, f"{int_type}.{int_mac}") is not None:
                 log.debug2(f"Found 1:1 MAC address match for {int_type} NIC '{int_name}'")
-                mathing_int = grab(current_object_interfaces, f"{int_type}.{int_mac}")
+                matching_int = grab(current_object_interfaces, f"{int_type}.{int_mac}")
 
             # match mac regardless of interface type
             elif current_object_interfaces.get(int_mac) is not None and \
-                current_object_interfaces.get(int_mac) not in return_data.values():
+                    current_object_interfaces.get(int_mac) not in return_data.values():
                 log.debug2(f"Found 1:1 MAC address match for NIC '{int_name}' (ignoring interface type)")
-                mathing_int = current_object_interfaces.get(int_mac)
+                matching_int = current_object_interfaces.get(int_mac)
 
-            if mathing_int is not None:
-                return_data[int_name] = mathing_int
+            if matching_int is not None:
+                return_data[int_name] = matching_int
                 # ToDo:
                 # check why sometimes names are not present anymore and remove fails
-                if grab(mathing_int, "data.name") in current_object_interface_names:
-                    current_object_interface_names.remove(grab(mathing_int, "data.name"))
+                if grab(matching_int, "data.name") in current_object_interface_names:
+                    current_object_interface_names.remove(grab(matching_int, "data.name"))
 
             # no match found, we match the left overs just by #1 -> #1, #2 -> #2, ...
             else:
@@ -580,6 +725,21 @@ class VMWareHandler():
         return return_data
 
     def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None):
+        """
+        This is a lazy approach to find longest matching prefix to an IP address.
+        If site_name is set only IP prefixes from that site are matched.
+
+        Parameters
+        ----------
+        ip_to_match: (IPv4Address, IPv6Address)
+            IP address to find prefix for
+        site_name: str
+            name of the site the prefix needs to be in
+
+        Returns
+        -------
+        (NBPrefix, None): longest matching IP prefix, or None if no matching prefix was found
+        """
 
         if ip_to_match is None:
             return
@@ -589,42 +749,57 @@ class VMWareHandler():
 
         site_object = None
         if site_name is not None:
-            site_object = self.inventory.get_by_data(NBSites, data={"name": site_name})
+            site_object = self.inventory.get_by_data(NBSite, data={"name": site_name})
 
             if site_object is None:
-                log.error(f"Unable to find site '{site_name}' for IP {ip_to_match}. Skipping to find Prefix for this IP.")
-
+                log.error(f"Unable to find site '{site_name}' for IP {ip_to_match}. "
+                          "Skipping to find Prefix for this IP.")
 
         current_longest_matching_prefix_length = 0
         current_longest_matching_prefix = None
 
-        for prefix in self.inventory.get_all_items(NBPrefixes):
+        for prefix in self.inventory.get_all_items(NBPrefix):
 
             if grab(prefix, "data.site") != site_object:
                 continue
 
-            prefix_network = grab(prefix, f"data.{NBPrefixes.primary_key}")
+            prefix_network = grab(prefix, f"data.{NBPrefix.primary_key}")
             if prefix_network is None:
                 continue
 
             if ip_to_match in prefix_network and \
-                prefix_network.prefixlen >= current_longest_matching_prefix_length:
+                    prefix_network.prefixlen >= current_longest_matching_prefix_length:
 
                 current_longest_matching_prefix_length = prefix_network.prefixlen
                 current_longest_matching_prefix = prefix
 
         return current_longest_matching_prefix
 
-    def add_device_vm_to_inventory(self, object_type, object_data, site_name, pnic_data=None, vnic_data=None, \
+    def add_device_vm_to_inventory(self, object_type, object_data, site_name, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None):
+        """
+        Add/update object in inventory based on gathered data.
 
-        if object_type not in [NBDevices, NBVMs]:
-            raise ValueError(f"Object must be a '{NBVMs.name}' or '{NBDevices.name}'.")
+        Parameters
+        ----------
+        object_type
+        object_data
+        site_name
+        pnic_data
+        vnic_data
+        nic_ips
+        p_ipv4
+        p_ipv6
+
+        """
+
+        if object_type not in [NBDevice, NBVM]:
+            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         if log.level == DEBUG3:
 
             log.debug3("function: add_device_vm_to_inventory")
-            log.debug3("Object type {object_type}")
+            log.debug3(f"Object type {object_type}")
             pprint.pprint(object_data)
             pprint.pprint(pnic_data)
             pprint.pprint(vnic_data)
@@ -639,14 +814,14 @@ class VMWareHandler():
         #   * try to find by primary IP
         ##################
 
-
         # check existing Devices for matches
         log.debug2(f"Trying to find a {object_type.name} based on the collected name, cluster, IP and MAC addresses")
 
         device_vm_object = self.inventory.get_by_data(object_type, data=object_data)
 
         if device_vm_object is not None:
-            log.debug2("Found a exact matching %s object: %s" % (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
+            log.debug2("Found a exact matching %s object: %s" %
+                       (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
 
         # keep searching if no exact match was found
         else:
@@ -654,14 +829,15 @@ class VMWareHandler():
             log.debug2(f"No exact match found. Trying to find {object_type.name} based on MAC addresses")
 
             # on VMs vnic data is used, on physical devices pnic data is used
-            mac_source_data = vnic_data if object_type == NBVMs else pnic_data
+            mac_source_data = vnic_data if object_type == NBVM else pnic_data
 
             nic_macs = [x.get("mac_address") for x in mac_source_data.values()]
 
             device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
 
         if device_vm_object is not None:
-            log.debug2("Found a matching %s object: %s" % (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
+            log.debug2("Found a matching %s object: %s" %
+                       (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
 
         # keep looking for devices with the same primary IP
         else:
@@ -669,7 +845,6 @@ class VMWareHandler():
             log.debug2(f"No match found. Trying to find {object_type.name} based on primary IP addresses")
 
             device_vm_object = self.get_object_based_on_primary_ip(object_type, p_ipv4, p_ipv6)
-
 
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
@@ -679,12 +854,12 @@ class VMWareHandler():
             device_vm_object.update(data=object_data, source=self)
 
         # compile all nic data into one dictionary
-        if object_type == NBVMs:
+        if object_type == NBVM:
             nic_data = vnic_data
-            interface_class = NBVMInterfaces
+            interface_class = NBVMInterface
         else:
             nic_data = {**pnic_data, **vnic_data}
-            interface_class = NBInterfaces
+            interface_class = NBInterface
 
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
 
@@ -709,7 +884,8 @@ class VMWareHandler():
                 try:
                     ip_interface_object = ip_interface(nic_ip)
                 except ValueError:
-                    log.error(f"IP '{nic_ip}' (nic_object.get_display_name()) does not appear to be a valid IP address. Skipping!")
+                    log.error(f"IP '{nic_ip}' (nic_object.get_display_name()) does not appear "
+                              "to be a valid IP address. Skipping!")
                     continue
 
                 nic_ip_data = {
@@ -717,7 +893,7 @@ class VMWareHandler():
                     "assigned_object_id": nic_object,
                 }
 
-                ip_object = self.inventory.add_update_object(NBIPAddresses, data=nic_ip_data, source=self)
+                ip_object = self.inventory.add_update_object(NBIPAddress, data=nic_ip_data, source=self)
 
                 log.debug2(f"Trying to find prefix for IP: {ip_interface_object}")
 
@@ -734,13 +910,13 @@ class VMWareHandler():
                 # matching prefix found, get data from prefix
                 if matching_ip_prefix is not None:
 
-                    this_prefix = grab(matching_ip_prefix, f"data.{NBPrefixes.primary_key}")
+                    this_prefix = grab(matching_ip_prefix, f"data.{NBPrefix.primary_key}")
                     log.debug2(f"Found IP '{nic_ip}' matches prefix '{this_prefix}' in site '{matching_site_name}'")
 
                     # check if prefix net size and ip address prefix length match
                     if this_prefix.prefixlen != ip_interface_object.network.prefixlen:
                         log.warning(f"IP prefix length of '{ip_interface_object}' ({nic_object.get_display_name()}) "
-                                    f"doesn't match network prefix length '{this_prefix.prefixlen}'!")
+                                    f"does not match network prefix length '{this_prefix.prefixlen}'!")
 
                     # get prefix data
                     prefix_vrf = grab(matching_ip_prefix, "data.vrf")
@@ -777,9 +953,8 @@ class VMWareHandler():
                     if len(data_dict.keys()) > 0:
                         ip_object.update(data=data_dict)
 
-
                 # continue if address is not a primary IP
-                if nic_ip not in [ p_ipv4, p_ipv6 ]:
+                if nic_ip not in [p_ipv4, p_ipv6]:
                     continue
 
                 # set/update/remove primary IP addresses
@@ -787,7 +962,7 @@ class VMWareHandler():
                 ip_version = ip_interface_object.ip.version
                 if self.set_primary_ip == "always":
 
-                    for object_type in [NBDevices, NBVMs]:
+                    for object_type in [NBDevice, NBVM]:
 
                         # new IPs don't need to be removed from other devices/VMs
                         if ip_object.is_new is True:
@@ -798,7 +973,7 @@ class VMWareHandler():
                             # device has no primary IP of this version
                             this_primary_ip = grab(devices_vms, f"data.primary_ip{ip_version}")
 
-                            # we found ourself
+                            # we found this exact object
                             if devices_vms == device_vm_object:
                                 continue
 
@@ -813,16 +988,23 @@ class VMWareHandler():
 
                 if set_this_primary_ip is True:
 
-                    log.debug(f"Setting IP '{nic_ip}' as primary IPv{ip_version} for '{device_vm_object.get_display_name()}")
-                    device_vm_object.update(data = {f"primary_ip{ip_version}": ip_object})
-
-                    #log.debug(f"Setting '{assigned_device_vm.get_display_name()}' attribute 'primary_ip{ip_version}' to '{ip.get_display_name()}'")
-                    #    assigned_device_vm.update(data = {f"primary_ip{ip_version}": ip})
-
+                    log.debug(f"Setting IP '{nic_ip}' as primary IPv{ip_version} for "
+                              f"'{device_vm_object.get_display_name()}")
+                    device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
 
         return
 
     def add_datacenter(self, obj):
+        """
+
+        Parameters
+        ----------
+        obj
+
+        Returns
+        -------
+
+        """
 
         name = get_string_or_none(grab(obj, "name"))
 
@@ -831,9 +1013,19 @@ class VMWareHandler():
 
         log.debug2(f"Parsing vCenter datacenter: {name}")
 
-        self.inventory.add_update_object(NBClusterGroups, data = { "name": name }, source=self)
+        self.inventory.add_update_object(NBClusterGroup, data={"name": name}, source=self)
 
     def add_cluster(self, obj):
+        """
+
+        Parameters
+        ----------
+        obj
+
+        Returns
+        -------
+
+        """
 
         name = get_string_or_none(grab(obj, "name"))
         group = get_string_or_none(grab(obj, "parent.parent.name"))
@@ -846,20 +1038,30 @@ class VMWareHandler():
         if self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
             return
 
-        site_name = self.get_site_name(NBClusters, name)
+        site_name = self.get_site_name(NBCluster, name)
 
         data = {
             "name": name,
-            "type": { "name": "VMware ESXi" },
-            "group": { "name": group },
-            "site": { "name": site_name}
+            "type": {"name": "VMware ESXi"},
+            "group": {"name": group},
+            "site": {"name": site_name}
         }
 
-        self.inventory.add_update_object(NBClusters, data = data, source=self)
+        self.inventory.add_update_object(NBCluster, data=data, source=self)
 
         self.permitted_clusters[name] = site_name
 
     def add_virtual_switch(self, obj):
+        """
+
+        Parameters
+        ----------
+        obj
+
+        Returns
+        -------
+
+        """
 
         uuid = get_string_or_none(grab(obj, "uuid"))
         name = get_string_or_none(grab(obj, "name"))
@@ -883,6 +1085,16 @@ class VMWareHandler():
             self.dvs_ports[uuid][port.key] = port
 
     def add_port_group(self, obj):
+        """
+
+        Parameters
+        ----------
+        obj
+
+        Returns
+        -------
+
+        """
 
         key = get_string_or_none(grab(obj, "key"))
         name = get_string_or_none(grab(obj, "name"))
@@ -911,13 +1123,25 @@ class VMWareHandler():
         }
 
     def add_host(self, obj):
+        """
+
+        Parameters
+        ----------
+        obj
+
+        Returns
+        -------
+
+        """
 
         name = get_string_or_none(grab(obj, "name"))
 
         # parse data
         log.debug2(f"Parsing vCenter host: {name}")
 
-        ###### Filtering
+        #
+        # Filtering
+        #
 
         # manage site and cluster
         cluster_name = get_string_or_none(grab(obj, "parent.name"))
@@ -935,17 +1159,19 @@ class VMWareHandler():
 
         # handle standalone hosts
         if cluster_name == name:
-            log.debug2(f"Host name and cluster name are equal '{cluster_name}'. Assuming this host is a 'standalone' host.")
+            log.debug2(f"Host name and cluster name are equal '{cluster_name}'. "
+                       f"Assuming this host is a 'standalone' host.")
 
         elif self.permitted_clusters.get(cluster_name) is None:
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
             return
 
         # get a site for this host
-        site_name = self.get_site_name(NBDevices, name, cluster_name)
+        site_name = self.get_site_name(NBDevice, name, cluster_name)
 
         if name in self.processed_host_names.get(site_name, list()):
-            log.warning(f"Host '{name}' for site '{site_name}' already parsed. Make sure to use unique host names. Skipping")
+            log.warning(f"Host '{name}' for site '{site_name}' already parsed. "
+                        "Make sure to use unique host names. Skipping")
             return
 
         # add host to processed list
@@ -971,16 +1197,17 @@ class VMWareHandler():
                     "name": site_name
                 }
             }
-            self.inventory.add_update_object(NBClusters, data=cluster_data, source=self)
+            self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
 
-
-        ###### Collecting data
+        #
+        # Collecting data
+        #
 
         # collect all necessary data
-        manufacturer =  get_string_or_none(grab(obj, "summary.hardware.vendor"))
-        model =  get_string_or_none(grab(obj, "summary.hardware.model"))
+        manufacturer = get_string_or_none(grab(obj, "summary.hardware.vendor"))
+        model = get_string_or_none(grab(obj, "summary.hardware.model"))
         product_name = get_string_or_none(grab(obj, "summary.config.product.name"))
-        product_version =  get_string_or_none(grab(obj, "summary.config.product.version"))
+        product_version = get_string_or_none(grab(obj, "summary.config.product.version"))
         platform = f"{product_name} {product_version}"
 
         # get status
@@ -999,7 +1226,7 @@ class VMWareHandler():
         # try to find serial
         serial = None
 
-        for serial_num_key in [ "EnclosureSerialNumberTag", "SerialNumberTag", "ServiceTag"]:
+        for serial_num_key in ["EnclosureSerialNumberTag", "SerialNumberTag", "ServiceTag"]:
             if serial_num_key in identifier_dict.keys():
                 serial = get_string_or_none(identifier_dict.get(serial_num_key))
                 break
@@ -1009,14 +1236,13 @@ class VMWareHandler():
 
         if bool(self.collect_hardware_asset_tag) is True and "AssetTag" in identifier_dict.keys():
 
-            banned_tags = [ "Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
-                            "to be filled by o.e.m.", "Unknown" ]
+            banned_tags = ["Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
+                           "to be filled by o.e.m.", "Unknown"]
 
             this_asset_tag = identifier_dict.get("AssetTag")
 
             if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
                 asset_tag = this_asset_tag
-
 
         # prepare host data model
         host_data = {
@@ -1280,25 +1506,35 @@ class VMWareHandler():
                     vnic_ips[vnic_name].append(int_v6)
 
                     # set first valid IPv6 address as primary IPv6
-                    # not the best way but maybe we can find infos in "spec.ipRouteSpec"
+                    # not the best way but maybe we can find more information in "spec.ipRouteSpec"
                     # about default route and we could use that to determine the correct IPv6 address
                     if vnic_is_primary is True and host_primary_ip6 is None:
                         host_primary_ip6 = int_v6
 
-
-
-        # add VM to inventory
-        self.add_device_vm_to_inventory(NBDevices, object_data=host_data, site_name=site_name, pnic_data=pnic_data_dict, \
-                                        vnic_data=vnic_data_dict, nic_ips=vnic_ips, \
+        # add host to inventory
+        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, site_name=site_name, pnic_data=pnic_data_dict,
+                                        vnic_data=vnic_data_dict, nic_ips=vnic_ips,
                                         p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6)
 
         return
 
     def add_virtual_machine(self, obj):
+        """
+
+        Parameters
+        ----------
+        obj
+
+        Returns
+        -------
+
+        """
 
         name = get_string_or_none(grab(obj, "name"))
 
-        ###### Filtering
+        #
+        # Filtering
+        #
 
         # get VM UUID
         vm_uuid = grab(obj, "config.uuid")
@@ -1312,7 +1548,7 @@ class VMWareHandler():
         status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
 
         # ignore offline VMs during first run
-        if self.parsing_vms_the_first_time == True and status == "offline":
+        if self.parsing_vms_the_first_time is True and status == "offline":
             log.debug2(f"Ignoring {status} VM '{name}' on first run")
             return
 
@@ -1327,7 +1563,8 @@ class VMWareHandler():
             return
 
         if name in self.processed_vm_names.get(cluster_name, list()):
-            log.warning(f"Virtual machine '{name}' for cluster '{cluster_name}' already parsed. Make sure to use unique VM names. Skipping")
+            log.warning(f"Virtual machine '{name}' for cluster '{cluster_name}' already parsed. "
+                        "Make sure to use unique VM names. Skipping")
             return
 
         # add host to processed list
@@ -1343,22 +1580,23 @@ class VMWareHandler():
         # add to processed VMs
         self.processed_vm_uuid.append(vm_uuid)
 
-
-        ###### Collect data
+        #
+        # Collect data
+        #
 
         # check if cluster is a Standalone ESXi
         site_name = self.permitted_clusters.get(cluster_name)
         if site_name is None:
-            site_name = self.get_site_name(NBClusters, cluster_name)
+            site_name = self.get_site_name(NBCluster, cluster_name)
 
         platform = grab(obj, "config.guestFullName")
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
-        disk = int(sum([ getattr(comp, "capacityInKB", 0) for comp in hardware_devices
+        disk = int(sum([getattr(comp, "capacityInKB", 0) for comp in hardware_devices
                        if isinstance(comp, vim.vm.device.VirtualDisk)
-                            ]) / 1024 / 1024)
+                        ]) / 1024 / 1024)
 
         annotation = get_string_or_none(grab(obj, "config.annotation"))
 
@@ -1378,7 +1616,6 @@ class VMWareHandler():
         if annotation is not None:
             vm_data["comments"] = annotation
 
-
         vm_primary_ip4 = None
         vm_primary_ip6 = None
         vm_default_gateway_ip4 = None
@@ -1390,13 +1627,10 @@ class VMWareHandler():
             # we found a default route
             if grab(route, "prefixLength") == 0:
 
-                ip_a = None
                 try:
                     ip_a = ip_address(grab(route, "network"))
                 except ValueError:
                     continue
-
-                gateway_ip_address = None
 
                 try:
                     gateway_ip_address = ip_address(grab(route, "gateway.ipAddress"))
@@ -1449,8 +1683,8 @@ class VMWareHandler():
             #   setting it here fix to 1500, need to investigate if retrieving
             #   VM mtu is even possible
             int_mtu = 1500
-            #int_dvswitch_uuid = grab(vm_device, "backing.port.switchUuid")
-            #if int_dvswitch_uuid is not None:
+            # int_dvswitch_uuid = grab(vm_device, "backing.port.switchUuid")
+            # if int_dvswitch_uuid is not None:
             #    int_mtu = self.dvs_mtu.get(int_dvswitch_uuid)
 
             int_connected = grab(vm_device, "connectable.connected", fallback=False)
@@ -1465,7 +1699,6 @@ class VMWareHandler():
             int_description = f"{int_label} ({device_class})"
             if int_network_vlan_ids is not None and len(int_network_vlan_ids) == 1:
                 int_description = f"{int_description} (vlan ID: {int_network_vlan_ids[0]})"
-
 
             # find corresponding guest NIC and get IP addresses and connected status
             for guest_nic in grab(obj, "guest.net", fallback=list()):
@@ -1489,21 +1722,18 @@ class VMWareHandler():
                     nic_ips[int_full_name].append(int_ip_address)
 
                     # check if primary gateways are in the subnet of this IP address
-                    # it it matches IP gets chosen as primary IP
-                    # ToDo:
-                    #   * is this affected by primary IP setting?
+                    # if it matches IP gets chosen as primary IP
                     if vm_default_gateway_ip4 is not None and \
-                        vm_default_gateway_ip4 in ip_interface(int_ip_address).network and \
-                        vm_primary_ip4 is None:
+                            vm_default_gateway_ip4 in ip_interface(int_ip_address).network and \
+                            vm_primary_ip4 is None:
 
                         vm_primary_ip4 = int_ip_address
 
                     if vm_default_gateway_ip6 is not None and \
-                        vm_default_gateway_ip6 in ip_interface(int_ip_address).network and \
-                        vm_primary_ip6 is None:
+                            vm_default_gateway_ip6 in ip_interface(int_ip_address).network and \
+                            vm_primary_ip6 is None:
 
                         vm_primary_ip6 = int_ip_address
-
 
             vm_nic_data = {
                 "name": int_full_name,
@@ -1547,22 +1777,28 @@ class VMWareHandler():
             nic_data[int_full_name] = vm_nic_data
 
         # add VM to inventory
-        self.add_device_vm_to_inventory(NBVMs, object_data=vm_data, site_name=site_name, vnic_data=nic_data, nic_ips=nic_ips, \
-                                        p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6)
+        self.add_device_vm_to_inventory(NBVM, object_data=vm_data, site_name=site_name, vnic_data=nic_data,
+                                        nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6)
 
         return
 
     def update_basic_data(self):
+        """
+
+        Returns
+        -------
+
+        """
 
         # add source identification tag
-        self.inventory.add_update_object(NBTags, data={
+        self.inventory.add_update_object(NBTag, data={
             "name": self.source_tag,
             "description": f"Marks sources synced from vCenter {self.name} "
                            f"({self.host_fqdn}) to this NetBox Instance."
         })
 
         # update virtual site if present
-        this_site_object = self.inventory.get_by_data(NBSites, data = {"name": self.site_name})
+        this_site_object = self.inventory.get_by_data(NBSite, data={"name": self.site_name})
 
         if this_site_object is not None:
             this_site_object.update(data={
@@ -1572,7 +1808,7 @@ class VMWareHandler():
                             "and have no predefined site assigned."
             })
 
-        server_role_object = self.inventory.get_by_data(NBDeviceRoles, data = {"name": "Server"})
+        server_role_object = self.inventory.get_by_data(NBDeviceRole, data={"name": "Server"})
 
         if server_role_object is not None:
             server_role_object.update(data={
@@ -1583,4 +1819,3 @@ class VMWareHandler():
 
 
 # EOF
-
