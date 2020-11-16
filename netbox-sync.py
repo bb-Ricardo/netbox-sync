@@ -113,7 +113,7 @@ def main():
     # collect all dependent object classes
     log.info("Querying necessary objects from Netbox. This might take a while.")
     for source in sources:
-        nb_handler.query_current_data(source.dependend_netbox_objects)
+        nb_handler.query_current_data(source.dependent_netbox_objects)
 
     log.info("Finished querying necessary objects from Netbox")
 

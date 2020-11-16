@@ -699,7 +699,7 @@ class NetBoxHandler:
 
         # update all items in NetBox accordingly
         today = datetime.now()
-        for nb_object_sub_class in reversed(self.resolved_dependencies):
+        for nb_object_sub_class in self.resolved_dependencies:
 
             for object in self.inventory.get_all_items(nb_object_sub_class):
 

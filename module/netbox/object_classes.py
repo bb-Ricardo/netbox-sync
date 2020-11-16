@@ -2,7 +2,7 @@
 import json
 from ipaddress import ip_network, IPv4Network, IPv6Network
 
-from module.common.misc import grab, do_error_exit, dump
+from module.common.misc import grab, do_error_exit
 from module.common.logging import get_logger
 
 log = get_logger()
@@ -142,7 +142,7 @@ class NetBoxObject:
                     if isinstance(data_value, (NetBoxObject, IPv4Network, IPv6Network)):
                         data_value = repr(data_value)
 
-                    if isinstance(data_value, NBObjectList):
+                    elif isinstance(data_value, NBObjectList):
                         data_value = [repr(x) for x in data_value]
 
                     data[data_key] = data_value
@@ -400,15 +400,11 @@ class NetBoxObject:
 
         my_name = this_data_set.get(self.primary_key)
 
-        if my_name is None:
-            log.error(f"Unable to determine object name with primary key '{self.primary_key}' "
-                      f"from {str(this_data_set)}")
-            return None
-
         secondary_key = getattr(self, "secondary_key", None)
         enforce_secondary_key = getattr(self, "enforce_secondary_key", False)
 
-        if secondary_key is not None and (enforce_secondary_key is True or including_second_key is True):
+        if my_name is not None and secondary_key is not None and \
+                (enforce_secondary_key is True or including_second_key is True):
 
             secondary_key_value = this_data_set.get(secondary_key)
             org_secondary_key_value = str(secondary_key_value)
@@ -747,9 +743,6 @@ class NBObjectList(list):
     def get_display_name(self):
 
         return sorted([x.get_display_name() for x in self])
-
-    def __iter__(self):
-        super().__iter__()
 
 
 class NBTag(NetBoxObject):
