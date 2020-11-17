@@ -50,6 +50,10 @@ def parse_command_line(version=None, self_description=None, version_date=None, d
     parser.add_argument("-l", "--log_level", choices=valid_log_levels, dest="log_level",
                         help="set log level (overrides config)")
 
+    parser.add_argument("-n", "--dry_run", action="store_true",
+                        help="Operate as usual but don't change anything in NetBox. Great if you want to test "
+                             "and see what would be changed.")
+
     parser.add_argument("-p", "--purge", action="store_true",
                         help="Remove (almost) all synced objects which were create by this script. "
                              "This is helpful if you want to start fresh or stop using this script.")

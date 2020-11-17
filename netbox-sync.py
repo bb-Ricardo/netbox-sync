@@ -105,6 +105,10 @@ def main():
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
+
+        if args.dry_run is True:
+            do_error_exit("Purge not available with option 'dry_run'")
+
         nb_handler.just_delete_all_the_things()
 
         # that's it, we are done here
@@ -141,6 +145,11 @@ def main():
 
     # update all IP addresses
     inventory.query_ptr_records_for_all_ips()
+
+    if args.dry_run is True:
+        log.info("This is a dry run and we stop here. Running time: %s" %
+                 get_relative_time(datetime.now() - start_time))
+        exit(0)
 
     # update data in NetBox
     nb_handler.update_instance()
