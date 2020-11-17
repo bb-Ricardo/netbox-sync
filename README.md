@@ -249,7 +249,7 @@ This is done to extract name and VLAN IDs from each port group
 #### 4. Parse a vCenter (ESXi) host
 
 First host is filtered:
-* host has a cluster and this cluser is permitted
+* host has a cluster and this cluster is permitted
 * skip host with same name and site, we already parsed it (use unique host names)
 * does the host pass the `host_include_filter` and `host_exclude_filter`
 

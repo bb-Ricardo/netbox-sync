@@ -40,7 +40,7 @@ def normalize_mac_address(mac_address=None):
 
     # add colons to interface address
     if ":" not in mac_address:
-        mac_address = ':'.join(mac_address[i:i+2] for i in range(0,len(mac_address),2))
+        mac_address = ':'.join(mac_address[i:i+2] for i in range(0, len(mac_address), 2))
 
     return mac_address
 
@@ -143,7 +143,7 @@ def perform_ptr_lookups(ips, dns_servers=None):
     results = loop.run_until_complete(queue)
 
     # return dictionary instead of a list of dictionaries
-    return {k:v for x in results for k,v in x.items()}
+    return {k: v for x in results for k, v in x.items()}
 
 
 async def reverse_lookup(resolver, ip):

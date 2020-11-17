@@ -362,13 +362,13 @@ class NetBoxObject:
                 current_value_str = str(current_value.get("address"))
 
             else:
-                current_value_str = str(current_value).replace("\r","")
+                current_value_str = str(current_value).replace("\r", "")
 
             # get new value str
             if isinstance(new_value, (NetBoxObject, NBObjectList)):
                 new_value_str = str(new_value.get_display_name())
             else:
-                new_value_str = str(new_value).replace("\r","")
+                new_value_str = str(new_value).replace("\r", "")
 
             # just check again if values might match now
             if current_value_str == new_value_str:
@@ -1152,25 +1152,25 @@ class NBIPAddress(NetBoxObject):
             do_error_exit(f"Error while resolving relations for {self.get_display_name()}")
 
         if isinstance(o_id, int):
-            self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), id=o_id)
+            self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
 
         super().resolve_relations()
 
     def update(self, data=None, read_from_netbox=False, source=None):
 
         object_type = data.get("assigned_object_type")
-        object = data.get("assigned_object_id")
+        assigned_object = data.get("assigned_object_id")
 
         # we got an object data structure where we have to find the object
-        if read_from_netbox is False and object is not None:
+        if read_from_netbox is False and assigned_object is not None:
 
-            if not isinstance(object, NetBoxObject):
+            if not isinstance(assigned_object, NetBoxObject):
 
                 data["assigned_object_id"] = \
-                    self.inventory.add_update_object(self.data_model_relation.get(object_type), data=object)
+                    self.inventory.add_update_object(self.data_model_relation.get(object_type), data=assigned_object)
 
             else:
-                data["assigned_object_type"] = self.data_model_relation.get(type(object))
+                data["assigned_object_type"] = self.data_model_relation.get(type(assigned_object))
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 

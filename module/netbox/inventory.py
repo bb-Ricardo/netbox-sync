@@ -28,7 +28,7 @@ class NetBoxInventory:
 
             self.base_structure[object_type.name] = list()
 
-    def get_by_id(self, object_type, id=None):
+    def get_by_id(self, object_type, nb_id=None):
         """
         Try to find an object of $object_type with ID $id in inventory
 
@@ -36,7 +36,7 @@ class NetBoxInventory:
         ----------
         object_type: NetBoxObject sub class
             object type to find
-        id: int
+        nb_id: int
             NetBox ID of object
 
         Returns
@@ -48,13 +48,13 @@ class NetBoxInventory:
             raise AttributeError("'%s' object must be a sub class of '%s'." %
                                  (object_type.__name__, NetBoxObject.__name__))
 
-        if id is None or self.base_structure[object_type.name] is None:
+        if nb_id is None or self.base_structure[object_type.name] is None:
             return None
 
-        for object in self.base_structure[object_type.name]:
+        for this_object in self.base_structure[object_type.name]:
 
-            if object.nb_id == id:
-                return object
+            if this_object.nb_id == nb_id:
+                return this_object
 
     def get_by_data(self, object_type, data=None):
         """
@@ -85,32 +85,32 @@ class NetBoxInventory:
         # shortcut if data contains valid id
         data_id = data.get("id")
         if data_id is not None and data_id != 0:
-            return self.get_by_id(object_type, id=data_id)
+            return self.get_by_id(object_type, nb_id=data_id)
 
         # try to find by primary/secondary key
         if data.get(object_type.primary_key) is not None:
             object_name_to_find = None
-            for object in self.get_all_items(object_type):
+            for this_object in self.get_all_items(object_type):
 
                 if object_name_to_find is None:
-                    object_name_to_find = object.get_display_name(data, including_second_key=True)
+                    object_name_to_find = this_object.get_display_name(data, including_second_key=True)
 
-                if object_name_to_find == object.get_display_name(including_second_key=True):
-                    return object
+                if object_name_to_find == this_object.get_display_name(including_second_key=True):
+                    return this_object
 
         # try to match all data attributes
         else:
 
-            for object in self.get_all_items(object_type):
+            for this_object in self.get_all_items(object_type):
                 all_items_match = True
                 for attr_name, attr_value in data.items():
 
-                    if object.data.get(attr_name) != attr_value:
+                    if this_object.data.get(attr_name) != attr_value:
                         all_items_match = False
                         break
 
                 if all_items_match is True:
-                    return object
+                    return this_object
 
         return None
 
@@ -185,9 +185,9 @@ class NetBoxInventory:
         log.debug("Start resolving relations")
         for object_type in NetBoxObject.__subclasses__():
 
-            for object in self.get_all_items(object_type):
+            for this_object in self.get_all_items(object_type):
 
-                object.resolve_relations()
+                this_object.resolve_relations()
 
         log.debug("Finished resolving relations")
 
@@ -210,13 +210,13 @@ class NetBoxInventory:
 
         return self.base_structure.get(object_type.name, list())
 
-    def get_all_interfaces(self, object):
+    def get_all_interfaces(self, this_object):
         """
         Return all interfaces items for a NBVM, NBDevice object
 
         Parameters
         ----------
-        object: (NBVM, NBDevice)
+        this_object: (NBVM, NBDevice)
             object instance to return interfaces for
 
         Returns
@@ -224,19 +224,19 @@ class NetBoxInventory:
         list: of all interfaces found for this object
         """
 
-        if not isinstance(object, (NBVM, NBDevice)):
+        if not isinstance(this_object, (NBVM, NBDevice)):
             raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         interfaces = list()
-        if isinstance(object, NBVM):
-            for int in self.get_all_items(NBVMInterface):
-                if grab(int, "data.virtual_machine") == object:
-                    interfaces.append(int)
+        if isinstance(this_object, NBVM):
+            for interface in self.get_all_items(NBVMInterface):
+                if grab(interface, "data.virtual_machine") == this_object:
+                    interfaces.append(interface)
 
-        if isinstance(object, NBDevice):
-            for int in self.get_all_items(NBInterface):
-                if grab(int, "data.device") == object:
-                    interfaces.append(int)
+        if isinstance(this_object, NBDevice):
+            for interface in self.get_all_items(NBInterface):
+                if grab(interface, "data.device") == this_object:
+                    interfaces.append(interface)
 
         return interfaces
 
@@ -252,26 +252,26 @@ class NetBoxInventory:
         Parameters
         ----------
         netbox_handler: NetBoxHandler
-            tha object instance of a NetBox handler to get the tag names from
+            the object instance of a NetBox handler to get the tag names from
         """
 
         for object_type in NetBoxObject.__subclasses__():
 
-            for object in self.get_all_items(object_type):
+            for this_object in self.get_all_items(object_type):
 
                 # if object was found in source
-                if object.source is not None:
-                    object.add_tags([netbox_handler.primary_tag, object.source.source_tag])
+                if this_object.source is not None:
+                    this_object.add_tags([netbox_handler.primary_tag, this_object.source.source_tag])
 
                     # if object was orphaned remove tag again
-                    if netbox_handler.orphaned_tag in object.get_tags():
-                        object.remove_tags(netbox_handler.orphaned_tag)
+                    if netbox_handler.orphaned_tag in this_object.get_tags():
+                        this_object.remove_tags(netbox_handler.orphaned_tag)
 
                 # if object was tagged by this program in previous runs but is not present
                 # anymore then add the orphaned tag
                 else:
-                    if netbox_handler.primary_tag in object.get_tags():
-                        object.add_tags(netbox_handler.orphaned_tag)
+                    if netbox_handler.primary_tag in this_object.get_tags():
+                        this_object.add_tags(netbox_handler.orphaned_tag)
 
     def query_ptr_records_for_all_ips(self):
         """
@@ -343,8 +343,8 @@ class NetBoxInventory:
 
             output[nb_object_class.name] = list()
 
-            for object in self.base_structure[nb_object_class.name]:
-                output[nb_object_class.name].append(object.to_dict())
+            for this_object in self.base_structure[nb_object_class.name]:
+                output[nb_object_class.name].append(this_object.to_dict())
 
         return output
 

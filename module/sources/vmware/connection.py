@@ -448,7 +448,7 @@ class VMWareHandler:
 
         return site_name
 
-    def get_object_based_on_macs(self, object_type, mac_list=list()):
+    def get_object_based_on_macs(self, object_type, mac_list=None):
         """
         Try to find a NetBox object based on list of MAC addresses.
 
@@ -483,7 +483,7 @@ class VMWareHandler:
         if object_type not in [NBDevice, NBVM]:
             raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
-        if len(mac_list) == 0:
+        if mac_list is None or not isinstance(mac_list, list) or len(mac_list) == 0:
             return
 
         interface_typ = NBInterface if object_type == NBDevice else NBVMInterface
@@ -491,16 +491,16 @@ class VMWareHandler:
         objects_with_matching_macs = dict()
         matching_object = None
 
-        for int in self.inventory.get_all_items(interface_typ):
+        for interface in self.inventory.get_all_items(interface_typ):
 
-            if grab(int, "data.mac_address") in mac_list:
+            if grab(interface, "data.mac_address") in mac_list:
 
-                matching_object = grab(int, f"data.{int.secondary_key}")
+                matching_object = grab(interface, f"data.{interface.secondary_key}")
                 if matching_object is None:
                     continue
 
                 log.debug2("Found matching MAC '%s' on %s '%s'" %
-                           (grab(int, "data.mac_address"), object_type.name,
+                           (grab(interface, "data.mac_address"), object_type.name,
                             matching_object.get_display_name(including_second_key=True)))
 
                 if objects_with_matching_macs.get(matching_object) is None:
@@ -574,7 +574,7 @@ class VMWareHandler:
                     ip = grab(device_primary_ip, "address")
 
                 elif isinstance(device_primary_ip, int):
-                    ip = self.inventory.get_by_id(NBIPAddress, id=device_primary_ip)
+                    ip = self.inventory.get_by_id(NBIPAddress, nb_id=device_primary_ip)
                     ip = grab(ip, "data.address")
 
                 if ip is not None and ip.split("/")[0] == ip_needle:
@@ -606,7 +606,7 @@ class VMWareHandler:
                            f"based on the primary IPv6 '{primary_ip6}'")
                 return device
 
-    def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=dict()):
+    def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=None):
         """
         Try to match current object interfaces to discovered ones. This will be done
         by multiple approaches. Order as following listing whatever matches first will be chosen.
@@ -648,10 +648,10 @@ class VMWareHandler:
         if not isinstance(device_vm_object, (NBDevice, NBVM)):
             raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
-        if not isinstance(interface_data_dict, dict):
+        if interface_data_dict is not None and not isinstance(interface_data_dict, dict):
             raise ValueError(f"Value for 'interface_data_dict' must be a dict, got: {interface_data_dict}")
 
-        log.debug2("Trying to match current object interfaces in NetBox with discovered interfaces")
+        log.debug2("Trying to match current this_object interfaces in NetBox with discovered interfaces")
 
         current_object_interfaces = {
             "virtual": dict(),
@@ -663,19 +663,19 @@ class VMWareHandler:
         return_data = dict()
 
         # grab current data
-        for int in self.inventory.get_all_interfaces(device_vm_object):
-            int_mac = grab(int, "data.mac_address")
-            int_name = grab(int, "data.name")
+        for interface in self.inventory.get_all_interfaces(device_vm_object):
+            int_mac = grab(interface, "data.mac_address")
+            int_name = grab(interface, "data.name")
             int_type = "virtual"
-            if "virtual" not in str(grab(int, "data.type", fallback="virtual")):
+            if "virtual" not in str(grab(interface, "data.type", fallback="virtual")):
                 int_type = "physical"
 
             if int_mac is not None:
-                current_object_interfaces[int_type][int_mac] = int
-                current_object_interfaces[int_mac] = int
+                current_object_interfaces[int_type][int_mac] = interface
+                current_object_interfaces[int_mac] = interface
 
             if int_name is not None:
-                current_object_interfaces[int_name] = int
+                current_object_interfaces[int_name] = interface
                 current_object_interface_names.append(int_name)
 
         log.debug2("Found '%d' NICs in Netbox for '%s'" %
@@ -753,7 +753,7 @@ class VMWareHandler:
             return
 
         if not isinstance(ip_to_match, (IPv4Address, IPv6Address)):
-            raise ValueError("Value of 'ip_to_match' need to be an IPv4Address or IPv6Address object.")
+            raise ValueError("Value of 'ip_to_match' need to be an IPv4Address or IPv6Address this_object.")
 
         site_object = None
         if site_name is not None:

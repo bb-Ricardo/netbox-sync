@@ -61,7 +61,7 @@ def validate_source(source_class_object=None, state="pre"):
         if not isinstance(value, value_type):
             raise ValueError(f"Value for attribute '{attr}' needs to be {value_type}")
 
-        if value_type in [list,str] and len(value) == 0:
+        if value_type in [list, str] and len(value) == 0:
             raise ValueError(f"Value for attribute '{attr}' can't be empty.")
 
 
@@ -126,7 +126,7 @@ def instantiate_sources(config_handler=None, inventory=None):
 
         source_config = get_config(config_handler, section=source_section, valid_settings=source_class.settings)
 
-        source_handler = source_class(name=source_section.replace("source/",""),
+        source_handler = source_class(name=source_section.replace("source/", ""),
                                       inventory=inventory,
                                       settings=source_config)
 

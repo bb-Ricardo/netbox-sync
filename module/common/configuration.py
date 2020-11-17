@@ -93,14 +93,14 @@ def get_config(config_handler=None, section=None, valid_settings=None):
 
     """
 
-    def get_config_option(section, item, default=None):
+    def get_config_option(this_section, item, default=None):
 
         if isinstance(default, bool):
-            value = config_handler.getboolean(section, item, fallback=default)
+            value = config_handler.getboolean(this_section, item, fallback=default)
         elif isinstance(default, int):
-            value = config_handler.getint(section, item, fallback=default)
+            value = config_handler.getint(this_section, item, fallback=default)
         else:
-            value = config_handler.get(section, item, fallback=default)
+            value = config_handler.get(this_section, item, fallback=default)
 
         if value == "":
             value = None
@@ -113,7 +113,7 @@ def get_config(config_handler=None, section=None, valid_settings=None):
             if sensitive_item.lower() in item.lower():
                 value = value[0:3] + "***"
 
-        log.debug(f"Config: {section}.{item} = {value}")
+        log.debug(f"Config: {this_section}.{item} = {value}")
 
     config_dict = {}
 

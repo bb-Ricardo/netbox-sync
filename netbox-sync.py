@@ -25,8 +25,6 @@ from module.netbox.object_classes import *
 from module.sources import instantiate_sources
 
 
-import pprint
-
 __version__ = "0.0.1"
 __version_date__ = "2020-10-01"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
