@@ -103,8 +103,8 @@ class NetBoxHandler:
 
     def setup_caching(self):
         """
-        Validate if all requirements are met to log NetBox data.
-        If a condition fails caching is switched of.
+        Validate if all requirements are met to cache NetBox data.
+        If a condition fails, caching is switched of.
         """
 
         cache_folder_name = "cache"

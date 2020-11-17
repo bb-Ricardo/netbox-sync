@@ -9,7 +9,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 self_description = """
-Sync objects from various sources to Netbox
+Sync objects from various sources to NetBox
 """
 
 
@@ -42,17 +42,7 @@ default_config_file_path = "./settings.ini"
 """
 ToDo:
 * documentation
-    * describe migration (rename tags)
-    * proper naming to assign sites to clusters
-    * connection details
-    * installation
-    * Standalone Host declaration
     * source module structure
-    * how a vm is picked
-    * how interfaces are named
-    * how objects are abducted (taken over by this program)
-    * thanks to original Owner of ideas
-    * ensure NTP is set up properly between all instances (pruning delay)
 * test all log levels
 * check/fix ToDo statements
 """
