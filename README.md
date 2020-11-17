@@ -76,5 +76,7 @@ If you migrate from https://github.com/synackray/vcenter-netbox-sync do followin
 ## TESTING
 It is recommended to set log level to "DEBUG2" this way the program should tell you what is happening and why
 
-# Licenses
- APACHE (probably)
+# License
+>You can check out the full license [here](LICENSE.txt)
+
+This project is licensed under the terms of the **MIT** license.
