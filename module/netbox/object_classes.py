@@ -378,7 +378,7 @@ class NetBoxObject:
             self.updated_items.append(key)
 
             if self.is_new is False:
-                log.debug(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
+                log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
                           f"'{current_value_str}' to '{new_value_str}'")
 
             self.resolve_relations()
@@ -622,7 +622,7 @@ class NetBoxObject:
             self.data["tags"] = new_tags
             self.updated_items.append("tags")
 
-            log.debug(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from "
+            log.info(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from "
                       f"'{current_tags.get_display_name()}' to '{new_tags.get_display_name()}'")
 
     def add_tags(self, tags_to_add):
@@ -721,7 +721,7 @@ class NetBoxObject:
             return
 
         # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
-        log.debug(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
+        log.info(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
         self.unset_items.append(attribute_name)
 
     def get_nb_reference(self):

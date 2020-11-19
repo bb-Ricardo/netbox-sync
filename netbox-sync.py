@@ -32,18 +32,8 @@ __description__ = "NetBox Sync"
 __license__ = "MIT"
 __url__ = "https://github.com/bb-ricardo/netbox-sync"
 
-
 default_log_level = "INFO"
 default_config_file_path = "./settings.ini"
-
-
-"""
-ToDo:
-* documentation
-    * source module structure
-* test all log levels
-* check/fix ToDo statements
-"""
 
 
 def main():

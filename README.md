@@ -85,9 +85,9 @@ A short description can be found [here](https://netbox.readthedocs.io/en/stable/
 
 ```
 usage: netbox-sync.py [-h] [-c settings.ini]
-                      [-l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}] [-p]
+                      [-l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}] [-n] [-p]
 
-Sync objects from various sources to Netbox
+Sync objects from various sources to NetBox
 
 Version: 0.0.1 (2020-10-01)
 
@@ -99,6 +99,9 @@ optional arguments:
                         './settings.ini'
   -l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}, --log_level {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}
                         set log level (overrides config)
+  -n, --dry_run         Operate as usual but don't change anything in NetBox.
+                        Great if you want to test and see what would be
+                        changed.
   -p, --purge           Remove (almost) all synced objects which were create
                         by this script. This is helpful if you want to start
                         fresh or stop using this script.

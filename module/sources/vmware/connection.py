@@ -648,7 +648,7 @@ class VMWareHandler:
         if not isinstance(device_vm_object, (NBDevice, NBVM)):
             raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
-        if interface_data_dict is not None and not isinstance(interface_data_dict, dict):
+        if not isinstance(interface_data_dict, dict):
             raise ValueError(f"Value for 'interface_data_dict' must be a dict, got: {interface_data_dict}")
 
         log.debug2("Trying to match current this_object interfaces in NetBox with discovered interfaces")
@@ -1620,6 +1620,9 @@ class VMWareHandler:
             log.debug2(f"Ignoring {status} VM '{name}' on first run")
             return
 
+        # add to processed VMs
+        self.processed_vm_uuid.append(vm_uuid)
+
         # check VM cluster
         cluster_name = get_string_or_none(grab(obj, "runtime.host.parent.name"))
         if cluster_name is None:
@@ -1644,9 +1647,6 @@ class VMWareHandler:
         # filter VMs by name
         if self.passes_filter(name, self.vm_include_filter, self.vm_exclude_filter) is False:
             return
-
-        # add to processed VMs
-        self.processed_vm_uuid.append(vm_uuid)
 
         #
         # Collect data

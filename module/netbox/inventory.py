@@ -169,11 +169,11 @@ class NetBoxInventory:
             this_object = object_type(data, read_from_netbox=read_from_netbox, inventory=self, source=source)
             self.base_structure[object_type.name].append(this_object)
             if read_from_netbox is False:
-                log.debug(f"Created new {this_object.name} object: {this_object.get_display_name()}")
+                log.info(f"Created new {this_object.name} object: {this_object.get_display_name()}")
 
         else:
             this_object.update(data, read_from_netbox=read_from_netbox, source=source)
-            log.debug2("Updated %s object: %s" % (this_object.name, this_object.get_display_name()))
+            log.debug("Updated %s object: %s" % (this_object.name, this_object.get_display_name()))
 
         return this_object
 

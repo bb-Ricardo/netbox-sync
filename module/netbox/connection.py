@@ -44,7 +44,8 @@ class NetBoxHandler:
         "prune_delay_in_days": 30,
         "default_netbox_result_limit": 200,
         "timeout": 30,
-        "max_retry_attempts": 4
+        "max_retry_attempts": 4,
+        "use_caching": True
     }
 
     # This tag gets added to all objects create/updated/inherited by this program
@@ -53,8 +54,8 @@ class NetBoxHandler:
     # all objects which have a primary tag but not present in any source anymore will get this tag assigned
     orphaned_tag = f"{primary_tag}: Orphaned"
 
+    # cache directory path
     cache_directory = None
-    use_netbox_caching = True
 
     # this is only used to speed up testing, NEVER SET TO True IN PRODUCTION
     testing_cache = False
@@ -107,6 +108,9 @@ class NetBoxHandler:
         If a condition fails, caching is switched of.
         """
 
+        if self.use_caching is False:
+            return
+
         cache_folder_name = "cache"
 
         base_dir = os.sep.join(__file__.split(os.sep)[0:-3])
@@ -118,7 +122,7 @@ class NetBoxHandler:
         # check if directory is a file
         if os.path.isfile(self.cache_directory):
             log.warning(f"The cache directory ({self.cache_directory}) seems to be file.")
-            self.use_netbox_caching = False
+            self.use_caching = False
 
         # check if directory exists
         if not os.path.exists(self.cache_directory):
@@ -127,17 +131,17 @@ class NetBoxHandler:
                 os.makedirs(self.cache_directory, 0o700)
             except OSError:
                 log.warning(f"Unable to create cache directory: {self.cache_directory}")
-                self.use_netbox_caching = False
+                self.use_caching = False
             except Exception as e:
                 log.warning(f"Unknown exception while creating cache directory {self.cache_directory}: {e}")
-                self.use_netbox_caching = False
+                self.use_caching = False
 
         # check if directory is writable
         if not os.access(self.cache_directory, os.X_OK | os.W_OK):
             log.warning(f"Error writing to cache directory: {self.cache_directory}")
-            self.use_netbox_caching = False
+            self.use_caching = False
 
-        if self.use_netbox_caching is False:
+        if self.use_caching is False:
             log.warning("NetBox caching DISABLED")
         else:
             log.debug(f"Successfully configured cache directory: {self.cache_directory}")
@@ -252,6 +256,10 @@ class NetBoxHandler:
             params = dict()
 
         if req_type == "GET":
+
+            if params is None:
+                params = dict()
+
             if "limit" not in params.keys():
                 params["limit"] = self.default_netbox_result_limit
 
@@ -403,7 +411,7 @@ class NetBoxHandler:
             latest_update = None
 
             # check if cache file is accessible
-            if self.use_netbox_caching is True:
+            if self.use_caching is True:
                 cache_this_class = True
 
                 if os.path.exists(cache_file) and not os.access(cache_file, os.R_OK):
@@ -542,7 +550,7 @@ class NetBoxHandler:
                            "DO NOT change this tag, otherwise syncing can't keep track of deleted objects."
         })
 
-    def update_object(self, nb_object_sub_class, unset=False):
+    def update_object(self, nb_object_sub_class, unset=False, last_run=False):
         """
         Iterate over all objects of a certain NetBoxObject sub class and add/update them.
         But first update objects which this object class depends on.
@@ -555,6 +563,8 @@ class NetBoxHandler:
             NetBox objects to update
         unset: bool
             True if only unset items should be deleted
+        last_run: bool
+            True if this will be the last update run. Needed to assign primary_ip4/6 properly
 
         """
 
@@ -572,7 +582,14 @@ class NetBoxHandler:
                 if len(this_object.unset_items) == 0:
                     continue
 
-                unset_data = {x: None for x in this_object.unset_items}
+                unset_data = dict()
+                for unset_item in this_object.unset_items:
+
+                    key_data_type = grab(this_object, f"data_model.{unset_item}")
+                    if key_data_type in NBObjectList.__subclasses__:
+                        unset_data[unset_item] = []
+                    else:
+                        unset_data[unset_item] = None
 
                 log.info("Updating NetBox '%s' object '%s' with data: %s" %
                          (this_object.name, this_object.get_display_name(), unset_data))
@@ -599,7 +616,10 @@ class NetBoxHandler:
 
                     if isinstance(value, (NetBoxObject, NBObjectList)):
 
-                        if value.get_nb_reference() is None:
+                        # resolve dependency issues in last run
+                        # primary IP always set in last run
+                        if value.get_nb_reference() is None or \
+                                (key.startswith("primary_ip") and last_run is False):
                             unresolved_dependency_data[key] = value
                         else:
                             data_to_patch[key] = value.get_nb_reference()
@@ -677,7 +697,7 @@ class NetBoxHandler:
         log.debug("Third run, update all items with previous unresolved items")
         self.resolved_dependencies = set()
         for nb_object_sub_class in NetBoxObject.__subclasses__():
-            self.update_object(nb_object_sub_class)
+            self.update_object(nb_object_sub_class, last_run=True)
 
         # check that all updated items are resolved relations
         for nb_object_sub_class in NetBoxObject.__subclasses__():
@@ -694,10 +714,6 @@ class NetBoxHandler:
         Prune objects in NetBox if they are no longer present in any source.
         First they will be marked as Orphaned and after X days they will be
         deleted from NetBox.
-
-        ToDo:
-            * remove all dependent items of VMs and devices if objects are meant to
-              be deleted
         """
 
         if self.prune_enabled is False:
@@ -708,7 +724,7 @@ class NetBoxHandler:
 
         # update all items in NetBox accordingly
         today = datetime.now()
-        for nb_object_sub_class in self.resolved_dependencies:
+        for nb_object_sub_class in reversed(NetBoxObject.__subclasses__()):
 
             for this_object in self.inventory.get_all_items(nb_object_sub_class):
 
@@ -743,6 +759,17 @@ class NetBoxHandler:
 
                     log.info(f"{nb_object_sub_class.name.capitalize()} '{this_object.get_display_name()}' is orphaned "
                              f"for {days_since_last_update} days and will be deleted.")
+
+                    # delete device/VM interfaces first. interfaces have no last_updated attribute
+                    if isinstance(this_object, (NBVM, NBDevice)):
+
+                        log.info(f"Before the '{this_object.name}' can be deleted, all interfaces must be deleted.")
+
+                        for object_interface in self.inventory.get_all_interfaces(this_object):
+
+                            log.info(f"Deleting interface '{object_interface.get_display_name()}'")
+
+                            self.request(object_interface.__class__, req_type="DELETE", nb_id=object_interface.nb_id)
 
                     self.request(nb_object_sub_class, req_type="DELETE", nb_id=this_object.nb_id)
 
