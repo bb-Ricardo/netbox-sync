@@ -162,7 +162,8 @@ To match new/updated objects to existing objects in NetBox a few different steps
 Try to find object first based on the object data, interface MAC addresses and primary IPs.
 1. try to find by name and cluster/site
 2. try to find by mac addresses interfaces
-3. try to find by primary IP
+3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
+4. try to find by primary IP
 
 #### IP addresses
 First they will be checked and added if all checks pass.

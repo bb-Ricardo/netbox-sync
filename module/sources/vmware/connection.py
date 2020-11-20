@@ -882,6 +882,19 @@ class VMWareHandler:
 
             device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
 
+        # look for devices with same serial or asset tag
+        if object_type == NBDevice:
+
+            if device_vm_object is None and object_data.get("serial") is not None:
+                log.debug2("No match found. Trying to find {object_type.name} based on serial number")
+
+                device_vm_object = self.get_by_data(object_type, data={"serial": object_data.get("serial")})
+
+            if device_vm_object is None and object_data.get("asset_tag") is not None:
+                log.debug2("No match found. Trying to find {object_type.name} based on asset tag")
+
+                device_vm_object = self.get_by_data(object_type, data={"asset_tag": object_data.get("asset_tag")})
+
         if device_vm_object is not None:
             log.debug2("Found a matching %s object: %s" %
                        (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
