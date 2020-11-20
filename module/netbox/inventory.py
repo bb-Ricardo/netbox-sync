@@ -114,12 +114,9 @@ class NetBoxInventory:
 
         return None
 
-    def add_item_from_netbox(self, object_type, data=None):
+    def add_object(self, object_type, data=None, read_from_netbox=False, source=None):
         """
-        Adds objects which are directly returned from NetBox. We assume
-        all fields are valid and skip validating data and add it directly to the inventory.
-
-        Only to be used if data is read from NetBox and added to inventory
+        Adds a new object to the inventory.
 
         Parameters
         ----------
@@ -127,16 +124,26 @@ class NetBoxInventory:
             object type to add
         data: dict
             Object data to add to the inventory
+        read_from_netbox: bool
+            True if data was read directly from NetBox
+        source: object handler of source
+            the object source which should be added to the object
 
+        Returns
+        -------
+        NetBoxObject child object: of the created object
         """
 
         # create new object
-        new_object = object_type(data, read_from_netbox=True, inventory=self)
+        new_object = object_type(data, read_from_netbox=read_from_netbox, inventory=self, source=source)
 
         # add to inventory
         self.base_structure[object_type.name].append(new_object)
 
-        return
+        if read_from_netbox is False:
+            log.info(f"Created new {new_object.name} object: {new_object.get_display_name()}")
+
+        return new_object
 
     def add_update_object(self, object_type, data=None, read_from_netbox=False, source=None):
         """
@@ -155,7 +162,7 @@ class NetBoxInventory:
 
         Returns
         -------
-        NetBoxObject sub class: of the created/updated object
+        NetBoxObject child object: of the created/updated object
         """
 
         if data is None:
@@ -166,10 +173,7 @@ class NetBoxInventory:
         this_object = self.get_by_data(object_type, data=data)
 
         if this_object is None:
-            this_object = object_type(data, read_from_netbox=read_from_netbox, inventory=self, source=source)
-            self.base_structure[object_type.name].append(this_object)
-            if read_from_netbox is False:
-                log.info(f"Created new {this_object.name} object: {this_object.get_display_name()}")
+            this_object = self.add_object(object_type, data=data, read_from_netbox=read_from_netbox, source=source)
 
         else:
             this_object.update(data, read_from_netbox=read_from_netbox, source=source)

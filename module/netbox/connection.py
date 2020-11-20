@@ -96,8 +96,9 @@ class NetBoxHandler:
         self.session = self.create_session()
 
         # check for minimum version
-        if version.parse(self.get_api_version()) < version.parse(self.minimum_api_version):
-            do_error_exit(f"Netbox API version '{self.api_version}' not supported. "
+        api_version = self.get_api_version()
+        if version.parse(api_version) < version.parse(self.minimum_api_version):
+            do_error_exit(f"Netbox API version '{api_version}' not supported. "
                           f"Minimum API version: {self.minimum_api_version}")
 
         self.setup_caching()
@@ -449,7 +450,7 @@ class NetBoxHandler:
 
             if self.testing_cache is True and len(cached_nb_data) > 0:
                 for object_data in cached_nb_data:
-                    self.inventory.add_item_from_netbox(nb_object_class, data=object_data)
+                    self.inventory.add_object(nb_object_class, data=object_data, read_from_netbox=True)
 
                 # mark this object class as retrieved
                 self.resolved_dependencies.add(nb_object_class)
@@ -517,7 +518,7 @@ class NetBoxHandler:
             log.debug(f"Processing %s returned {nb_object_class.name}%s" % (len(nb_objects), plural(len(nb_objects))))
 
             for object_data in nb_objects:
-                self.inventory.add_item_from_netbox(nb_object_class, data=object_data)
+                self.inventory.add_object(nb_object_class, data=object_data, read_from_netbox=True)
 
             # mark this object class as retrieved
             self.resolved_dependencies.add(nb_object_class)
@@ -586,7 +587,7 @@ class NetBoxHandler:
                 for unset_item in this_object.unset_items:
 
                     key_data_type = grab(this_object, f"data_model.{unset_item}")
-                    if key_data_type in NBObjectList.__subclasses__:
+                    if key_data_type in NBObjectList.__subclasses__():
                         unset_data[unset_item] = []
                     else:
                         unset_data[unset_item] = None

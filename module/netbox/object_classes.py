@@ -378,6 +378,7 @@ class NetBoxObject:
             self.updated_items.append(key)
 
             if self.is_new is False:
+                new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
                           f"'{current_value_str}' to '{new_value_str}'")
 

@@ -651,7 +651,7 @@ class VMWareHandler:
         if not isinstance(interface_data_dict, dict):
             raise ValueError(f"Value for 'interface_data_dict' must be a dict, got: {interface_data_dict}")
 
-        log.debug2("Trying to match current this_object interfaces in NetBox with discovered interfaces")
+        log.debug2("Trying to match current object interfaces in NetBox with discovered interfaces")
 
         current_object_interfaces = {
             "virtual": dict(),
@@ -694,7 +694,7 @@ class VMWareHandler:
 
             # match simply by name
             matching_int = None
-            if int_name in current_object_interface_names is not None:
+            if int_name in current_object_interface_names:
                 log.debug2(f"Found 1:1 name match for NIC '{int_name}'")
                 matching_int = current_object_interfaces.get(int_name)
 
@@ -896,7 +896,7 @@ class VMWareHandler:
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
             log.debug(f"No exiting {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
-            device_vm_object = self.inventory.add_update_object(object_type, data=object_data, source=self)
+            device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
         else:
             device_vm_object.update(data=object_data, source=self)
 
@@ -921,7 +921,7 @@ class VMWareHandler:
 
             # create or update interface with data
             if nic_object is None:
-                nic_object = self.inventory.add_update_object(interface_class, data=int_data, source=self)
+                nic_object = self.inventory.add_object(interface_class, data=int_data, source=self)
             else:
                 nic_object.update(data=int_data, source=self)
 
