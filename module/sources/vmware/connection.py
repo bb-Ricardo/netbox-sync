@@ -1327,11 +1327,11 @@ class VMWareHandler:
 
         # add data if present
         if serial is not None:
-            host_data["serial"]: serial
+            host_data["serial"] = serial
         if asset_tag is not None:
-            host_data["asset_tag"]: asset_tag
+            host_data["asset_tag"] = asset_tag
         if platform is not None:
-            host_data["platform"]: {"name": platform}
+            host_data["platform"] = {"name": platform}
 
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         host_vswitches = dict()
