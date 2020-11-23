@@ -508,10 +508,11 @@ class NetBoxHandler:
 
                 nb_objects.extend(updated_nb_data.get("results"))
 
-            if cache_this_class is True:
+            if self.use_caching is True:
                 try:
                     pickle.dump(nb_objects, open(cache_file, "wb"))
-                    log.debug("Successfully cached %d objects." % (len(nb_objects)))
+                    if cache_this_class is True:
+                        log.debug("Successfully cached %d objects." % (len(nb_objects)))
                 except Exception as e:
                     log.warning(f"Failed to write NetBox data to cache file: {e}")
 

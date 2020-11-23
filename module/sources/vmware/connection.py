@@ -791,7 +791,8 @@ class VMWareHandler:
         Try to find object first based on the object data, interface MAC addresses and primary IPs.
             1. try to find by name and cluster/site
             2. try to find by mac addresses interfaces
-            3. try to find by primary IP
+            3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
+            4. try to find by primary IP
 
         IP addresses for each interface are added here as well. First they will be checked and added
         if all checks pass. For each IP address a matching IP prefix will be searched for. First we
@@ -886,14 +887,15 @@ class VMWareHandler:
         if object_type == NBDevice:
 
             if device_vm_object is None and object_data.get("serial") is not None:
-                log.debug2("No match found. Trying to find {object_type.name} based on serial number")
+                log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
 
-                device_vm_object = self.get_by_data(object_type, data={"serial": object_data.get("serial")})
+                device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
 
             if device_vm_object is None and object_data.get("asset_tag") is not None:
-                log.debug2("No match found. Trying to find {object_type.name} based on asset tag")
+                log.debug2(f"No match found. Trying to find {object_type.name} based on asset tag")
 
-                device_vm_object = self.get_by_data(object_type, data={"asset_tag": object_data.get("asset_tag")})
+                device_vm_object = self.inventory.get_by_data(object_type,
+                                                              data={"asset_tag": object_data.get("asset_tag")})
 
         if device_vm_object is not None:
             log.debug2("Found a matching %s object: %s" %
