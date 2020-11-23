@@ -121,8 +121,8 @@ If you migrate from [vcenter-netbox-sync](https://github.com/synackray/vcenter-n
 Copy the [settings-example.ini](settings-example.ini) sample settings file to `settings.ini`.
 All options are described in the example file.
 
-You should define the var `cluster_site_relation` which maps a vCenter Cluster to an exiting Site in NetBox.
-Otherwise a placeholder Site will be created.
+You should define the var `cluster_site_relation` which maps a vCenter cluster to an exiting Site in NetBox.
+Otherwise a placeholder site will be created.
 
 ## Cron job
 In Order to sync all items regularly you can add a cron job like this one

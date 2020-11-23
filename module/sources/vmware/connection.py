@@ -69,6 +69,7 @@ class VMWareHandler:
         "collect_hardware_asset_tag": True,
         "cluster_site_relation": None,
         "host_site_relation": None,
+        "vm_tenant_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined"
@@ -173,21 +174,23 @@ class VMWareHandler:
 
             config_settings[setting] = re_compiled
 
-        for relation_name in ["cluster_site_relation", "host_site_relation"]:
+        for relation_option in ["cluster_site_relation", "host_site_relation", "vm_tenant_relation"]:
 
-            if config_settings.get(relation_name) is None:
+            if config_settings.get(relation_option) is None:
                 continue
 
             relation_data = list()
 
-            for relation in config_settings.get(relation_name).split(","):
+            relation_type = "tenant" if "tenant" in relation_option else "site"
+
+            for relation in config_settings.get(relation_option).split(","):
 
                 object_name = relation.split("=")[0].strip()
-                site_name = relation.split("=")[1].strip()
+                relation_name = relation.split("=")[1].strip()
 
-                if len(object_name) == 0 or len(site_name) == 0:
+                if len(object_name) == 0 or len(relation_name) == 0:
                     log.error(f"Config option '{relation}' malformed got '{object_name}' for "
-                              f"object name and '{site_name}' for site name.")
+                              f"object name and '{relation_name}' for {relation_type} name.")
                     validation_failed = True
 
                 try:
@@ -199,10 +202,10 @@ class VMWareHandler:
 
                 relation_data.append({
                     "object_regex": re_compiled,
-                    "site_name": site_name
+                    f"{relation_type}_name": relation_name
                 })
 
-            config_settings[relation_name] = relation_data
+            config_settings[relation_option] = relation_data
 
         if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
 
@@ -1683,6 +1686,15 @@ class VMWareHandler:
 
         annotation = get_string_or_none(grab(obj, "config.annotation"))
 
+        # assign vm_tenant_relation
+        tenant_name = None
+        for tenant_relation in grab(self, "vm_tenant_relation", fallback=list()):
+            object_regex = tenant_relation.get("object_regex")
+            if object_regex.match(name):
+                tenant_name = tenant_relation.get("tenant_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tenant '{tenant_name}'")
+                break
+
         vm_data = {
             "name": name,
             "cluster": {"name": cluster_name},
@@ -1695,9 +1707,10 @@ class VMWareHandler:
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
-
         if annotation is not None:
             vm_data["comments"] = annotation
+        if tenant_name is not None:
+            vm_data["tenant"] = {"name": tenant_name}
 
         vm_primary_ip4 = None
         vm_primary_ip6 = None

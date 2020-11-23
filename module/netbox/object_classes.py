@@ -1042,7 +1042,8 @@ class NBDevice(NetBoxObject):
         "asset_tag": 50,
         "primary_ip4": object,
         "primary_ip6": object,
-        "tags": NBTagList
+        "tags": NBTagList,
+        "tenant": NBTenant
     }
 
 
@@ -1070,7 +1071,8 @@ class NBVM(NetBoxObject):
         "comments": str,
         "primary_ip4": object,
         "primary_ip6": object,
-        "tags": NBTagList
+        "tags": NBTagList,
+        "tenant": NBTenant
     }
 
 
