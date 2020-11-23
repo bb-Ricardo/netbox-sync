@@ -124,6 +124,11 @@ All options are described in the example file.
 You should define the var `cluster_site_relation` which maps a vCenter Cluster to an exiting Site in NetBox.
 Otherwise a placeholder Site will be created.
 
+## Cron job
+In Order to sync all items regularly you can add a cron job like this one
+ # NetBox Sync
+ 23 */2 * * *  /opt/netbox-sync/.env/bin/python3 /opt/netbox-sync/netbox-sync.py >/dev/null 2>&1
+
 # How it works
 **READ CAREFULLY**
 
