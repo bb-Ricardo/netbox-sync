@@ -918,6 +918,12 @@ class VMWareHandler:
         else:
             device_vm_object.update(data=object_data, source=self)
 
+        # add role if undefined
+        if object_type == NBDevice and grab(device_vm_object, "data.device_role") is None:
+            device_vm_object.update(data={"device_role": {"name": self.netbox_host_device_role}})
+        if object_type == NBVM and grab(device_vm_object, "data.role") is None:
+            device_vm_object.update(data={"role": {"name": self.netbox_vm_device_role}})
+
         # compile all nic data into one dictionary
         if object_type == NBVM:
             nic_data = vnic_data
@@ -1318,7 +1324,6 @@ class VMWareHandler:
         # prepare host data model
         host_data = {
             "name": name,
-            "device_role": {"name": self.netbox_host_device_role},
             "device_type": {
                 "model": model,
                 "manufacturer": {
@@ -1698,7 +1703,6 @@ class VMWareHandler:
         vm_data = {
             "name": name,
             "cluster": {"name": cluster_name},
-            "role": {"name": self.settings.get("netbox_vm_device_role")},
             "status": status,
             "memory": grab(obj, "config.hardware.memoryMB"),
             "vcpus": grab(obj, "config.hardware.numCPU"),
