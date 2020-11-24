@@ -686,7 +686,7 @@ class NetBoxObject:
             if isinstance(vlan, NBVLAN):
                 new_vlan_object = vlan
             elif isinstance(vlan, dict):
-                new_vlan_object = self.inventory.add_update_object(NBVLAN, data=vlan)
+                new_vlan_object = self.inventory.add_update_object(NBVLAN, data=vlan, source=self.source)
             else:
                 log.error(f"Unable to parse provided VLAN data: {vlan}")
                 continue
