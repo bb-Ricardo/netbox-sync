@@ -184,6 +184,15 @@ if interface VLAN and prefix VLAN match up and warn if they don't. We also compa
 length of the found prefix with the prefix length of the configured IP address.
 A warning will also be issued if they don't match.
 
+If the same IP address is found on a different interface (of a different device/VM) within the same realm
+(both using same VRF or both are global) then following test are performed:
+* If the current interface is enabled and the new one disabled:
+  * IP stays at the current interface
+* If the current interface ia disabled and the new one enabled:
+  * IP will be moved to the enabled interface
+* Both interfaces are in the same state (disabled/enable)
+  * IP will also stay at the current interface as it's unclear which one would be the correct one
+
 Then we try to add data to the IP address if not already set:
 
 * add prefix VRF if VRF for this IP is undefined
