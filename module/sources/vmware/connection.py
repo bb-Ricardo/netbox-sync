@@ -86,11 +86,13 @@ class VMWareHandler:
 
     site_name = None
 
-    dvs = dict()
-    dvs_ports = dict()
-
-    networks = dict()
-    dvs_mtu = dict()
+    network_data = {
+        "vswitch": dict(),
+        "pswitch": dict(),
+        "host_pgroup": dict(),
+        "dpgroup": dict(),
+        "dpgroup_ports": dict()
+    }
 
     permitted_clusters = dict()
 
@@ -1215,10 +1217,8 @@ class VMWareHandler:
 
         log.debug2(f"Parsing vCenter virtual switch: {name}")
 
-        self.dvs[uuid] = obj
-
         # add ports
-        self.dvs_ports[uuid] = dict()
+        self.network_data["dpgroup_ports"][uuid] = dict()
 
         criteria = vim.dvs.PortCriteria()
         ports = obj.FetchDVPorts(criteria)
@@ -1226,7 +1226,7 @@ class VMWareHandler:
         log.debug2(f"Found {len(ports)} vCenter virtual switch ports")
 
         for port in ports:
-            self.dvs_ports[uuid][port.key] = port
+            self.network_data["dpgroup_ports"][uuid][port.key] = port
 
     def add_port_group(self, obj):
         """
@@ -1259,7 +1259,7 @@ class VMWareHandler:
         else:
             vlan_ids.append(grab(vlan_info, "vlanId"))
 
-        self.networks[key] = {
+        self.network_data["dpgroup"][key] = {
             "name": name,
             "vlan_ids": vlan_ids
         }
@@ -1421,7 +1421,7 @@ class VMWareHandler:
             host_data["platform"] = {"name": platform}
 
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
-        host_vswitches = dict()
+        self.network_data["vswitch"][name] = dict()
         for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
 
             vswitch_name = grab(vswitch, "name")
@@ -1432,14 +1432,14 @@ class VMWareHandler:
 
                 log.debug2(f"Found host vSwitch {vswitch_name}")
 
-                host_vswitches[vswitch_name] = {
+                self.network_data["vswitch"][name][vswitch_name] = {
                     "mtu": grab(vswitch, "mtu"),
                     "pnics": vswitch_pnics
                 }
 
         # iterate over hosts proxy switches, needed to enrich data on physical interfaces
         # also stores data on proxy switch configured mtu which is used for VM interfaces
-        host_pswitches = dict()
+        self.network_data["pswitch"][name] = dict()
         for pswitch in grab(obj, "config.network.proxySwitch", fallback=list()):
 
             pswitch_uuid = grab(pswitch, "dvsUuid")
@@ -1450,16 +1450,14 @@ class VMWareHandler:
 
                 log.debug2(f"Found host proxySwitch {pswitch_name}")
 
-                host_pswitches[pswitch_uuid] = {
+                self.network_data["pswitch"][name][pswitch_uuid] = {
                     "name": pswitch_name,
                     "mtu": grab(pswitch, "mtu"),
                     "pnics": pswitch_pnics
                 }
 
-                self.dvs_mtu[pswitch_uuid] = grab(pswitch, "mtu")
-
         # iterate over hosts port groups, needed to enrich data on physical interfaces
-        host_portgroups = dict()
+        self.network_data["host_pgroup"][name] = dict()
         for pgroup in grab(obj, "config.network.portgroup", fallback=list()):
 
             pgroup_name = grab(pgroup, "spec.name")
@@ -1471,7 +1469,7 @@ class VMWareHandler:
                 nic_order = grab(pgroup, "computedPolicy.nicTeaming.nicOrder")
                 pgroup_nics = nic_order.activeNic + nic_order.standbyNic
 
-                host_portgroups[pgroup_name] = {
+                self.network_data["host_pgroup"][name][pgroup_name] = {
                     "vlan_id": grab(pgroup, "spec.vlanId"),
                     "vswitch": grab(pgroup, "spec.vswitchName"),
                     "nics": pgroup_nics
@@ -1507,14 +1505,14 @@ class VMWareHandler:
             pnic_mode = None
 
             # check virtual switches for interface data
-            for vs_name, vs_data in host_vswitches.items():
+            for vs_name, vs_data in self.network_data["vswitch"][name].items():
 
                 if pnic_key in vs_data.get("pnics", list()):
                     pnic_description = f"{pnic_description} ({vs_name})"
                     pnic_mtu = vs_data.get("mtu")
 
             # check proxy switches for interface data
-            for ps_uuid, ps_data in host_pswitches.items():
+            for ps_uuid, ps_data in self.network_data["pswitch"][name].items():
 
                 if pnic_key in ps_data.get("pnics", list()):
                     ps_name = ps_data.get("name")
@@ -1526,7 +1524,7 @@ class VMWareHandler:
             # check vlans on this pnic
             pnic_vlans = list()
 
-            for pg_name, pg_data in host_portgroups.items():
+            for pg_name, pg_data in self.network_data["host_pgroup"][name].items():
 
                 if pnic_name in pg_data.get("nics", list()):
                     pnic_vlans.append({
@@ -1561,7 +1559,7 @@ class VMWareHandler:
                 vlan_ids = list(set([x.get("vid") for x in pnic_vlans]))
                 if len(vlan_ids) == 1 and vlan_ids[0] == 0:
                     pnic_data["mode"] = "access"
-                if 4095 in vlan_ids:
+                elif 4095 in vlan_ids:
                     pnic_data["mode"] = "tagged-all"
                 else:
                     pnic_data["mode"] = "tagged"
@@ -1599,7 +1597,7 @@ class VMWareHandler:
             log.debug2("Parsing {}: {}".format(grab(vnic, "_wsdlName"), vnic_name))
 
             vnic_portgroup = grab(vnic, "portgroup")
-            vnic_portgroup_data = host_portgroups.get(vnic_portgroup)
+            vnic_portgroup_data = self.network_data["host_pgroup"][name].get(vnic_portgroup)
 
             vnic_description = vnic_portgroup
             vnic_vlan_id = 0
@@ -1723,6 +1721,8 @@ class VMWareHandler:
         # add to processed VMs
         self.processed_vm_uuid.append(vm_uuid)
 
+        parent_name = get_string_or_none(grab(obj, "runtime.host.name"))
+
         # check VM cluster
         cluster_name = get_string_or_none(grab(obj, "runtime.host.parent.name"))
         if cluster_name is None:
@@ -1839,30 +1839,52 @@ class VMWareHandler:
 
             log.debug2(f"Parsing device {device_class}: {int_mac}")
 
-            int_portgroup_data = self.networks.get(grab(vm_device, "backing.port.portgroupKey"))
+            device_backing = grab(vm_device, "backing")
 
-            # we try to get network name and VLANs from assigned port group
+            int_mtu = None
             int_mode = None
-            int_network_name = None
             int_network_vlan_ids = None
+            int_network_name = None
 
-            if int_portgroup_data is not None:
-                int_network_name = grab(int_portgroup_data, "name")
-                int_network_vlan_ids = grab(int_portgroup_data, "vlan_ids")
+            # get info from local vSwitches
+            if isinstance(device_backing, vim.vm.device.VirtualEthernetCard.NetworkBackingInfo):
 
+                int_network_name = get_string_or_none(grab(device_backing, "deviceName"))
+                int_host_pgroup = grab(self.network_data, f"host_pgroup|{parent_name}|{int_network_name}",
+                                       separator="|")
+
+                if int_host_pgroup is not None:
+                    int_network_vlan_ids = [int_host_pgroup.get("vlan_id")]
+
+                    int_vswitch_name = int_host_pgroup.get("vswitch")
+                    int_vswitch_data = grab(self.network_data, f"vswitch|{parent_name}|{int_vswitch_name}",
+                                            separator="|")
+
+                    if int_vswitch_data is not None:
+                        int_mtu = int_vswitch_data.get("mtu")
+
+            # get info from distributed port group
+            else:
+
+                dvs_portgroup_key = grab(device_backing, "port.portgroupKey", fallback="None")
+                int_portgroup_data = grab(self.network_data, f"dpgroup|{dvs_portgroup_key}", separator="|")
+
+                if int_portgroup_data is not None:
+                    int_network_name = grab(int_portgroup_data, "name")
+                    int_network_vlan_ids = grab(int_portgroup_data, "vlan_ids")
+
+                int_dvswitch_uuid = grab(device_backing, "port.switchUuid")
+                int_dvswitch_data = grab(self.network_data, f"pswitch|{parent_name}|{int_dvswitch_uuid}", separator="|")
+
+                if int_dvswitch_data is not None:
+                    int_mtu = int_dvswitch_data.get("mtu")
+
+            # check vlans
+            if int_network_vlan_ids is not None:
                 if len(int_network_vlan_ids) == 1:
                     int_mode = "access"
                 else:
                     int_mode = "tagged-all"
-
-            # ToDo:
-            #   reading mtu from settings for host DVS is unreliable
-            #   setting it here fix to 1500, need to investigate if retrieving
-            #   VM mtu is even possible
-            int_mtu = 1500
-            # int_dvswitch_uuid = grab(vm_device, "backing.port.switchUuid")
-            # if int_dvswitch_uuid is not None:
-            #    int_mtu = self.dvs_mtu.get(int_dvswitch_uuid)
 
             int_connected = grab(vm_device, "connectable.connected", fallback=False)
             int_label = grab(vm_device, "deviceInfo.label", fallback="")
