@@ -274,8 +274,16 @@ class NetBoxInventory:
                 # if object was tagged by this program in previous runs but is not present
                 # anymore then add the orphaned tag
                 else:
-                    if netbox_handler.primary_tag in this_object.get_tags():
-                        this_object.add_tags(netbox_handler.orphaned_tag)
+                    if getattr(this_object, "prune", False) is True:
+                        if netbox_handler.primary_tag in this_object.get_tags():
+                            this_object.add_tags(netbox_handler.orphaned_tag)
+
+                    # or just remove primary tag if pruning is disabled
+                    else:
+                        if netbox_handler.primary_tag in this_object.get_tags():
+                            this_object.remove_tags(netbox_handler.primary_tag)
+                        if netbox_handler.orphaned_tag in this_object.get_tags():
+                            this_object.remove_tags(netbox_handler.orphaned_tag)
 
     def query_ptr_records_for_all_ips(self):
         """

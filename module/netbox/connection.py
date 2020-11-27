@@ -728,6 +728,9 @@ class NetBoxHandler:
         today = datetime.now()
         for nb_object_sub_class in reversed(NetBoxObject.__subclasses__()):
 
+            if getattr(nb_object_sub_class, "prune", False) is False:
+                continue
+
             for this_object in self.inventory.get_all_items(nb_object_sub_class):
 
                 if this_object.source is not None:
@@ -800,12 +803,11 @@ class NetBoxHandler:
 
             for nb_object_sub_class in reversed(NetBoxObject.__subclasses__()):
 
-                # tags need to be deleted at the end
-                if nb_object_sub_class == NBTag:
+                if getattr(nb_object_sub_class, "prune", False) is False:
                     continue
 
-                # object has no tags so we can't be sure it was created with this program
-                if NBTagList not in nb_object_sub_class.data_model.values():
+                # tags need to be deleted at the end
+                if nb_object_sub_class == NBTag:
                     continue
 
                 for this_object in self.inventory.get_all_items(nb_object_sub_class):

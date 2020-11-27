@@ -758,6 +758,7 @@ class NBTag(NetBoxObject):
     name = "tag"
     api_path = "extras/tags"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 100,
         "slug": 100,
@@ -789,6 +790,7 @@ class NBTenant(NetBoxObject):
     name = "tenant"
     api_path = "tenancy/tenants"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 30,
         "slug": 50,
@@ -802,6 +804,7 @@ class NBSite(NetBoxObject):
     name = "site"
     api_path = "dcim/sites"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 50,
         "slug": 50,
@@ -815,6 +818,7 @@ class NBVRF(NetBoxObject):
     name = "VRF"
     api_path = "ipam/vrfs"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 50,
         "description": 200,
@@ -829,6 +833,7 @@ class NBVLAN(NetBoxObject):
     primary_key = "vid"
     secondary_key = "name"
     enforce_secondary_key = True
+    prune = False
     data_model = {
         "vid": int,
         "name": 64,
@@ -905,6 +910,7 @@ class NBPrefix(NetBoxObject):
     name = "IP prefix"
     api_path = "ipam/prefixes"
     primary_key = "prefix"
+    prune = False
     data_model = {
         "prefix": [IPv4Network, IPv6Network],
         "site": NBSite,
@@ -936,6 +942,7 @@ class NBManufacturer(NetBoxObject):
     name = "manufacturer"
     api_path = "dcim/manufacturers"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 50,
         "slug": 50,
@@ -947,6 +954,7 @@ class NBDeviceType(NetBoxObject):
     name = "device type"
     api_path = "dcim/device-types"
     primary_key = "model"
+    prune = False
     data_model = {
         "model": 50,
         "slug": 50,
@@ -961,6 +969,7 @@ class NBPlatform(NetBoxObject):
     name = "platform"
     api_path = "dcim/platforms"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 100,
         "slug": 100,
@@ -973,6 +982,7 @@ class NBClusterType(NetBoxObject):
     name = "cluster type"
     api_path = "virtualization/cluster-types"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 50,
         "slug": 50,
@@ -984,6 +994,7 @@ class NBClusterGroup(NetBoxObject):
     name = "cluster group"
     api_path = "virtualization/cluster-groups"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 50,
         "slug": 50,
@@ -995,6 +1006,7 @@ class NBDeviceRole(NetBoxObject):
     name = "device role"
     api_path = "dcim/device-roles"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 50,
         "slug": 50,
@@ -1008,6 +1020,7 @@ class NBCluster(NetBoxObject):
     name = "cluster"
     api_path = "virtualization/clusters"
     primary_key = "name"
+    prune = False
     data_model = {
         "name": 100,
         "comments": str,
@@ -1030,6 +1043,7 @@ class NBDevice(NetBoxObject):
     api_path = "dcim/devices"
     primary_key = "name"
     secondary_key = "site"
+    prune = True
     data_model = {
         "name": 64,
         "device_type": NBDeviceType,
@@ -1059,6 +1073,7 @@ class NBVM(NetBoxObject):
     api_path = "virtualization/virtual-machines"
     primary_key = "name"
     secondary_key = "cluster"
+    prune = True
     data_model = {
         "name": 64,
         "status": ["offline", "active", "planned", "staged", "failed", "decommissioning"],
@@ -1082,6 +1097,7 @@ class NBVMInterface(NetBoxObject):
     primary_key = "name"
     secondary_key = "virtual_machine"
     enforce_secondary_key = True
+    prune = True
     data_model = {
         "name": 64,
         "virtual_machine": NBVM,
@@ -1102,6 +1118,7 @@ class NBInterface(NetBoxObject):
     primary_key = "name"
     secondary_key = "device"
     enforce_secondary_key = True
+    prune = True
     data_model = {
         "name": 64,
         "device": NBDevice,
@@ -1125,6 +1142,7 @@ class NBIPAddress(NetBoxObject):
     api_path = "ipam/ip-addresses"
     primary_key = "address"
     is_primary = False
+    prune = True
     data_model = {
         "address": str,
         "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
