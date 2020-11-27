@@ -327,7 +327,7 @@ class NetBoxObject:
                     # try to find object.
                     value = self.inventory.add_update_object(defined_value_type, data=value)
                     # add source if item was created via this source
-                    if value.is_new is True:
+                    if value.source is None:
                         value.source = source
 
             # add to parsed data dict
