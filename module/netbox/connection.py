@@ -744,6 +744,10 @@ class NetBoxHandler:
                 if date_last_update is None:
                     continue
 
+                # already deleted
+                if getattr(this_object, "deleted", False) is True:
+                    continue
+
                 # only need the date including seconds
                 date_last_update = date_last_update[0:19]
 
@@ -772,11 +776,22 @@ class NetBoxHandler:
 
                         for object_interface in self.inventory.get_all_interfaces(this_object):
 
+                            # already deleted
+                            if getattr(object_interface, "deleted", False) is True:
+                                continue
+
                             log.info(f"Deleting interface '{object_interface.get_display_name()}'")
 
-                            self.request(object_interface.__class__, req_type="DELETE", nb_id=object_interface.nb_id)
+                            ret = self.request(object_interface.__class__, req_type="DELETE",
+                                               nb_id=object_interface.nb_id)
 
-                    self.request(nb_object_sub_class, req_type="DELETE", nb_id=this_object.nb_id)
+                            if ret is True:
+                                object_interface.deleted = True
+
+                    ret = self.request(nb_object_sub_class, req_type="DELETE", nb_id=this_object.nb_id)
+
+                    if ret is True:
+                        this_object.deleted = True
 
         return
 

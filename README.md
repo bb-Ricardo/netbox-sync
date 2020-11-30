@@ -221,12 +221,10 @@ MAC addresses exceeds 2.0 then the top matching NetBox object (device, vm) is ch
 If the ratio is below 2.0 then None will be chosen. The probability is to low that
 this one is the correct one.
 
-
 #### 3. Try to find a NetBox object based on the primary IP (v4 or v6) address
 
 If an exact matching NetBox object (device, vm) was found the object will be used
 immediately without checking the other primary IP address (if defined).
-
 
 ### Try to match current NetBox object (device, vm) interfaces to discovered ones
 
@@ -302,6 +300,22 @@ Primary IPv4/6 will be determined by interface that provides the default route f
 
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
+
+### Pruning
+Prune objects in NetBox if they are no longer present in any source.
+First they will be marked as Orphaned and after X (config option) days they will be
+deleted from NetBox.
+
+Objects subjected to pruning:
+* devices
+* VMs
+* device interfaces
+* VM interfaces
+* IP addresses
+
+All other objects created (i.e.: VLANs, cluster, manufacturers) will keep the
+source tag but will not be deleted. Theses are "shared" objects might be used
+by different NetBox objects
 
 # License
 >You can check out the full license [here](LICENSE.txt)
