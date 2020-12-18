@@ -182,7 +182,7 @@ async def reverse_lookup(resolver, ip):
             log.debug2(f"PTR record for {ip}: {resolved_name}")
 
         else:
-            log.waring(f"PTR record contains invalid characters: {response.name}")
+            log.warning(f"PTR record contains invalid characters: {response.name}")
 
     return {ip: resolved_name}
 
