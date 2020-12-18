@@ -1028,8 +1028,10 @@ class VMWareHandler:
                     if not ip_address_string.startswith(f"{ip_interface_object.ip.compressed}/"):
                         continue
 
+                    current_nic = grab(ip, "data.assigned_object_id")
+
                     # is it our current ip interface?
-                    if grab(ip, "data.assigned_object_id") == nic_object:
+                    if current_nic == nic_object:
                         ip_object = ip
                         break
 
@@ -1040,10 +1042,14 @@ class VMWareHandler:
                     if possible_ip_vrf != grab(ip, "data.vrf"):
                         continue
 
+                    # IP address is not assigned to any interface
+                    if current_nic is None:
+                        ip_object = ip
+                        break
+
                     # get current IP interface status
-                    current_nic = grab(ip, "data.assigned_object_id")
-                    current_nic_enabled = grab(current_nic, "data.enabled")
-                    this_nic_enabled = grab(nic_object, "data.enabled")
+                    current_nic_enabled = grab(current_nic, "data.enabled", fallback=True)
+                    this_nic_enabled = grab(nic_object, "data.enabled", fallback=True)
 
                     if current_nic_enabled is True and this_nic_enabled is False:
                         log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_interface_object}'"
@@ -1663,6 +1669,7 @@ class VMWareHandler:
                 "name": vnic_name,
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
+                "enabled": True,    # ESXi vmk interface is enabled by default
                 "mtu": grab(vnic, "spec.mtu"),
                 "type": "virtual"
             }
