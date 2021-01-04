@@ -758,7 +758,7 @@ class VMWareHandler:
             return
 
         if not isinstance(ip_to_match, (IPv4Address, IPv6Address)):
-            raise ValueError("Value of 'ip_to_match' need to be an IPv4Address or IPv6Address this_object.")
+            raise ValueError("Value of 'ip_to_match' needs to be an IPv4Address or IPv6Address this_object.")
 
         site_object = None
         if site_name is not None:
@@ -787,6 +787,72 @@ class VMWareHandler:
                 current_longest_matching_prefix = prefix
 
         return current_longest_matching_prefix
+
+    def get_vlan_object_if_exists(self, vlan_data=None):
+        """
+        This function will try to find a matching VLAN object based on 'vlan_data'
+        Will return matching objects in following order:
+            * exact match: VLAN id and site match
+            * global match: VLAN id matches but the VLAN has no site assigned
+        If nothing matches the input data from 'vlan_data' will be returned
+
+        Parameters
+        ----------
+        vlan_data: dict
+            dict with NBVLAN data attributes
+
+        Returns
+        -------
+        (NBVLAN, dict, None): matching VLAN object, dict or None (content of vlan_data) if no match found
+
+        """
+
+        if vlan_data is None:
+            return None
+
+        if not isinstance(vlan_data, dict):
+            raise ValueError("Value of 'vlan_data' needs to be a dict.")
+
+        # check existing Devices for matches
+        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN id '{vlan_data.get('vid')}'")
+
+        if vlan_data.get("vid") is None:
+            log.debug("No VLAN id set in vlan_data while trying to find matching VLAN.")
+            return vlan_data
+
+        vlan_site = self.inventory.get_by_data(NBSite, data=vlan_data.get("site"))
+
+        return_data = vlan_data
+        vlan_object_including_site = None
+        vlan_object_without_site = None
+
+        for vlan in self.inventory.get_all_items(NBVLAN):
+
+            if grab(vlan, "data.vid") != vlan_data.get("vid"):
+                continue
+
+            if vlan_site is not None and grab(vlan, "data.site") == vlan_site:
+                vlan_object_including_site = vlan
+
+            if grab(vlan, "data.site") == None:
+                vlan_object_without_site = vlan
+
+        if vlan_object_including_site is not None:
+            return_data = vlan_object_including_site
+            log.debug2("Found a exact matching %s object: %s" %
+                       (vlan_object_including_site.name,
+                        vlan_object_including_site.get_display_name(including_second_key=True)))
+
+        elif vlan_object_without_site is not None:
+            return_data = vlan_object_without_site
+            log.debug2("Found a global matching %s object: %s" %
+                       (vlan_object_without_site.name,
+                        vlan_object_without_site.get_display_name(including_second_key=True)))
+
+        else:
+            log.debug2("No matching existing VLAN found for this VLAN id.")
+
+        return return_data
 
     def add_device_vm_to_inventory(self, object_type, object_data, site_name, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None):
@@ -1593,13 +1659,13 @@ class VMWareHandler:
                     if pnic_vlan.get("vid") == 0:
                         continue
 
-                    tagged_vlan_list.append({
+                    tagged_vlan_list.append(self.get_vlan_object_if_exists({
                         "name": pnic_vlan.get("name"),
                         "vid": pnic_vlan.get("vid"),
                         "site": {
                             "name": site_name
                         }
-                    })
+                    }))
 
                 if len(tagged_vlan_list) > 0:
                     pnic_data["tagged_vlans"] = tagged_vlan_list
@@ -1684,13 +1750,13 @@ class VMWareHandler:
 
             if vnic_portgroup_data is not None and vnic_portgroup_vlan_id != 0:
 
-                vnic_data["untagged_vlan"] = {
+                vnic_data["untagged_vlan"] = self.get_vlan_object_if_exists({
                     "name": f"ESXi {vnic_portgroup} (ID: {vnic_portgroup_vlan_id}) ({site_name})",
                     "vid": vnic_portgroup_vlan_id,
                     "site": {
                         "name": site_name
                     }
-                }
+                })
 
             elif vnic_dv_portgroup_data is not None:
 
@@ -1703,13 +1769,13 @@ class VMWareHandler:
                     if vnic_dv_portgroup_data_vlan_id == 0:
                         continue
 
-                    tagged_vlan_list.append({
+                    tagged_vlan_list.append(self.get_vlan_object_if_exists({
                         "name": f"{vnic_dv_portgroup_data.get('name')}-{vnic_dv_portgroup_data_vlan_id}",
                         "vid": vnic_dv_portgroup_data_vlan_id,
                         "site": {
                             "name": site_name
                         }
-                    })
+                    }))
 
                 if len(tagged_vlan_list) > 0:
                     vnic_data["tagged_vlans"] = tagged_vlan_list
@@ -2053,13 +2119,13 @@ class VMWareHandler:
 
                 if len(int_network_vlan_ids) == 1 and int_network_vlan_ids[0] != 0:
 
-                    vm_nic_data["untagged_vlan"] = {
+                    vm_nic_data["untagged_vlan"] = self.get_vlan_object_if_exists({
                         "name": int_network_name,
                         "vid": int_network_vlan_ids[0],
                         "site": {
                             "name": site_name
                         }
-                    }
+                    })
                 else:
                     tagged_vlan_list = list()
                     for int_network_vlan_id in int_network_vlan_ids:
@@ -2067,13 +2133,13 @@ class VMWareHandler:
                         if int_network_vlan_id == 0:
                             continue
 
-                        tagged_vlan_list.append({
+                        tagged_vlan_list.append(self.get_vlan_object_if_exists({
                             "name": f"{int_network_name}-{int_network_vlan_id}",
                             "vid": int_network_vlan_id,
                             "site": {
                                 "name": site_name
                             }
-                        })
+                        }))
 
                     if len(tagged_vlan_list) > 0:
                         vm_nic_data["tagged_vlans"] = tagged_vlan_list
