@@ -1790,7 +1790,8 @@ class VMWareHandler:
 
                 vnic_is_primary = True
 
-            vnic_ips[vnic_name] = list()
+            if vnic_ips.get(vnic_name) is None:
+                vnic_ips[vnic_name] = list()
 
             int_v4 = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
 
@@ -2076,7 +2077,8 @@ class VMWareHandler:
 
                 int_connected = grab(guest_nic, "connected", fallback=int_connected)
 
-                nic_ips[int_full_name] = list()
+                if nic_ips.get(int_full_name) is None:
+                    nic_ips[int_full_name] = list()
 
                 # grab all valid interface IP addresses
                 for int_ip in grab(guest_nic, "ipConfig.ipAddress", fallback=list()):
