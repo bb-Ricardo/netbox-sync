@@ -72,7 +72,8 @@ class VMWareHandler:
         "vm_tenant_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
-        "set_primary_ip": "when-undefined"
+        "set_primary_ip": "when-undefined",
+        "skip_vm_comments": "False"
     }
 
     init_successful = False
@@ -1918,7 +1919,8 @@ class VMWareHandler:
                        if isinstance(comp, vim.vm.device.VirtualDisk)
                         ]) / 1024 / 1024)
 
-        annotation = get_string_or_none(grab(obj, "config.annotation"))
+        if bool(self.skip_vm_comments) is False:
+            annotation = get_string_or_none(grab(obj, "config.annotation"))
 
         # assign vm_tenant_relation
         tenant_name = None
@@ -1940,7 +1942,7 @@ class VMWareHandler:
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
-        if annotation is not None:
+        if bool(self.skip_vm_comments) is False and annotation is not None:
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
