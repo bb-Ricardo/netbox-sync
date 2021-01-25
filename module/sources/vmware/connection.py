@@ -1919,6 +1919,7 @@ class VMWareHandler:
                        if isinstance(comp, vim.vm.device.VirtualDisk)
                         ]) / 1024 / 1024)
 
+        annotation = None
         if bool(self.skip_vm_comments) is False:
             annotation = get_string_or_none(grab(obj, "config.annotation"))
 
@@ -1942,7 +1943,7 @@ class VMWareHandler:
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
-        if bool(self.skip_vm_comments) is False and annotation is not None:
+        if annotation is not None:
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
