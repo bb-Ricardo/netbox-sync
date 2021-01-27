@@ -73,7 +73,8 @@ class VMWareHandler:
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
-        "skip_vm_comments": "False"
+        "skip_vm_comments": "False",
+        "skip_vm_templates": False
     }
 
     init_successful = False
@@ -1865,6 +1866,12 @@ class VMWareHandler:
 
         # get VM power state
         status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
+
+        # check if vm is template
+        template = grab(obj, "config.template")
+        if bool(self.skip_vm_templates) is True and template is True:
+            log.debug2(f"VM '{name}' is a template. Skipping")
+            return
 
         # ignore offline VMs during first run
         if self.parsing_vms_the_first_time is True and status == "offline":
