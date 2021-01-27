@@ -74,7 +74,7 @@ class VMWareHandler:
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
         "skip_vm_comments": False,
-        "skip_vm_templates": False
+        "skip_vm_templates": True
     }
 
     init_successful = False
