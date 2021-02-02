@@ -1450,6 +1450,12 @@ class VMWareHandler:
         product_version = get_string_or_none(grab(obj, "summary.config.product.version"))
         platform = f"{product_name} {product_version}"
 
+        # if the device vendor/model cannot be retrieved (due to problem on the host), set a dummy value so the host still gets synced
+        if manufacturer is None:
+            manufacturer = "ErrorCouldNotRetrieveVendor"
+        if model is None:
+            model = "ErrorCouldNotRetrieveModel"
+
         # get status
         status = "offline"
         if get_string_or_none(grab(obj, "summary.runtime.connectionState")) == "connected":
