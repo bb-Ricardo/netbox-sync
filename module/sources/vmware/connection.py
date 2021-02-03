@@ -1452,9 +1452,9 @@ class VMWareHandler:
 
         # if the device vendor/model cannot be retrieved (due to problem on the host), set a dummy value so the host still gets synced
         if manufacturer is None:
-            manufacturer = "ErrorCouldNotRetrieveVendor"
+            manufacturer = "Generic Vendor"
         if model is None:
-            model = "ErrorCouldNotRetrieveModel"
+            model = "Generic Model"
 
         # get status
         status = "offline"
