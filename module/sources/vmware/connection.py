@@ -74,7 +74,9 @@ class VMWareHandler:
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
         "skip_vm_comments": False,
-        "skip_vm_templates": True
+        "skip_vm_templates": True,
+        "strip_host_domain_name": False,
+        "strip_vm_domain_name": False
     }
 
     init_successful = False
@@ -1376,6 +1378,9 @@ class VMWareHandler:
 
         name = get_string_or_none(grab(obj, "name"))
 
+        if name is not None and self.strip_host_domain_name is True:
+            name = name.split(".")[0]
+
         # parse data
         log.debug2(f"Parsing vCenter host: {name}")
 
@@ -1450,7 +1455,8 @@ class VMWareHandler:
         product_version = get_string_or_none(grab(obj, "summary.config.product.version"))
         platform = f"{product_name} {product_version}"
 
-        # if the device vendor/model cannot be retrieved (due to problem on the host), set a dummy value so the host still gets synced
+        # if the device vendor/model cannot be retrieved (due to problem on the host),
+        # set a dummy value so the host still gets synced
         if manufacturer is None:
             manufacturer = "Generic Vendor"
         if model is None:
@@ -1857,6 +1863,9 @@ class VMWareHandler:
         """
 
         name = get_string_or_none(grab(obj, "name"))
+
+        if name is not None and self.strip_vm_domain_name is True:
+            name = name.split(".")[0]
 
         #
         # Filtering
