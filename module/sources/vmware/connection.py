@@ -445,7 +445,8 @@ class VMWareHandler:
                 break
 
         if object_type == NBDevice and site_name is None:
-            site_name = self.permitted_clusters.get(cluster_name)
+            site_name = self.permitted_clusters.get(cluster_name) or \
+                        self.get_site_name(NBCluster, object_name, cluster_name)
             log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
 
         # set default site name
