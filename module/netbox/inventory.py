@@ -23,10 +23,25 @@ class NetBoxInventory:
 
     base_structure = dict()
 
+    source_tags_of_disabled_sources = list()
+
     def __init__(self):
         for object_type in NetBoxObject.__subclasses__():
 
             self.base_structure[object_type.name] = list()
+
+    def add_disabled_source_tag(self, source_tag=None):
+        """
+        adds $source_tag to list of disabled sources
+
+        Parameters
+        ----------
+        source_tag: str
+            source tag of disabled source
+
+        """
+        if source_tag is not None:
+            self.source_tags_of_disabled_sources.append(source_tag)
 
     def get_by_id(self, object_type, nb_id=None):
         """
@@ -272,8 +287,13 @@ class NetBoxInventory:
                         this_object.remove_tags(netbox_handler.orphaned_tag)
 
                 # if object was tagged by this program in previous runs but is not present
-                # anymore then add the orphaned tag
+                # anymore then add the orphaned tag except it originated from a disabled source
                 else:
+                    if bool(set(this_object.get_tags()).intersection(self.source_tags_of_disabled_sources)) is True:
+                        log.debug2(f"Object '{this_object.get_display_name()}' was added "
+                                   f"from a currently disabled source. Skipping orphaned tagging.")
+                        continue
+
                     if getattr(this_object, "prune", False) is True:
                         if netbox_handler.primary_tag in this_object.get_tags():
                             this_object.add_tags(netbox_handler.orphaned_tag)

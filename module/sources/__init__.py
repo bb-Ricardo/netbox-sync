@@ -135,6 +135,8 @@ def instantiate_sources(config_handler=None, inventory=None):
         # add to list of source handlers
         if source_handler.init_successful is True:
             sources.append(source_handler)
+        elif getattr(source_handler, "enabled") is False:
+            inventory.add_disabled_source_tag(source_handler.source_tag)
 
     return sources
 
