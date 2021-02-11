@@ -89,7 +89,7 @@ usage: netbox-sync.py [-h] [-c settings.ini]
 
 Sync objects from various sources to NetBox
 
-Version: 0.0.1 (2020-10-01)
+Version: 1.0.0-rc2 (2021-02-11)
 
 optional arguments:
   -h, --help            show this help message and exit
