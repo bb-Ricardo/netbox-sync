@@ -744,6 +744,13 @@ class NetBoxHandler:
                 if date_last_update is None:
                     continue
 
+                if bool(
+                        set(this_object.get_tags()).intersection(self.inventory.source_tags_of_disabled_sources)
+                       ) is True:
+                    log.debug2(f"Object '{this_object.get_display_name()}' was added "
+                               f"from a currently disabled source. Skipping pruning.")
+                    continue
+
                 # already deleted
                 if getattr(this_object, "deleted", False) is True:
                     continue
