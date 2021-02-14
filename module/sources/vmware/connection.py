@@ -984,7 +984,7 @@ class VMWareHandler:
 
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
-            log.debug(f"No exiting {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
+            log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
             device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
         else:
             device_vm_object.update(data=object_data, source=self)
@@ -1152,7 +1152,7 @@ class VMWareHandler:
                 }
 
                 if ip_object is None:
-                    log.debug(f"No exiting {NBIPAddress.name} object found. Creating a new one.")
+                    log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                     if possible_ip_vrf is not None:
                         nic_ip_data["vrf"] = possible_ip_vrf
