@@ -70,6 +70,7 @@ class VMWareHandler:
         "cluster_site_relation": None,
         "host_site_relation": None,
         "vm_tenant_relation": None,
+        "vm_platform_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -87,6 +88,7 @@ class VMWareHandler:
     session = None
 
     site_name = None
+    platform_name = None
 
     network_data = {
         "vswitch": dict(),
@@ -178,14 +180,14 @@ class VMWareHandler:
 
             config_settings[setting] = re_compiled
 
-        for relation_option in ["cluster_site_relation", "host_site_relation", "vm_tenant_relation"]:
+        for relation_option in ["cluster_site_relation", "host_site_relation", "vm_tenant_relation", "vm_platform_relation"]:
 
             if config_settings.get(relation_option) is None:
                 continue
 
             relation_data = list()
 
-            relation_type = "tenant" if "tenant" in relation_option else "site"
+            relation_type = "tenant" if "tenant" in relation_option else "platform_or_site"
 
             for relation in config_settings.get(relation_option).split(","):
 
@@ -405,6 +407,57 @@ class VMWareHandler:
             return False
 
         return True
+
+############################################################################################################################
+    def get_platform_name(self, object_type, object_name):
+
+            """
+            Return a platform name for a NBPlatform depending on config options
+            vm_platform_realtion
+
+            Parameters
+            ----------
+            object_type: (NBPlatform)
+                object type to check platform relation for
+            object_name: str
+                object name to check platform relation for
+            cluster_name: str
+                cluster name of NBPlatform to check for platform name
+
+            Returns
+            -------
+            str: platform name if a relation was found
+            """
+
+            if object_type not in [NBPlatform]:
+                raise ValueError(f"Object must be a '{NBPlatform}'.")
+
+            log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
+
+            platform_name = None
+
+            # check if site was provided in config
+            config_name = "vm_platform_relation"
+            
+            platform_relations = grab(self, config_name, fallback=list())
+            print(platform_relations)
+
+            for platform_relation in platform_relations:
+                object_regex = platform_relation.get("object_regex")
+                if object_regex.match(object_name):
+                    platform_name = platform_relation.get("platform_name")
+                    log.debug2(f"Found a match ({object_regex.pattern}) for {object_name}, using platform '{platform_name}'")
+                    
+                    break
+
+            # set default platform name
+            if platform_name is None:
+                platform_name = self.platform_name
+                log.debug(f"No platform relation for '{object_name}' found, using default platform '{platform_name}'")
+
+            return platform_name
+############################################################################################################################
+
 
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
@@ -1407,6 +1460,7 @@ class VMWareHandler:
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
             return
 
+        platform_name = self.get_platform_name(NBPlatform, name)
         # get a site for this host
         site_name = self.get_site_name(NBDevice, name, cluster_name)
 
