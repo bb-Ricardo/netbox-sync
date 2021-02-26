@@ -1473,7 +1473,7 @@ class VMWareHandler:
         # try to find serial
         serial = None
 
-        for serial_num_key in ["EnclosureSerialNumberTag", "SerialNumberTag", "ServiceTag"]:
+        for serial_num_key in ["SerialNumberTag", "ServiceTag", "EnclosureSerialNumberTag"]:
             if serial_num_key in identifier_dict.keys():
                 serial = get_string_or_none(identifier_dict.get(serial_num_key))
                 break
