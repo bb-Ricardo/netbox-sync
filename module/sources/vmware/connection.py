@@ -189,10 +189,13 @@ class VMWareHandler:
 
             relation_type = "tenant" if "tenant" in relation_option else "site"
 
-            for relation in config_settings.get(relation_option).split(","):
+            # obey quotations to be able to add names including a comma
+            # thanks to: https://stackoverflow.com/a/64333329
+            for relation in re.split(r",(?=(?:[^\"']*[\"'][^\"']*[\"'])*[^\"']*$)",
+                                     config_settings.get(relation_option)):
 
-                object_name = relation.split("=")[0].strip()
-                relation_name = relation.split("=")[1].strip()
+                object_name = relation.split("=")[0].strip(' "')
+                relation_name = relation.split("=")[1].strip(' "')
 
                 if len(object_name) == 0 or len(relation_name) == 0:
                     log.error(f"Config option '{relation}' malformed got '{object_name}' for "
