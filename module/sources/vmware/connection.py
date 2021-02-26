@@ -70,6 +70,7 @@ class VMWareHandler:
         "cluster_site_relation": None,
         "host_site_relation": None,
         "vm_tenant_relation": None,
+        "vm_platform_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -180,14 +181,15 @@ class VMWareHandler:
 
             config_settings[setting] = re_compiled
 
-        for relation_option in ["cluster_site_relation", "host_site_relation", "vm_tenant_relation"]:
+        for relation_option in ["cluster_site_relation", "host_site_relation",
+                                "vm_tenant_relation", "vm_platform_relation"]:
 
             if config_settings.get(relation_option) is None:
                 continue
 
             relation_data = list()
 
-            relation_type = "tenant" if "tenant" in relation_option else "site"
+            relation_type = relation_option.split("_")[1]
 
             for relation in config_settings.get(relation_option).split(","):
 
@@ -1933,8 +1935,18 @@ class VMWareHandler:
         if site_name is None:
             site_name = self.get_site_name(NBCluster, cluster_name)
 
-        platform = grab(obj, "config.guestFullName")
-        platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
+        # first check against vm_platform_relation
+        platform = None
+        for platform_relation in grab(self, "vm_platform_relation", fallback=list()):
+            object_regex = platform_relation.get("object_regex")
+            if object_regex.match(name):
+                platform = platform_relation.get("platform_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using platform '{platform}'")
+                break
+
+        if platform is None:
+            platform = grab(obj, "config.guestFullName")
+            platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
