@@ -1936,17 +1936,19 @@ class VMWareHandler:
             site_name = self.get_site_name(NBCluster, cluster_name)
 
         # first check against vm_platform_relation
-        platform = None
+        platform = grab(obj, "config.guestFullName")
+        platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
+
         for platform_relation in grab(self, "vm_platform_relation", fallback=list()):
-            object_regex = platform_relation.get("object_regex")
-            if object_regex.match(name):
-                platform = platform_relation.get("platform_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using platform '{platform}'")
+
+            if platform is None:
                 break
 
-        if platform is None:
-            platform = grab(obj, "config.guestFullName")
-            platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
+            object_regex = platform_relation.get("object_regex")
+            if object_regex.match(platform):
+                platform = platform_relation.get("platform_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {platform}, using mapped platform '{platform}'")
+                break
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
