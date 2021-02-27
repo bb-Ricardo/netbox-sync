@@ -509,7 +509,7 @@ class VMWareHandler:
             if grab(interface, "data.mac_address") in mac_list:
 
                 matching_object = grab(interface, f"data.{interface.secondary_key}")
-                if matching_object is None:
+                if not isinstance(matching_object, (NBDevice, NBVM)):
                     continue
 
                 log.debug2("Found matching MAC '%s' on %s '%s'" %
