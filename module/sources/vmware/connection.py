@@ -70,6 +70,7 @@ class VMWareHandler:
         "cluster_site_relation": None,
         "host_site_relation": None,
         "vm_tenant_relation": None,
+        "host_tenant_relation": None,
         "vm_platform_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
@@ -181,7 +182,7 @@ class VMWareHandler:
 
             config_settings[setting] = re_compiled
 
-        for relation_option in ["cluster_site_relation", "host_site_relation",
+        for relation_option in ["cluster_site_relation", "host_site_relation", "host_tenant_relation",
                                 "vm_tenant_relation", "vm_platform_relation"]:
 
             if config_settings.get(relation_option) is None:
@@ -1502,6 +1503,15 @@ class VMWareHandler:
             if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
                 asset_tag = this_asset_tag
 
+        # assign host_tenant_relation
+        tenant_name = None
+        for tenant_relation in grab(self, "host_tenant_relation", fallback=list()):
+            object_regex = tenant_relation.get("object_regex")
+            if object_regex.match(name):
+                tenant_name = tenant_relation.get("tenant_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tenant '{tenant_name}'")
+                break
+
         # prepare host data model
         host_data = {
             "name": name,
@@ -1523,6 +1533,8 @@ class VMWareHandler:
             host_data["asset_tag"] = asset_tag
         if platform is not None:
             host_data["platform"] = {"name": platform}
+        if tenant_name is not None:
+            host_data["tenant"] = {"name": tenant_name}
 
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
