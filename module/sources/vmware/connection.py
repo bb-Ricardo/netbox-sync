@@ -67,6 +67,7 @@ class VMWareHandler:
         "netbox_vm_device_role": "Server",
         "permitted_subnets": None,
         "collect_hardware_asset_tag": True,
+        "match_host_by_serial": True,
         "cluster_site_relation": None,
         "host_site_relation": None,
         "vm_tenant_relation": None,
@@ -968,7 +969,8 @@ class VMWareHandler:
         # look for devices with same serial or asset tag
         if object_type == NBDevice:
 
-            if device_vm_object is None and object_data.get("serial") is not None:
+            if device_vm_object is None and object_data.get("serial") is not None and \
+                    bool(self.match_host_by_serial) is True:
                 log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
 
                 device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
@@ -1487,8 +1489,10 @@ class VMWareHandler:
 
         for serial_num_key in ["SerialNumberTag", "ServiceTag", "EnclosureSerialNumberTag"]:
             if serial_num_key in identifier_dict.keys():
-                serial = get_string_or_none(identifier_dict.get(serial_num_key))
-                break
+                log.debug2(f"Found {serial_num_key}: {get_string_or_none(identifier_dict.get(serial_num_key))}")
+                if serial is None:
+                    serial = get_string_or_none(identifier_dict.get(serial_num_key))
+
 
         # add asset tag if desired and present
         asset_tag = None
