@@ -528,7 +528,7 @@ class VMWareHandler:
         # try to find object based on amount of matching MAC addresses
         num_devices_witch_matching_macs = len(objects_with_matching_macs.keys())
 
-        if num_devices_witch_matching_macs == 1:
+        if num_devices_witch_matching_macs == 1 and isinstance(matching_object, (NBDevice, NBVM)):
 
             log.debug2("Found one %s '%s' based on MAC addresses and using it" %
                        (object_type.name, matching_object.get_display_name(including_second_key=True)))
@@ -726,7 +726,7 @@ class VMWareHandler:
                 log.debug2(f"Found 1:1 MAC address match for NIC '{int_name}' (ignoring interface type)")
                 matching_int = current_object_interfaces.get(int_mac)
 
-            if matching_int is not None:
+            if isinstance(matching_int, (NBInterface, NBVMInterface)):
                 return_data[int_name] = matching_int
                 # ToDo:
                 # check why sometimes names are not present anymore and remove fails
@@ -849,13 +849,13 @@ class VMWareHandler:
             if grab(vlan, "data.site") == None:
                 vlan_object_without_site = vlan
 
-        if vlan_object_including_site is not None:
+        if isinstance(vlan_object_including_site, NetBoxObject):
             return_data = vlan_object_including_site
             log.debug2("Found a exact matching %s object: %s" %
                        (vlan_object_including_site.name,
                         vlan_object_including_site.get_display_name(including_second_key=True)))
 
-        elif vlan_object_without_site is not None:
+        elif isinstance(vlan_object_without_site, NetBoxObject):
             return_data = vlan_object_without_site
             log.debug2("Found a global matching %s object: %s" %
                        (vlan_object_without_site.name,
@@ -1083,7 +1083,8 @@ class VMWareHandler:
                         nic_vlan_tenant = grab(nic_vlan, "data.tenant")
 
                     # check if interface VLAN matches prefix VLAN for IP address
-                    if nic_vlan is not None and prefix_vlan is not None and nic_vlan != prefix_vlan:
+
+                    if isinstance(nic_vlan, NBVLAN) and isinstance(prefix_vlan, NBPrefix) and nic_vlan != prefix_vlan:
                         log.warning(f"Prefix vlan '{prefix_vlan.get_display_name()}' does not match interface vlan "
                                     f"'{nic_vlan.get_display_name()}' for '{nic_object.get_display_name()}")
 
@@ -1122,7 +1123,7 @@ class VMWareHandler:
                         continue
 
                     # IP address is not assigned to any interface
-                    if current_nic is None:
+                    if not isinstance(current_nic,(NBInterface, NBVMInterface)):
                         ip_object = ip
                         break
 
@@ -1161,7 +1162,7 @@ class VMWareHandler:
                     "assigned_object_id": nic_object,
                 }
 
-                if ip_object is None:
+                if not isinstance(ip_object, NBIPAddress):
                     log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                     if possible_ip_vrf is not None:
