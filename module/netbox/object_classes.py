@@ -370,6 +370,12 @@ class NetBoxObject:
             else:
                 new_value_str = str(new_value).replace("\r", "")
 
+            # support NetBox 2.11+ vcpus float value
+            if self.data_model.get(key) in [int, float] and isinstance(new_value, (int, float)) and \
+                    float(current_value) == float(new_value):
+
+                continue
+
             # just check again if values might match now
             if current_value_str == new_value_str:
                 continue
@@ -1080,7 +1086,7 @@ class NBVM(NetBoxObject):
         "cluster": NBCluster,
         "role": NBDeviceRole,
         "platform": NBPlatform,
-        "vcpus": int,
+        "vcpus": float,
         "memory": int,
         "disk": int,
         "comments": str,
