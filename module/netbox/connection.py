@@ -97,6 +97,10 @@ class NetBoxHandler:
 
         # check for minimum version
         api_version = self.get_api_version()
+        if api_version == "None":
+            do_error_exit("Unable to determine NetBox version, "
+                          "HTTP header 'API-Version' missing.")
+
         if version.parse(api_version) < version.parse(self.minimum_api_version):
             do_error_exit(f"Netbox API version '{api_version}' not supported. "
                           f"Minimum API version: {self.minimum_api_version}")
@@ -214,7 +218,7 @@ class NetBoxHandler:
         except Exception as e:
             do_error_exit(str(e))
 
-        result = str(response.headers["API-Version"])
+        result = str(response.headers.get("API-Version"))
 
         log.info(f"Successfully connected to NetBox '{self.host_fqdn}'")
         log.debug(f"Detected NetBox API version: {result}")
