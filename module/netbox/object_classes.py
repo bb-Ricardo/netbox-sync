@@ -371,7 +371,9 @@ class NetBoxObject:
                 new_value_str = str(new_value).replace("\r", "")
 
             # support NetBox 2.11+ vcpus float value
-            if self.data_model.get(key) in [int, float] and isinstance(new_value, (int, float)) and \
+            if current_value is not None and \
+                    self.data_model.get(key) in [int, float] and \
+                    isinstance(new_value, (int, float)) and \
                     float(current_value) == float(new_value):
 
                 continue
