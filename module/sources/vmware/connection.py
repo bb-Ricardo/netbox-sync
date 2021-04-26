@@ -73,6 +73,8 @@ class VMWareHandler:
         "vm_tenant_relation": None,
         "host_tenant_relation": None,
         "vm_platform_relation": None,
+        "host_role_relation": None,
+        "vm_role_relation":None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -80,6 +82,11 @@ class VMWareHandler:
         "skip_vm_templates": True,
         "strip_host_domain_name": False,
         "strip_vm_domain_name": False
+    }
+
+    deprecated_settings = {
+        "netbox_host_device_role": "host_role_relation",
+        "netbox_vm_device_role": "vm_role_relation"
     }
 
     init_successful = False
@@ -146,6 +153,11 @@ class VMWareHandler:
         """
 
         validation_failed = False
+        for deprecated_setting, alternative_setting in self.deprecated_settings.items():
+            if config_settings.get(deprecated_setting) != self.settings.get(deprecated_setting):
+                log.warning(f"Setting '{deprecated_setting}' is deprecated and will be removed soon. "
+                            f"Consider changing your config to use the '{alternative_setting}' setting.")
+
         for setting in ["host_fqdn", "port", "username", "password"]:
             if config_settings.get(setting) is None:
                 log.error(f"Config option '{setting}' in 'source/{self.name}' can't be empty/undefined")
@@ -184,7 +196,8 @@ class VMWareHandler:
             config_settings[setting] = re_compiled
 
         for relation_option in ["cluster_site_relation", "host_site_relation", "host_tenant_relation",
-                                "vm_tenant_relation", "vm_platform_relation"]:
+                                "vm_tenant_relation", "vm_platform_relation",
+                                "host_role_relation", "vm_role_relation"]:
 
             if config_settings.get(relation_option) is None:
                 continue
@@ -1000,10 +1013,27 @@ class VMWareHandler:
             device_vm_object.update(data=object_data, source=self)
 
         # add role if undefined
+        # DEPRECATED
+        role_name = None
         if object_type == NBDevice and grab(device_vm_object, "data.device_role") is None:
-            device_vm_object.update(data={"device_role": {"name": self.netbox_host_device_role}})
+            role_name = self.netbox_host_device_role
         if object_type == NBVM and grab(device_vm_object, "data.role") is None:
-            device_vm_object.update(data={"role": {"name": self.netbox_vm_device_role}})
+            role_name = self.netbox_vm_device_role
+
+        # update role according to config settings
+        object_name = object_data.get(object_type.primary_key)
+        for role_relation in grab(self, "host_role_relation" if object_type == NBDevice else "vm_role_relation",
+                                  fallback=list()):
+            object_regex = role_relation.get("object_regex")
+            if object_regex.match(object_name):
+                role_name = role_relation.get("role_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {object_name}, using role '{role_name}'")
+                break
+
+        if role_name is not None and object_type == NBDevice:
+            device_vm_object.update(data={"device_role": {"name": role_name}})
+        if role_name is not None and object_type == NBVM:
+            device_vm_object.update(data={"role": {"name": role_name}})
 
         # compile all nic data into one dictionary
         if object_type == NBVM:
