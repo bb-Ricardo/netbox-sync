@@ -58,6 +58,12 @@ class NetBoxObject:
 
 
     """
+    name = ""
+    api_path = ""
+    primary_key = ""
+    data_model = {}
+    # _mandatory_attrs must be set at subclasses
+    _mandatory_attrs = ("name", "api_path", "primary_key", "data_model")
 
     # list of default attributes which are added to every netbox object during init
     default_attributes = {
@@ -73,6 +79,11 @@ class NetBoxObject:
     inventory = None
 
     def __init__(self, data=None, read_from_netbox=False, inventory=None, source=None):
+        if not all(getattr(self, attr) for attr in self._mandatory_attrs):
+            raise ValueError(
+                f"FATAL: not all mandatory attributes {self._mandatory_attrs} "
+                f"are set in {self.__class__.__name__}."
+            )
 
         # inherit and create default attributes from parent
         for attr_key, attr_value in self.default_attributes.items():
@@ -456,6 +467,8 @@ class NetBoxObject:
             if data_type in NBObjectList.__subclasses__():
 
                 resolved_object_list = data_type()
+                assert isinstance(resolved_object_list, list)
+
                 for item in data_value:
 
                     if isinstance(item, data_type.member_type):
