@@ -772,12 +772,15 @@ class NBTag(NetBoxObject):
     api_path = "extras/tags"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 100,
-        "slug": 100,
-        "color": 6,
-        "description": 200
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "color": 6,
+            "description": 200
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBTagList(NBObjectList):
@@ -804,13 +807,16 @@ class NBTenant(NetBoxObject):
     api_path = "tenancy/tenants"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 30,
-        "slug": 50,
-        "comments": str,
-        "description": 200,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 30,
+            "slug": 50,
+            "comments": str,
+            "description": 200,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBSite(NetBoxObject):
@@ -818,13 +824,16 @@ class NBSite(NetBoxObject):
     api_path = "dcim/sites"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 50,
-        "slug": 50,
-        "comments": str,
-        "tenant": NBTenant,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 50,
+            "slug": 50,
+            "comments": str,
+            "tenant": NBTenant,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBVRF(NetBoxObject):
@@ -832,12 +841,15 @@ class NBVRF(NetBoxObject):
     api_path = "ipam/vrfs"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 50,
-        "description": 200,
-        "tenant": NBTenant,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 50,
+            "description": 200,
+            "tenant": NBTenant,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBVLAN(NetBoxObject):
@@ -847,14 +859,18 @@ class NBVLAN(NetBoxObject):
     secondary_key = "name"
     enforce_secondary_key = True
     prune = False
-    data_model = {
-        "vid": int,
-        "name": 64,
-        "site": NBSite,
-        "description": 200,
-        "tenant": NBTenant,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "vid": int,
+            "name": 64,
+            "site": NBSite,
+            "description": 200,
+            "tenant": NBTenant,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
+
 
     def get_display_name(self, data=None, including_second_key=False):
         """
@@ -924,15 +940,18 @@ class NBPrefix(NetBoxObject):
     api_path = "ipam/prefixes"
     primary_key = "prefix"
     prune = False
-    data_model = {
-        "prefix": [IPv4Network, IPv6Network],
-        "site": NBSite,
-        "tenant": NBTenant,
-        "vlan": NBVLAN,
-        "vrf": NBVRF,
-        "description": 200,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "prefix": [IPv4Network, IPv6Network],
+            "site": NBSite,
+            "tenant": NBTenant,
+            "vlan": NBVLAN,
+            "vrf": NBVRF,
+            "description": 200,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
     def update(self, data=None, read_from_netbox=False, source=None):
 
@@ -956,11 +975,14 @@ class NBManufacturer(NetBoxObject):
     api_path = "dcim/manufacturers"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 50,
-        "slug": 50,
-        "description": 200
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 50,
+            "slug": 50,
+            "description": 200
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBDeviceType(NetBoxObject):
@@ -968,14 +990,17 @@ class NBDeviceType(NetBoxObject):
     api_path = "dcim/device-types"
     primary_key = "model"
     prune = False
-    data_model = {
-        "model": 50,
-        "slug": 50,
-        "part_number": 50,
-        "description": 200,
-        "manufacturer": NBManufacturer,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "model": 50,
+            "slug": 50,
+            "part_number": 50,
+            "description": 200,
+            "manufacturer": NBManufacturer,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBPlatform(NetBoxObject):
@@ -983,12 +1008,15 @@ class NBPlatform(NetBoxObject):
     api_path = "dcim/platforms"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 100,
-        "slug": 100,
-        "manufacturer": NBManufacturer,
-        "description": 200
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "manufacturer": NBManufacturer,
+            "description": 200
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBClusterType(NetBoxObject):
@@ -996,11 +1024,14 @@ class NBClusterType(NetBoxObject):
     api_path = "virtualization/cluster-types"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 50,
-        "slug": 50,
-        "description": 200
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 50,
+            "slug": 50,
+            "description": 200
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBClusterGroup(NetBoxObject):
@@ -1008,11 +1039,14 @@ class NBClusterGroup(NetBoxObject):
     api_path = "virtualization/cluster-groups"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 50,
-        "slug": 50,
-        "description": 200
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 50,
+            "slug": 50,
+            "description": 200
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBDeviceRole(NetBoxObject):
@@ -1020,13 +1054,16 @@ class NBDeviceRole(NetBoxObject):
     api_path = "dcim/device-roles"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 50,
-        "slug": 50,
-        "color": 6,
-        "description": 200,
-        "vm_role": bool
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 50,
+            "slug": 50,
+            "color": 6,
+            "description": 200,
+            "vm_role": bool
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBCluster(NetBoxObject):
@@ -1034,14 +1071,17 @@ class NBCluster(NetBoxObject):
     api_path = "virtualization/clusters"
     primary_key = "name"
     prune = False
-    data_model = {
-        "name": 100,
-        "comments": str,
-        "type": NBClusterType,
-        "group": NBClusterGroup,
-        "site": NBSite,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "comments": str,
+            "type": NBClusterType,
+            "group": NBClusterGroup,
+            "site": NBSite,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBDevice(NetBoxObject):
@@ -1057,21 +1097,26 @@ class NBDevice(NetBoxObject):
     primary_key = "name"
     secondary_key = "site"
     prune = True
-    data_model = {
-        "name": 64,
-        "device_type": NBDeviceType,
-        "device_role": NBDeviceRole,
-        "platform": NBPlatform,
-        "serial": 50,
-        "site": NBSite,
-        "status": ["offline", "active", "planned", "staged", "failed", "inventory", "decommissioning"],
-        "cluster": NBCluster,
-        "asset_tag": 50,
-        "primary_ip4": object,
-        "primary_ip6": object,
-        "tags": NBTagList,
-        "tenant": NBTenant
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 64,
+            "device_type": NBDeviceType,
+            "device_role": NBDeviceRole,
+            "platform": NBPlatform,
+            "serial": 50,
+            "site": NBSite,
+            "status": ["offline", "active", "planned", "staged", "failed", "inventory", "decommissioning"],
+            "cluster": NBCluster,
+            "asset_tag": 50,
+            # TODO as dict creation is now deferred to instance creation the needed class
+            #  objects can be used directly here
+            "primary_ip4": object,
+            "primary_ip6": object,
+            "tags": NBTagList,
+            "tenant": NBTenant
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBVM(NetBoxObject):
@@ -1087,21 +1132,24 @@ class NBVM(NetBoxObject):
     primary_key = "name"
     secondary_key = "cluster"
     prune = True
-    data_model = {
-        "name": 64,
-        "status": ["offline", "active", "planned", "staged", "failed", "decommissioning"],
-        "cluster": NBCluster,
-        "role": NBDeviceRole,
-        "platform": NBPlatform,
-        "vcpus": int,
-        "memory": int,
-        "disk": int,
-        "comments": str,
-        "primary_ip4": object,
-        "primary_ip6": object,
-        "tags": NBTagList,
-        "tenant": NBTenant
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 64,
+            "status": ["offline", "active", "planned", "staged", "failed", "decommissioning"],
+            "cluster": NBCluster,
+            "role": NBDeviceRole,
+            "platform": NBPlatform,
+            "vcpus": int,
+            "memory": int,
+            "disk": int,
+            "comments": str,
+            "primary_ip4": object,
+            "primary_ip6": object,
+            "tags": NBTagList,
+            "tenant": NBTenant
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBVMInterface(NetBoxObject):
@@ -1111,18 +1159,21 @@ class NBVMInterface(NetBoxObject):
     secondary_key = "virtual_machine"
     enforce_secondary_key = True
     prune = True
-    data_model = {
-        "name": 64,
-        "virtual_machine": NBVM,
-        "enabled": bool,
-        "mac_address": str,
-        "mtu": int,
-        "mode": ["access", "tagged", "tagged-all"],
-        "untagged_vlan": NBVLAN,
-        "tagged_vlans": NBVLANList,
-        "description": 200,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 64,
+            "virtual_machine": NBVM,
+            "enabled": bool,
+            "mac_address": str,
+            "mtu": int,
+            "mode": ["access", "tagged", "tagged-all"],
+            "untagged_vlan": NBVLAN,
+            "tagged_vlans": NBVLANList,
+            "description": 200,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBInterface(NetBoxObject):
@@ -1132,22 +1183,25 @@ class NBInterface(NetBoxObject):
     secondary_key = "device"
     enforce_secondary_key = True
     prune = True
-    data_model = {
-        "name": 64,
-        "device": NBDevice,
-        "label": 64,
-        "type": ["virtual", "100base-tx", "1000base-t", "10gbase-t", "25gbase-x-sfp28", "40gbase-x-qsfpp", "other"],
-        "enabled": bool,
-        "mac_address": str,
-        "mgmt_only": bool,
-        "mtu": int,
-        "mode": ["access", "tagged", "tagged-all"],
-        "untagged_vlan": NBVLAN,
-        "tagged_vlans": NBVLANList,
-        "description": 200,
-        "connection_status": bool,
-        "tags": NBTagList
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 64,
+            "device": NBDevice,
+            "label": 64,
+            "type": ["virtual", "100base-tx", "1000base-t", "10gbase-t", "25gbase-x-sfp28", "40gbase-x-qsfpp", "other"],
+            "enabled": bool,
+            "mac_address": str,
+            "mgmt_only": bool,
+            "mtu": int,
+            "mode": ["access", "tagged", "tagged-all"],
+            "untagged_vlan": NBVLAN,
+            "tagged_vlans": NBVLANList,
+            "description": 200,
+            "connection_status": bool,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBIPAddress(NetBoxObject):
@@ -1156,23 +1210,26 @@ class NBIPAddress(NetBoxObject):
     primary_key = "address"
     is_primary = False
     prune = True
-    data_model = {
-        "address": str,
-        "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
-        "assigned_object_id": [NBInterface, NBVMInterface],
-        "description": 200,
-        "dns_name": 255,
-        "tags": NBTagList,
-        "tenant": NBTenant,
-        "vrf": NBVRF
-    }
-    # add relation between two attributes
-    data_model_relation = {
-        "dcim.interface": NBInterface,
-        "virtualization.vminterface": NBVMInterface,
-        NBInterface: "dcim.interface",
-        NBVMInterface: "virtualization.vminterface"
-    }
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "address": str,
+            "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
+            "assigned_object_id": [NBInterface, NBVMInterface],
+            "description": 200,
+            "dns_name": 255,
+            "tags": NBTagList,
+            "tenant": NBTenant,
+            "vrf": NBVRF
+        }
+        # add relation between two attributes
+        self.data_model_relation = {
+            "dcim.interface": NBInterface,
+            "virtualization.vminterface": NBVMInterface,
+            NBInterface: "dcim.interface",
+            NBVMInterface: "virtualization.vminterface"
+        }
+        super().__init__(*args, **kwargs)
 
     def resolve_relations(self):
 
