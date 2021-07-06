@@ -1251,7 +1251,7 @@ class VMWareHandler:
                 if set_this_primary_ip is True:
 
                     log.debug(f"Setting IP '{nic_ip}' as primary IPv{ip_version} for "
-                              f"'{device_vm_object.get_display_name()}")
+                              f"'{device_vm_object.get_display_name()}'")
                     device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
 
         return
