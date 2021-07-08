@@ -67,7 +67,19 @@ virtualenv-3 .env || virtualenv .env
 pip3 install -r requirements.txt || pip install -r requirements.txt
 ```
 
-### Accounts and tokens
+## Docker
+
+Run the application in docker container
+
+* The application working directory is ```/opt```
+* Required to mount your ```settings.ini```
+
+```
+docker build -t netbox-sync .
+docker run --rm -it -v $(pwd)/settings.ini:/opt/settings.ini netbox-sync [some args...]
+```
+
+## Accounts and tokens
 In order to read data from a vCenter and updated data in NetBox you need credentials in both instances.
 
 ### vCenter user
