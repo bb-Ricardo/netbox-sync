@@ -12,7 +12,7 @@ spec:
         spec:
           containers:
           - name: netbox-vsphere-sync
-            image: harbor.beantech.cloud/library/netbox-vsphere-sync:latest
+            image: your.container.registry/netbox-vsphere-sync:v1.2.0
             imagePullPolicy: IfNotPresent
             volumeMounts:
             - name: netbox-vsphere-sync
