@@ -1,0 +1,25 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: netbox-vsphere-sync
+  labels:
+    app: netbox-vsphere-sync
+spec:
+  schedule: "10 7-23 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: netbox-vsphere-sync
+            image: your.container.registry/netbox-vsphere-sync:v1.2.0
+            imagePullPolicy: IfNotPresent
+            volumeMounts:
+            - name: netbox-vsphere-sync
+              mountPath: /opt/settings.ini
+              subPath: settings.ini
+          volumes:
+          - name: netbox-vsphere-sync
+            secret:
+              secretName: netbox-vsphere-sync
+          restartPolicy: Never

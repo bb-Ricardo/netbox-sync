@@ -79,6 +79,25 @@ docker build -t netbox-sync .
 docker run --rm -it -v $(pwd)/settings.ini:/opt/settings.ini netbox-sync [some args...]
 ```
 
+## Kubernetes
+
+Run the containerized application in a kubernetes cluster
+
+ * Build the container image following the docker instructions above
+ * Tag and push the image to a container registry you have access to
+ * Create a secret from the settings.ini
+ * Update the image field in the manifest
+ * Deploy the manifest to your k8s cluster and check the job is running
+
+ ```
+ docker build -t netbox-vsphere-sync .
+ docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:v1.2.0
+ docker image push your-registry.host/netbox-vsphere-sync:v1.2.0
+
+ kubectl create secret generic netbox-vsphere-sync --from-file=settings.ini
+ kubectl apply -f netbox-vsphere-sync-cronjob.yaml
+ ```
+
 ## Accounts and tokens
 In order to read data from a vCenter and updated data in NetBox you need credentials in both instances.
 
