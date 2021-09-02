@@ -1446,7 +1446,8 @@ class VMWareHandler:
                 log.error(e)
 
         # handle standalone hosts
-        if cluster_name == name:
+        if cluster_name == name or (self.strip_host_domain_name is True and cluster_name.split(".")[0] == name):
+            cluster_name = cluster_name.split(".")[0]
             log.debug2(f"Host name and cluster name are equal '{cluster_name}'. "
                        f"Assuming this host is a 'standalone' host.")
 
@@ -1957,9 +1958,14 @@ class VMWareHandler:
         self.processed_vm_uuid.append(vm_uuid)
 
         parent_name = get_string_or_none(grab(obj, "runtime.host.name"))
+        cluster_name = get_string_or_none(grab(obj, "runtime.host.parent.name"))
+
+        # honor strip_host_domain_name
+        if cluster_name is not None and self.strip_host_domain_name is True and \
+                parent_name.split(".")[0] == cluster_name.split(".")[0]:
+            cluster_name = cluster_name.split(".")[0]
 
         # check VM cluster
-        cluster_name = get_string_or_none(grab(obj, "runtime.host.parent.name"))
         if cluster_name is None:
             log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
             return
