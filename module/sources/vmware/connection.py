@@ -1046,6 +1046,9 @@ class VMWareHandler:
         # map interfaces of existing object with discovered interfaces
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
 
+        if object_data.get("status", "") == "active" and (nic_ips is None or len(nic_ips.keys()) == 0):
+            log.warning(f"No IP addresses for '{object_name}' found!")
+
         for int_name, int_data in nic_data.items():
 
             # add object to interface
@@ -1618,7 +1621,11 @@ class VMWareHandler:
                 log.debug2(f"Found host portGroup {pgroup_name}")
 
                 nic_order = grab(pgroup, "computedPolicy.nicTeaming.nicOrder")
-                pgroup_nics = nic_order.activeNic + nic_order.standbyNic
+                pgroup_nics = list()
+                if nic_order.activeNic is not None:
+                    pgroup_nics += nic_order.activeNic
+                if nic_order.standbyNic is not None:
+                    pgroup_nics += nic_order.standbyNic
 
                 self.network_data["host_pgroup"][name][pgroup_name] = {
                     "vlan_id": grab(pgroup, "spec.vlanId"),
