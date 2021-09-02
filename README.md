@@ -120,7 +120,7 @@ usage: netbox-sync.py [-h] [-c settings.ini]
 
 Sync objects from various sources to NetBox
 
-Version: 1.1.0 (2021-06-30)
+Version: 1.1.1 (2021-09-02)
 
 optional arguments:
   -h, --help            show this help message and exit
