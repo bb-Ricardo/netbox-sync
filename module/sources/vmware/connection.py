@@ -1447,7 +1447,11 @@ class VMWareHandler:
 
         # handle standalone hosts
         if cluster_name == name or (self.strip_host_domain_name is True and cluster_name.split(".")[0] == name):
-            cluster_name = cluster_name.split(".")[0]
+
+            # apply strip_domain_name to cluster as well if activated
+            if self.strip_host_domain_name is True:
+                cluster_name = cluster_name.split(".")[0]
+
             log.debug2(f"Host name and cluster name are equal '{cluster_name}'. "
                        f"Assuming this host is a 'standalone' host.")
 
