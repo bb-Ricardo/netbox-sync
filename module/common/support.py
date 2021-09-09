@@ -13,6 +13,8 @@ import asyncio
 import aiodns
 
 from module.common.logging import get_logger
+from module.common.misc import grab
+from module.netbox.inventory import NBDevice, NBVM, NBInterface, NBVMInterface
 
 log = get_logger()
 
@@ -185,5 +187,134 @@ async def reverse_lookup(resolver, ip):
             log.warning(f"PTR record contains invalid characters: {response.name}")
 
     return {ip: resolved_name}
+
+
+def map_object_interfaces_to_current_interfaces(inventory, device_vm_object, interface_data_dict=None):
+    """
+    Try to match current object interfaces to discovered ones. This will be done
+    by multiple approaches. Order as following listing whatever matches first will be chosen.
+
+        by simple name:
+            both interface names match exactly
+        by MAC address separated by physical and virtual NICs:
+            MAC address of interfaces match exactly, distinguish between physical and virtual interfaces
+        by MAC regardless of interface type
+            MAC address of interfaces match exactly, type of interface does not matter
+
+        If there are interfaces which don't match at all then the unmatched interfaces will be
+        matched 1:1. Sort both lists (unmatched current interfaces, unmatched new new interfaces)
+        by name and assign them each other.
+
+            eth0 > vNIC 1
+            eth1 > vNIC 2
+            ens1 > vNIC 3
+            ...  > ...
+
+    Parameters
+    ----------
+    inventory: NetBoxInventory
+        inventory handler
+    device_vm_object: (NBDevice, NBVM)
+        object type to look for
+    interface_data_dict: dict
+        dictionary with interface data to compare to existing machine
+
+    Returns
+    -------
+    dict: {"$interface_name": associated_interface_object}
+        if no current current interface was left to match "None" will be returned instead of
+        a matching interface object
+    """
+
+    """
+        trying multiple ways to match interfaces
+    """
+
+    if not isinstance(device_vm_object, (NBDevice, NBVM)):
+        raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
+
+    if not isinstance(interface_data_dict, dict):
+        raise ValueError(f"Value for 'interface_data_dict' must be a dict, got: {interface_data_dict}")
+
+    log.debug2("Trying to match current object interfaces in NetBox with discovered interfaces")
+
+    current_object_interfaces = {
+        "virtual": dict(),
+        "physical": dict()
+    }
+
+    current_object_interface_names = list()
+
+    return_data = dict()
+
+    # grab current data
+    for interface in inventory.get_all_interfaces(device_vm_object):
+        int_mac = grab(interface, "data.mac_address")
+        int_name = grab(interface, "data.name")
+        int_type = "virtual"
+        if "virtual" not in str(grab(interface, "data.type", fallback="virtual")):
+            int_type = "physical"
+
+        if int_mac is not None:
+            current_object_interfaces[int_type][int_mac] = interface
+            current_object_interfaces[int_mac] = interface
+
+        if int_name is not None:
+            current_object_interfaces[int_name] = interface
+            current_object_interface_names.append(int_name)
+
+    log.debug2("Found '%d' NICs in Netbox for '%s'" %
+               (len(current_object_interface_names), device_vm_object.get_display_name()))
+
+    unmatched_interface_names = list()
+
+    for int_name, int_data in interface_data_dict.items():
+
+        return_data[int_name] = None
+
+        int_mac = grab(int_data, "mac_address", fallback="XX:XX:YY:YY:ZZ:ZZ")
+        int_type = "virtual"
+        if "virtual" not in str(grab(int_data, "type", fallback="virtual")):
+            int_type = "physical"
+
+        # match simply by name
+        matching_int = None
+        if int_name in current_object_interface_names:
+            log.debug2(f"Found 1:1 name match for NIC '{int_name}'")
+            matching_int = current_object_interfaces.get(int_name)
+
+        # match mac by interface type
+        elif grab(current_object_interfaces, f"{int_type}.{int_mac}") is not None:
+            log.debug2(f"Found 1:1 MAC address match for {int_type} NIC '{int_name}'")
+            matching_int = grab(current_object_interfaces, f"{int_type}.{int_mac}")
+
+        # match mac regardless of interface type
+        elif current_object_interfaces.get(int_mac) is not None and \
+                current_object_interfaces.get(int_mac) not in return_data.values():
+            log.debug2(f"Found 1:1 MAC address match for NIC '{int_name}' (ignoring interface type)")
+            matching_int = current_object_interfaces.get(int_mac)
+
+        if isinstance(matching_int, (NBInterface, NBVMInterface)):
+            return_data[int_name] = matching_int
+            # ToDo:
+            # check why sometimes names are not present anymore and remove fails
+            if grab(matching_int, "data.name") in current_object_interface_names:
+                current_object_interface_names.remove(grab(matching_int, "data.name"))
+
+        # no match found, we match the left overs just by #1 -> #1, #2 -> #2, ...
+        else:
+            unmatched_interface_names.append(int_name)
+
+    current_object_interface_names.sort()
+    unmatched_interface_names.sort()
+
+    matching_nics = dict(zip(unmatched_interface_names, current_object_interface_names))
+
+    for new_int, current_int in matching_nics.items():
+        current_int_object = current_object_interfaces.get(current_int)
+        log.debug2(f"Matching '{new_int}' to NetBox Interface '{current_int_object.get_display_name()}'")
+        return_data[new_int] = current_int_object
+
+    return return_data
 
 # EOF
