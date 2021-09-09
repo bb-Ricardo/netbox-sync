@@ -9,9 +9,10 @@
 
 # define all available sources here
 from .vmware.connection import VMWareHandler
+from .check_redfish.import_inventory import CheckRedfish
 
 # list of valid sources
-valid_sources = [VMWareHandler]
+valid_sources = [VMWareHandler, CheckRedfish]
 
 ###############
 from module.common.configuration import get_config

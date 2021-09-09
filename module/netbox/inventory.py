@@ -15,6 +15,14 @@ from module.common.support import perform_ptr_lookups
 
 log = get_logger()
 
+interface_speed_type_mapping = {
+    100: "100base-tx",
+    1000: "1000base-t",
+    10000: "10gbase-t",
+    25000: "25gbase-x-sfp28",
+    40000: "40gbase-x-qsfpp"
+}
+
 
 class NetBoxInventory:
     """
@@ -110,7 +118,10 @@ class NetBoxInventory:
                 if object_name_to_find is None:
                     object_name_to_find = this_object.get_display_name(data, including_second_key=True)
 
-                if object_name_to_find == this_object.get_display_name(including_second_key=True):
+                # compare lower key
+                if f"{object_name_to_find}".lower() == \
+                        f"{this_object.get_display_name(including_second_key=True)}".lower():
+
                     return this_object
 
         # try to match all data attributes

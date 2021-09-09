@@ -302,7 +302,7 @@ class NetBoxObject:
 
             # just check the type of the value
             type_check_failed = False
-            for valid_type in [bool, str, int]:
+            for valid_type in [bool, str, int, list]:
 
                 if defined_value_type == valid_type and not isinstance(value, valid_type):
                     log.error(f"Invalid data type for '{key}' (must be {valid_type.__name__}), got: '{value}'")
@@ -320,8 +320,21 @@ class NetBoxObject:
             if defined_value_type == NBVLANList:
                 value = self.compile_vlans(value)
 
+            if defined_value_type == NBCustomField:
+                if not isinstance(value, dict):
+                    log.error(f"Invalid data type for '{key}' (must be 'dict'), got: '{value}'")
+                    continue
+                for field_name in value.keys():
+                    if self.inventory.get_by_data(NBCustomField, data={"name": field_name}) is None:
+                        log.error(f"{NBCustomField.name} '{field_name}' not found in inventory. "
+                                  "Needs to be created first!")
+                        type_check_failed = True
+
+                if type_check_failed is True:
+                    continue
+
             # this is meant to be reference to a different object
-            if defined_value_type in NetBoxObject.__subclasses__():
+            if defined_value_type in NetBoxObject.__subclasses__() and defined_value_type != NBCustomField:
 
                 if not isinstance(value, NetBoxObject):
                     # try to find object.
@@ -380,6 +393,10 @@ class NetBoxObject:
 
             # just check again if values might match now
             if current_value_str == new_value_str:
+                continue
+
+            # skip update if just the letter case changed for the primary key
+            if key == self.primary_key and current_value_str.lower() == new_value_str.lower():
                 continue
 
             self.data[key] = new_value
@@ -457,6 +474,10 @@ class NetBoxObject:
 
             # continue if data_type is not an NetBox object
             if data_type not in NetBoxObject.__subclasses__() + NBObjectList.__subclasses__():
+                continue
+
+            # NBCustomField are special
+            if data_type == NBCustomField:
                 continue
 
             data_value = self.data.get(key)
@@ -760,6 +781,62 @@ class NBObjectList(list):
     def get_display_name(self):
 
         return sorted([x.get_display_name() for x in self])
+
+
+class NBCustomField(NetBoxObject):
+    name = "custom field"
+    api_path = "extras/custom-fields"
+    primary_key = "name"
+    prune = False
+    # used by this software
+    valid_content_types = [
+        "dcim.interface",
+        "dcim.inventoryitem",
+        "dcim.powerport",
+        "virtualization.vminterface"
+    ]
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "content_types": list,
+            "type": ["text", "integer", "boolean", "date", "url", "select", "multiselect"],
+            "name": 50,
+            "label": 50,
+            "description": 200,
+            "required": bool,
+            "default": str,
+            "choices": list
+        }
+        super().__init__(*args, **kwargs)
+
+    def update(self, data=None, read_from_netbox=False, source=None):
+        """
+            handle content types properly
+            append to existing content_types and don't delete any
+        """
+
+        # get current content types
+        current_content_types = list()
+        for content_type in grab(self, "data.content_types", fallback=list()):
+            current_content_types.append(content_type)
+
+        if isinstance(data.get("content_types"), str):
+            data["content_types"] = [data.get("content_types")]
+
+        for content_type in data.get("content_types"):
+            if content_type not in self.valid_content_types and read_from_netbox is False:
+                log.error(f"Invalid content type '{content_type}' for {self.name}")
+                continue
+
+            if content_type not in current_content_types:
+                current_content_types.append(content_type)
+
+        data["content_types"] = current_content_types
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+        if isinstance(grab(self, "data.content_types"), str):
+            self.data["content_types"] = [grab(self, "data.content_types")]
 
 
 class NBTag(NetBoxObject):
@@ -1213,5 +1290,47 @@ class NBIPAddress(NetBoxObject):
         """
 
         return [NBInterface, NBVMInterface, NBTag, NBTenant, NBVRF]
+
+
+class NBInventoryItem(NetBoxObject):
+    name = "inventory item"
+    api_path = "dcim/inventory-items"
+    primary_key = "name"
+    secondary_key = "device"
+    prune = True
+
+    data_model = {
+        "device": NBDevice,
+        "name": 64,
+        "label": 64,
+        "manufacturer": NBManufacturer,
+        "part_id": 50,
+        "serial": 50,
+        "asset_tag": 50,
+        "discovered": bool,
+        "description": 200,
+        "tags": NBTagList,
+        "custom_fields": NBCustomField
+    }
+
+
+class NBPowerPort(NetBoxObject):
+    name = "power port"
+    api_path = "dcim/power-ports"
+    primary_key = "name"
+    secondary_key = "device"
+    prune = True
+
+    data_model = {
+        "device": NBDevice,
+        "name": 64,
+        "label": 64,
+        "description": 200,
+        "maximum_draw": int,
+        "allocated_draw": int,
+        "mark_connected": bool,
+        "tags": NBTagList,
+        "custom_fields": NBCustomField
+    }
 
 # EOF
