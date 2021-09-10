@@ -22,6 +22,15 @@ from module.netbox.inventory import interface_speed_type_mapping
 
 log = get_logger()
 
+#
+# ToDo:
+#   * fix custom field merging data dicts
+#   * get inventory for this device depending on the type
+#   * match source inventory items witch NetBox items
+#   * delete items which don't exist anymore
+#   * add interface IPs
+#   * implement checking for permitted IPs
+
 
 class CheckRedfish:
 
@@ -133,7 +142,7 @@ class CheckRedfish:
 
     def apply(self):
 
-        self.add_firmware_custom_field()
+        self.add_necessary_custom_fields()
 
         for filename in glob.glob(f"{self.inventory_file_path}/*.json"):
 
@@ -259,6 +268,8 @@ class CheckRedfish:
 
             # compile inventory item data
             self._update_item({
+                "inventory_type": "Power Supply",
+                "health": health_status,
                 "device": device_object,
                 "description": description,
                 "full_name": name,
@@ -284,7 +295,7 @@ class CheckRedfish:
             if capacity_in_watt is not None:
                 ps_data["maximum_draw"] = capacity_in_watt
             if firmware is not None:
-                ps_data["custom_fields"] = {"firmware": firmware}
+                ps_data["custom_fields"] = {"firmware": firmware, "health": health_status}
 
             # add/update power supply data
             ps_object = grab(current_ps, f"{ps_index}")
@@ -312,10 +323,12 @@ class CheckRedfish:
                 description.append(f"Context: {physical_context}")
 
             self._update_item({
+                "inventory_type": "Fan",
                 "device": device_object,
                 "description": description,
                 "name_start": fan_name,
-                "full_name": fan_name
+                "full_name": fan_name,
+                "health": health_status
             })
 
     def update_memory(self, device_object, inventory_data):
@@ -358,13 +371,15 @@ class CheckRedfish:
                 description.append(f"Slot: {slot}")
 
             self._update_item({
+                "inventory_type": "DIMM",
                 "device": device_object,
                 "description": description,
                 "name_start": memory_name,
                 "full_name": name,
                 "serial": get_string_or_none(grab(memory, "serial")),
                 "manufacturer": get_string_or_none(grab(memory, "manufacturer")),
-                "part_number": get_string_or_none(grab(memory, "part_number"))
+                "part_number": get_string_or_none(grab(memory, "part_number")),
+                "health": health_status
             })
 
     def update_proc(self, device_object, inventory_data):
@@ -380,6 +395,7 @@ class CheckRedfish:
             cores = get_string_or_none(grab(processor, "cores"))
             threads = get_string_or_none(grab(processor, "threads"))
             socket = get_string_or_none(grab(processor, "socket"))
+            health_status = get_string_or_none(grab(processor, "health_status"))
 
             name = f"{socket} ({model})"
 
@@ -394,12 +410,14 @@ class CheckRedfish:
                 description.append(f"Threads: {threads}")
 
             self._update_item({
+                "inventory_type": "CPU",
                 "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(processor, "manufacturer")),
                 "full_name": name,
                 "name_start": socket,
-                "serial": get_string_or_none(grab(processor, "serial"))
+                "serial": get_string_or_none(grab(processor, "serial")),
+                "health": health_status
             })
 
     def update_physical_drive(self, device_object, inventory_data):
@@ -448,16 +466,13 @@ class CheckRedfish:
             name += f" ({' '.join(name_details)})"
 
             description = list()
-            if health_status is not None:
-                description.append(f"Health: {health_status}")
             if interface_type is not None:
                 description.append(f"Interface: {interface_type}")
             if speed_in_rpm is not None:
                 description.append(f"Speed: {speed_in_rpm}RPM")
-            if firmware is not None:
-                description.append(f"Firmware: {firmware}")
 
             self._update_item({
+                "inventory_type": "Physical Drive",
                 "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(pd, "manufacturer")),
@@ -465,7 +480,8 @@ class CheckRedfish:
                 "name_start": pd_name,
                 "serial": serial,
                 "part_number": get_string_or_none(grab(pd, "part_number")),
-                "firmware": firmware
+                "firmware": firmware,
+                "health": health_status
             })
 
     def update_storage_controller(self, device_object, inventory_data):
@@ -490,20 +506,15 @@ class CheckRedfish:
             if location is not None and location not in name:
                 name += f" {location}"
 
-            description = list()
-            if health_status is not None:
-                description.append(f"Health: {health_status}")
-            if firmware is not None:
-                description.append(f"Firmware: {firmware}")
-
             self._update_item({
+                "inventory_type": "Storage Controller",
                 "device": device_object,
-                "description": description,
                 "manufacturer": get_string_or_none(grab(sc, "manufacturer")),
                 "full_name": name,
                 "name_start": sc_name,
                 "serial": serial,
-                "firmware": firmware
+                "firmware": firmware,
+                "health": health_status
             })
 
     def update_network_adapter(self, device_object, inventory_data):
@@ -530,21 +541,16 @@ class CheckRedfish:
             if num_ports is not None:
                 name += f" ({num_ports} ports)"
 
-            description = list()
-            if health_status is not None:
-                description.append(f"Health: {health_status}")
-            if firmware is not None:
-                description.append(f"Firmware: {firmware}")
-
             self._update_item({
+                "inventory_type": "NIC",
                 "device": device_object,
-                "description": description,
                 "manufacturer": get_string_or_none(grab(adapter, "manufacturer")),
                 "full_name": name,
                 "name_start": adapter_name,
                 "serial": serial,
                 "part_number": get_string_or_none(grab(adapter, "part_number")),
-                "firmware": firmware
+                "firmware": firmware,
+                "health": health_status
             })
 
     def update_network_interface(self, device_object, inventory_data):
@@ -564,6 +570,7 @@ class CheckRedfish:
             link_status = get_string_or_none(grab(nic_port, "link_status"))
             manager_ids = grab(nic_port, "manager_ids", fallback=list())
             hostname = get_string_or_none(grab(nic_port, "hostname"))
+            health_status = get_string_or_none(grab(nic_port, "health_status"))
 
             if port_name is None:
                 port_name = port_id
@@ -592,13 +599,15 @@ class CheckRedfish:
                 enabled = True
 
             port_data_dict[port_name] = {
+                "inventory_type": "NIC Port",
                 "name": port_name,
                 "device": device_object,
                 "mac_address": normalize_mac_address(mac_address),
                 "enabled": enabled,
                 "description": ", ".join(description),
                 "type": interface_speed_type_mapping.get(link_speed, "other"),
-                "mgmt_only": mgmt_only
+                "mgmt_only": mgmt_only,
+                "health": health_status
             }
 
         data = map_object_interfaces_to_current_interfaces(self.inventory, device_object, port_data_dict)
@@ -639,6 +648,8 @@ class CheckRedfish:
         serial = item_data.get("serial")
         description = item_data.get("description")
         firmware = item_data.get("firmware")
+        health = item_data.get("health")
+        inventory_type = item_data.get("inventory_type")
 
         if device is None or name_start is None:
             return False
@@ -653,6 +664,7 @@ class CheckRedfish:
             "name": full_name,
         }
 
+        custom_fields = dict()
         if description is not None and len(description) > 0:
             inventory_data["description"] = description
         if serial is not None:
@@ -663,8 +675,17 @@ class CheckRedfish:
             inventory_data["part_id"] = part_number
         if label is not None:
             inventory_data["label"] = label
+
+        # custom fields
         if firmware is not None:
-            inventory_data["custom_fields"] = {"firmware": firmware}
+            custom_fields["firmware"] = firmware
+        if health is not None:
+            custom_fields["health"] = health
+        if inventory_type is not None:
+            custom_fields["inventory-type"] = inventory_type
+
+        if len(custom_fields.keys()) > 0:
+            inventory_data["custom_fields"] = custom_fields
 
         # find inventory item
         inventory_object = None
@@ -699,25 +720,49 @@ class CheckRedfish:
 
         return True
 
-    def add_firmware_custom_field(self):
-
-        content_types = [
-            "dcim.inventoryitem",
-            "dcim.powerport"
-        ]
-        data = {
-            "name": "firmware",
-            "label": "Firmware",
-            "content_types": content_types,
-            "type": "text",
-            "description": "Item Firmware"
-        }
+    def add_update_custom_field(self, data):
 
         custom_field = self.inventory.get_by_data(NBCustomField, data={"name": data.get("name")})
 
         if custom_field is None:
             self.inventory.add_object(NBCustomField, data=data, source=self)
         else:
-            custom_field.update(data={"content_types": content_types}, source=self)
+            custom_field.update(data={"content_types": data.get("content_types")}, source=self)
+
+    def add_necessary_custom_fields(self):
+
+        # add Firmware
+        self.add_update_custom_field({
+            "name": "firmware",
+            "label": "Firmware",
+            "content_types": [
+                "dcim.inventoryitem",
+                "dcim.powerport"
+            ],
+            "type": "text",
+            "description": "Item Firmware"
+        })
+
+        # add inventory type
+        self.add_update_custom_field({
+            "name": "inventory-type",
+            "label": "Type",
+            "content_types": ["dcim.inventoryitem"],
+            "type": "text",
+            "description": "Describes the type of inventory"
+        })
+
+        # add health status
+        self.add_update_custom_field({
+            "name": "health",
+            "label": "Health",
+            "content_types": [
+                "dcim.inventoryitem",
+                "dcim.powerport",
+                "dcim.device"
+            ],
+            "type": "text",
+            "description": "Shows the currently discovered health status"
+        })
 
 # EOF

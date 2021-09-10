@@ -790,24 +790,22 @@ class NBCustomField(NetBoxObject):
     prune = False
     # used by this software
     valid_content_types = [
+        "dcim.device",
         "dcim.interface",
         "dcim.inventoryitem",
         "dcim.powerport",
         "virtualization.vminterface"
     ]
-
-    def __init__(self, *args, **kwargs):
-        self.data_model = {
-            "content_types": list,
-            "type": ["text", "integer", "boolean", "date", "url", "select", "multiselect"],
-            "name": 50,
-            "label": 50,
-            "description": 200,
-            "required": bool,
-            "default": str,
-            "choices": list
-        }
-        super().__init__(*args, **kwargs)
+    data_model = {
+        "content_types": list,
+        "type": ["text", "integer", "boolean", "date", "url", "select", "multiselect"],
+        "name": 50,
+        "label": 50,
+        "description": 200,
+        "required": bool,
+        "default": str,
+        "choices": list
+    }
 
     def update(self, data=None, read_from_netbox=False, source=None):
         """
