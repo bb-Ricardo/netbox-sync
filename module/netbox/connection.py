@@ -66,10 +66,14 @@ class NetBoxHandler:
     # keep track of already resolved dependencies
     resolved_dependencies = set()
 
-    def __init__(self, settings=None, inventory=None):
+    # set bogus default version
+    version = "0.0.1"
+
+    def __init__(self, settings=None, inventory=None, version=None):
 
         self.settings = settings
         self.inventory = inventory
+        self.version = version
 
         self.parse_config_settings(settings)
 
@@ -191,7 +195,8 @@ class NetBoxHandler:
 
         header = {
             "Authorization": f"Token {self.api_token}",
-            "User-Agent": "netbox-sync/0.0.1"
+            "User-Agent": f"netbox-sync/{self.version}",
+            "Content-Type": "application/json"
         }
 
         session = requests.Session()
