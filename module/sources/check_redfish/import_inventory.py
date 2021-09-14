@@ -24,10 +24,6 @@ log = get_logger()
 
 #
 # ToDo:
-#   * fix custom field merging data dicts
-#   * get inventory for this device depending on the type
-#   * match source inventory items witch NetBox items
-#   * delete items which don't exist anymore
 #   * add interface IPs
 #   * implement checking for permitted IPs
 
@@ -47,8 +43,6 @@ class CheckRedfish:
         NBSite,
         NBCluster,
         NBDevice,
-        NBVM,
-        NBVMInterface,
         NBInterface,
         NBIPAddress,
         NBPrefix,
@@ -191,9 +185,8 @@ class CheckRedfish:
                     status = "active"
 
                 serial = get_string_or_none(grab(system, "serial"))
-
+                name = get_string_or_none(grab(system, "host_name"))
                 device_data = {
-                    "name": get_string_or_none(grab(system, "host_name")),
                     "device_type": {
                         "model": get_string_or_none(grab(system, "model")),
                         "manufacturer": {
@@ -205,6 +198,8 @@ class CheckRedfish:
 
                 if serial is not None:
                     device_data["serial"] = serial
+                if name is not None:
+                    device_data["name"] = name
 
                 device_object.update(data=device_data, source=self)
 
@@ -214,6 +209,7 @@ class CheckRedfish:
                 self.update_proc(device_object, file_content)
                 self.update_physical_drive(device_object, file_content)
                 self.update_storage_controller(device_object, file_content)
+                self.update_storage_enclosure(device_object, file_content)
                 self.update_network_adapter(device_object, file_content)
                 self.update_network_interface(device_object, file_content)
 
@@ -228,6 +224,7 @@ class CheckRedfish:
         current_ps.sort(key=lambda x: grab(x, "data.name"))
 
         ps_index = 0
+        ps_items = list()
         for ps in grab(inventory_data, "inventory.power_supply", fallback=list()):
 
             if grab(ps, "operation_status") in ["NotPresent", "Absent"]:
@@ -261,19 +258,16 @@ class CheckRedfish:
 
             # set description
             description = list()
-            if health_status is not None:
-                description.append(f"Health: {health_status}")
             if model is not None:
                 description.append(f"Model: {model}")
 
             # compile inventory item data
-            self._update_item({
+            ps_items.append({
                 "inventory_type": "Power Supply",
                 "health": health_status,
                 "device": device_object,
                 "description": description,
                 "full_name": name,
-                "name_start": ps_name,
                 "serial": get_string_or_none(grab(ps, "serial")),
                 "manufacturer": get_string_or_none(grab(ps, "vendor")),
                 "part_number": get_string_or_none(grab(ps, "part_number")),
@@ -281,7 +275,7 @@ class CheckRedfish:
             })
 
             connected = False
-            if f"{health_status}" == "OK" or grab(ps, "last_power_output", fallback=0) > 0:
+            if f"{health_status}" == "OK":
                 connected = True
 
             # compile power supply data
@@ -306,8 +300,11 @@ class CheckRedfish:
 
             ps_index += 1
 
+        self.update_all_items(ps_items)
+
     def update_fan(self, device_object, inventory_data):
 
+        items = list()
         for fan in grab(inventory_data, "inventory.fan", fallback=list()):
 
             if grab(fan, "operation_status") in ["NotPresent", "Absent"]:
@@ -316,29 +313,31 @@ class CheckRedfish:
             fan_name = get_string_or_none(grab(fan, "name"))
             health_status = get_string_or_none(grab(fan, "health_status"))
             physical_context = get_string_or_none(grab(fan, "physical_context"))
+            fan_id = get_string_or_none(grab(fan, "id"))
 
             description = list()
-            description.append(f"Health: {health_status}")
             if physical_context is not None:
                 description.append(f"Context: {physical_context}")
 
-            self._update_item({
+            items.append({
                 "inventory_type": "Fan",
                 "device": device_object,
                 "description": description,
-                "name_start": fan_name,
-                "full_name": fan_name,
+                "full_name": f"{fan_name} (ID: {fan_id})",
                 "health": health_status
             })
 
+        self.update_all_items(items)
+
     def update_memory(self, device_object, inventory_data):
 
+        items = list()
         for memory in grab(inventory_data, "inventory.memory", fallback=list()):
 
             if grab(memory, "operation_status") in ["NotPresent", "Absent"]:
                 continue
 
-            memory_name = get_string_or_none(grab(memory, "name"))
+            name = get_string_or_none(grab(memory, "name"))
             health_status = get_string_or_none(grab(memory, "health_status"))
             size_in_mb = grab(memory, "size_in_mb", fallback=0)
             channel = get_string_or_none(grab(memory, "channel"))
@@ -352,7 +351,6 @@ class CheckRedfish:
 
             size_in_gb = size_in_mb / 1024
 
-            name = f"{memory_name}"
             name_details = list()
             name_details.append(f"{size_in_gb}GB")
             if dimm_type is not None:
@@ -370,11 +368,10 @@ class CheckRedfish:
             if slot is not None:
                 description.append(f"Slot: {slot}")
 
-            self._update_item({
+            items.append({
                 "inventory_type": "DIMM",
                 "device": device_object,
                 "description": description,
-                "name_start": memory_name,
                 "full_name": name,
                 "serial": get_string_or_none(grab(memory, "serial")),
                 "manufacturer": get_string_or_none(grab(memory, "manufacturer")),
@@ -382,8 +379,11 @@ class CheckRedfish:
                 "health": health_status
             })
 
+        self.update_all_items(items)
+
     def update_proc(self, device_object, inventory_data):
 
+        items = list()
         for processor in grab(inventory_data, "inventory.processor", fallback=list()):
 
             if grab(processor, "operation_status") in ["NotPresent", "Absent"]:
@@ -409,20 +409,21 @@ class CheckRedfish:
             if threads is not None:
                 description.append(f"Threads: {threads}")
 
-            self._update_item({
+            items.append({
                 "inventory_type": "CPU",
                 "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(processor, "manufacturer")),
                 "full_name": name,
-                "name_start": socket,
                 "serial": get_string_or_none(grab(processor, "serial")),
                 "health": health_status
             })
 
+        self.update_all_items(items)
+
     def update_physical_drive(self, device_object, inventory_data):
 
-        pd_serials = list()
+        items = list()
         for pd in grab(inventory_data, "inventory.physical_drive", fallback=list()):
 
             if grab(pd, "operation_status") in ["NotPresent", "Absent"]:
@@ -439,11 +440,10 @@ class CheckRedfish:
             bay = get_string_or_none(grab(pd, "bay"))
             pd_type = get_string_or_none(grab(pd, "type"))
             serial = get_string_or_none(grab(pd, "serial"))
+            pd_id = get_string_or_none(grab(pd, "id"))
 
-            if serial is not None and serial in pd_serials:
+            if serial is not None and serial in [x.get("serial") for x in items]:
                 continue
-
-            pd_serials.append(serial)
 
             if pd_name.lower().startswith("hp"):
                 pd_name = "Physical Drive"
@@ -452,6 +452,8 @@ class CheckRedfish:
                 pd_name += f" {location}"
             elif bay is not None and bay not in pd_name:
                 pd_name += f" {bay}"
+            else:
+                pd_name += f" {pd_id}"
 
             name = pd_name
 
@@ -471,54 +473,98 @@ class CheckRedfish:
             if speed_in_rpm is not None:
                 description.append(f"Speed: {speed_in_rpm}RPM")
 
-            self._update_item({
+            items.append({
                 "inventory_type": "Physical Drive",
                 "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(pd, "manufacturer")),
                 "full_name": name,
-                "name_start": pd_name,
                 "serial": serial,
                 "part_number": get_string_or_none(grab(pd, "part_number")),
                 "firmware": firmware,
                 "health": health_status
             })
 
+        self.update_all_items(items)
+
     def update_storage_controller(self, device_object, inventory_data):
 
+        items = list()
         for sc in grab(inventory_data, "inventory.storage_controller", fallback=list()):
 
             if grab(sc, "operation_status") in ["NotPresent", "Absent"]:
                 continue
 
-            sc_name = get_string_or_none(grab(sc, "name"))
+            name = get_string_or_none(grab(sc, "name"))
             model = get_string_or_none(grab(sc, "model"))
-            firmware = get_string_or_none(grab(sc, "firmware"))
-            health_status = get_string_or_none(grab(sc, "health_status"))
-            serial = get_string_or_none(grab(sc, "serial"))
             location = get_string_or_none(grab(sc, "location"))
+            logical_drive_ids = grab(sc, "logical_drive_ids", fallback=list())
+            physical_drive_ids = grab(sc, "physical_drive_ids", fallback=list())
 
-            if sc_name.lower().startswith("hp"):
-                sc_name = model
-
-            name = sc_name
+            if name.lower().startswith("hp"):
+                name = model
 
             if location is not None and location not in name:
                 name += f" {location}"
 
-            self._update_item({
+            description = list()
+            if len(logical_drive_ids) > 0:
+                description.append(f"LDs: {len(logical_drive_ids)}")
+            if len(physical_drive_ids) > 0:
+                description.append(f"PDs: {len(physical_drive_ids)}")
+
+            items.append({
                 "inventory_type": "Storage Controller",
                 "device": device_object,
+                "description": description,
                 "manufacturer": get_string_or_none(grab(sc, "manufacturer")),
                 "full_name": name,
-                "name_start": sc_name,
-                "serial": serial,
-                "firmware": firmware,
-                "health": health_status
+                "serial": get_string_or_none(grab(sc, "serial")),
+                "firmware": get_string_or_none(grab(sc, "firmware")),
+                "health": get_string_or_none(grab(sc, "health_status"))
             })
+
+        self.update_all_items(items)
+
+    def update_storage_enclosure(self, device_object, inventory_data):
+
+        items = list()
+        for se in grab(inventory_data, "inventory.storage_enclosure", fallback=list()):
+
+            if grab(se, "operation_status") in ["NotPresent", "Absent"]:
+                continue
+
+            name = get_string_or_none(grab(se, "name"))
+            model = get_string_or_none(grab(se, "model"))
+            location = get_string_or_none(grab(se, "location"))
+            num_bays = get_string_or_none(grab(se, "num_bays"))
+
+            if name.lower().startswith("hp") and model is not None:
+                name = model
+
+            if location is not None and location not in name:
+                name += f" {location}"
+
+            description = ""
+            if num_bays is not None:
+                description = f"Bays: {num_bays}"
+
+            items.append({
+                "inventory_type": "Storage Enclosure",
+                "device": device_object,
+                "description": description,
+                "manufacturer": get_string_or_none(grab(se, "manufacturer")),
+                "full_name": name,
+                "serial": get_string_or_none(grab(se, "serial")),
+                "firmware": get_string_or_none(grab(se, "firmware")),
+                "health": get_string_or_none(grab(se, "health_status"))
+            })
+
+        self.update_all_items(items)
 
     def update_network_adapter(self, device_object, inventory_data):
 
+        items = list()
         for adapter in grab(inventory_data, "inventory.network_adapter", fallback=list()):
 
             if grab(adapter, "operation_status") in ["NotPresent", "Absent"]:
@@ -541,22 +587,24 @@ class CheckRedfish:
             if num_ports is not None:
                 name += f" ({num_ports} ports)"
 
-            self._update_item({
+            items.append({
                 "inventory_type": "NIC",
                 "device": device_object,
                 "manufacturer": get_string_or_none(grab(adapter, "manufacturer")),
                 "full_name": name,
-                "name_start": adapter_name,
                 "serial": serial,
                 "part_number": get_string_or_none(grab(adapter, "part_number")),
                 "firmware": firmware,
                 "health": health_status
             })
 
+        self.update_all_items(items)
+
     def update_network_interface(self, device_object, inventory_data):
 
         port_data_dict = dict()
 
+        discovered_mac_list = list()
         for nic_port in grab(inventory_data, "inventory.network_port", fallback=list()):
 
             if grab(nic_port, "operation_status") in ["Disabled"]:
@@ -572,7 +620,17 @@ class CheckRedfish:
             hostname = get_string_or_none(grab(nic_port, "hostname"))
             health_status = get_string_or_none(grab(nic_port, "health_status"))
 
-            if port_name is None:
+            mac_address = normalize_mac_address(mac_address)
+
+            if mac_address in discovered_mac_list:
+                continue
+
+            if mac_address is not None:
+                discovered_mac_list.append(mac_address)
+
+            if port_name is not None:
+                port_name += f" ({port_id})"
+            else:
                 port_name = port_id
 
             # get port speed
@@ -602,7 +660,7 @@ class CheckRedfish:
                 "inventory_type": "NIC Port",
                 "name": port_name,
                 "device": device_object,
-                "mac_address": normalize_mac_address(mac_address),
+                "mac_address": mac_address,
                 "enabled": enabled,
                 "description": ", ".join(description),
                 "type": interface_speed_type_mapping.get(link_speed, "other"),
@@ -616,6 +674,13 @@ class CheckRedfish:
 
             # get current object for this interface if it exists
             nic_object = data.get(port_name)
+
+            if "inventory_type" in port_data:
+                del(port_data["inventory_type"])
+            if "health" in port_data:
+                del(port_data["health"])
+            if port_data.get("mac_address") is None:
+                del (port_data["mac_address"])
 
             # create or update interface with data
             if nic_object is None:
@@ -637,10 +702,49 @@ class CheckRedfish:
 
                     nic_object.update(data=data_to_update, source=self)
 
-    def _update_item(self, item_data: dict):
+    def update_all_items(self, items):
+
+        if not isinstance(items, list):
+            raise ValueError(f"Value for 'items' must be type 'list' got: {items}")
+
+        if len(items) == 0:
+            return
+
+        # get device
+        device = grab(items, "0.device")
+        inventory_type = grab(items, "0.inventory_type")
+
+        if device is None or inventory_type is None:
+            return
+
+        # sort items by full_name
+        items.sort(key=lambda x: x.get("full_name"))
+
+        # get current inventory items for
+        current_inventory_items = list()
+        for item in self.inventory.get_all_items(NBInventoryItem):
+            if grab(item, "data.device") == device and \
+                    grab(item, "data.custom_fields.inventory-type") == inventory_type:
+
+                current_inventory_items.append(item)
+
+        # sort items by display name
+        current_inventory_items.sort(key=lambda x: x.get_display_name())
+
+        mapped_items = dict(zip([x.get("full_name") for x in items], current_inventory_items))
+
+        for item in items:
+
+            self.update_item(item, mapped_items.get(item.get("full_name")))
+
+        for current_inventory_item in current_inventory_items:
+
+            if current_inventory_item not in mapped_items.values():
+                current_inventory_item.deleted = True
+
+    def update_item(self, item_data: dict, inventory_object: NBInventoryItem = None):
 
         device = item_data.get("device")
-        name_start = item_data.get("name_start")
         full_name = item_data.get("full_name")
         label = item_data.get("label")
         manufacturer = item_data.get("manufacturer")
@@ -651,7 +755,7 @@ class CheckRedfish:
         health = item_data.get("health")
         inventory_type = item_data.get("inventory_type")
 
-        if device is None or name_start is None:
+        if device is None:
             return False
 
         if isinstance(description, list):
@@ -660,11 +764,11 @@ class CheckRedfish:
         # compile inventory item data
         inventory_data = {
             "device": device,
-            "discovered": True,
-            "name": full_name,
+            "discovered": True
         }
 
-        custom_fields = dict()
+        if full_name is not None:
+            inventory_data["name"] = full_name
         if description is not None and len(description) > 0:
             inventory_data["description"] = description
         if serial is not None:
@@ -677,6 +781,7 @@ class CheckRedfish:
             inventory_data["label"] = label
 
         # custom fields
+        custom_fields = dict()
         if firmware is not None:
             custom_fields["firmware"] = firmware
         if health is not None:
@@ -686,32 +791,6 @@ class CheckRedfish:
 
         if len(custom_fields.keys()) > 0:
             inventory_data["custom_fields"] = custom_fields
-
-        # find inventory item
-        inventory_object = None
-        if serial is not None:
-            inventory_object = self.inventory.get_by_data(NBInventoryItem,
-                                                          data={
-                                                              "device": device,
-                                                              "serial": serial
-                                                          })
-
-        # by name
-        if inventory_object is None:
-            inventory_object = self.inventory.get_by_data(NBInventoryItem,
-                                                          data={
-                                                              "device": device,
-                                                              "name": full_name
-                                                          })
-
-        # starts with the same name
-        if inventory_object is None:
-            for inventory_item in self.inventory.get_all_items(NBInventoryItem):
-                if grab(inventory_item, "data.device") == device and \
-                        grab(inventory_item, "data.name").startswith(f"{name_start} "):
-
-                    inventory_object = inventory_item
-                    break
 
         if inventory_object is None:
             self.inventory.add_object(NBInventoryItem, data=inventory_data, source=self)
