@@ -191,7 +191,8 @@ class NetBoxHandler:
 
         header = {
             "Authorization": f"Token {self.api_token}",
-            "User-Agent": "netbox-sync/0.0.1"
+            "User-Agent": "netbox-sync/0.0.1",
+            "Content-Type": "application/json"
         }
 
         session = requests.Session()
