@@ -676,6 +676,9 @@ class NetBoxHandler:
 
             this_object.resolve_relations()
 
+            if last_run is True and getattr(this_object, "deleted", False) is True:
+                self.request(nb_object_sub_class, req_type="DELETE", nb_id=this_object.nb_id)
+
         # add class to resolved dependencies
         self.resolved_dependencies.add(nb_object_sub_class)
 

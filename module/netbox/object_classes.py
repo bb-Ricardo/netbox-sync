@@ -67,6 +67,7 @@ class NetBoxObject:
         "updated_items": list(),
         "unset_items": list(),
         "source": None,
+        "deleted": False
     }
 
     # keep handle to inventory instance to append objects on demand
@@ -378,7 +379,11 @@ class NetBoxObject:
                 current_value_str = str(current_value).replace("\r", "")
 
             # get new value str
-            if isinstance(new_value, (NetBoxObject, NBObjectList)):
+            if self.data_model.get(key) == NBCustomField:
+                if current_value is None:
+                    current_value = dict()
+                new_value_str = str({**current_value, **new_value})
+            elif isinstance(new_value, (NetBoxObject, NBObjectList)):
                 new_value_str = str(new_value.get_display_name())
             else:
                 new_value_str = str(new_value).replace("\r", "")
@@ -405,7 +410,7 @@ class NetBoxObject:
             if self.is_new is False:
                 new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
-                          f"'{current_value_str}' to '{new_value_str}'")
+                         f"'{current_value_str}' to '{new_value_str}'")
 
             self.resolve_relations()
 
