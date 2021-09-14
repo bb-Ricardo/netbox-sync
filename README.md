@@ -120,7 +120,7 @@ usage: netbox-sync.py [-h] [-c settings.ini]
 
 Sync objects from various sources to NetBox
 
-Version: 1.1.1 (2021-09-02)
+Version: 1.1.2 (2021-09-14)
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -219,7 +219,7 @@ If the same IP address is found on a different interface (of a different device/
 (both using same VRF or both are global) then following test are performed:
 * If the current interface is enabled and the new one disabled:
   * IP stays at the current interface
-* If the current interface ia disabled and the new one enabled:
+* If the current interface is disabled and the new one enabled:
   * IP will be moved to the enabled interface
 * Both interfaces are in the same state (disabled/enable)
   * IP will also stay at the current interface as it's unclear which one would be the correct one
