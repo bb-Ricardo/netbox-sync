@@ -69,11 +69,11 @@ class NetBoxHandler:
     # set bogus default version
     version = "0.0.1"
 
-    def __init__(self, settings=None, inventory=None, version=None):
+    def __init__(self, settings=None, inventory=None, nb_version=None):
 
         self.settings = settings
         self.inventory = inventory
-        self.version = version
+        self.version = nb_version
 
         self.parse_config_settings(settings)
 
