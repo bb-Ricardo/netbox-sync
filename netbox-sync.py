@@ -79,7 +79,7 @@ def main():
     netbox_settings = get_config(config_handler, section="netbox", valid_settings=NetBoxHandler.settings)
 
     # establish NetBox connection
-    nb_handler = NetBoxHandler(settings=netbox_settings, inventory=inventory, version=__version__)
+    nb_handler = NetBoxHandler(settings=netbox_settings, inventory=inventory, nb_version=__version__)
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
