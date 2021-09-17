@@ -906,6 +906,9 @@ class VMWareHandler:
 
                 ip_object = add_ip_address(self, nic_ip, nic_object, site_name)
 
+                if ip_object is None:
+                    continue
+
                 # continue if address is not a primary IP
                 if nic_ip not in [p_ipv4, p_ipv6]:
                     continue
