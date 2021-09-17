@@ -658,7 +658,7 @@ class NetBoxObject:
             self.updated_items.append("tags")
 
             log.info(f"{self.name.capitalize()} '{self.get_display_name()}' attribute 'tags' changed from "
-                      f"'{current_tags.get_display_name()}' to '{new_tags.get_display_name()}'")
+                     f"'{current_tags.get_display_name()}' to '{new_tags.get_display_name()}'")
 
     def add_tags(self, tags_to_add):
         """

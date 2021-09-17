@@ -7,25 +7,45 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-# from ipaddress import ip_address, ip_network, ip_interface, IPv4Address, IPv6Address
-
+from ipaddress import ip_network
 import os
 import glob
+import json
 
 from packaging import version
 
-from module.common.logging import get_logger, DEBUG3
-from module.common.misc import grab, dump, get_string_or_none, plural
-from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox, map_object_interfaces_to_current_interfaces
-from module.netbox.object_classes import *
+from module.common.logging import get_logger
+from module.common.misc import grab, get_string_or_none
+from module.common.support import (
+    normalize_mac_address,
+    ip_valid_to_add_to_netbox,
+    map_object_interfaces_to_current_interfaces,
+    add_ip_address
+)
+from module.netbox.object_classes import (
+    NBTag,
+    NBManufacturer,
+    NBDeviceType,
+    NBPlatform,
+    NBClusterType,
+    NBClusterGroup,
+    NBDeviceRole,
+    NBSite,
+    NBCluster,
+    NBDevice,
+    NBInterface,
+    NBIPAddress,
+    NBPrefix,
+    NBTenant,
+    NBVRF,
+    NBVLAN,
+    NBPowerPort,
+    NBInventoryItem,
+    NBCustomField
+)
 from module.netbox.inventory import interface_speed_type_mapping
 
 log = get_logger()
-
-#
-# ToDo:
-#   * add interface IPs
-#   * implement checking for permitted IPs
 
 
 class CheckRedfish:
@@ -58,7 +78,9 @@ class CheckRedfish:
         "enabled": True,
         "inventory_file_path": None,
         "permitted_subnets": None,
-        "collect_hardware_asset_tag": True
+        "overwrite_host_name": False,
+        "overwrite_power_supply_name": False,
+        "overwrite_interface_name": False
     }
 
     init_successful = False
@@ -198,7 +220,7 @@ class CheckRedfish:
 
                 if serial is not None:
                     device_data["serial"] = serial
-                if name is not None:
+                if name is not None and self.overwrite_host_name is True:
                     device_data["name"] = name
 
                 device_object.update(data=device_data, source=self)
@@ -282,10 +304,11 @@ class CheckRedfish:
             ps_data = {
                 "device": device_object,
                 "description": ", ".join(description),
-                "mark_connected": connected,
-                "name": name
+                "mark_connected": connected
             }
 
+            if name is not None and self.overwrite_power_supply_name is True:
+                ps_data["name"] = name
             if capacity_in_watt is not None:
                 ps_data["maximum_draw"] = capacity_in_watt
             if firmware is not None:
@@ -603,8 +626,9 @@ class CheckRedfish:
     def update_network_interface(self, device_object, inventory_data):
 
         port_data_dict = dict()
-
+        nic_ips = dict()
         discovered_mac_list = list()
+
         for nic_port in grab(inventory_data, "inventory.network_port", fallback=list()):
 
             if grab(nic_port, "operation_status") in ["Disabled"]:
@@ -613,8 +637,6 @@ class CheckRedfish:
             port_name = get_string_or_none(grab(nic_port, "name"))
             port_id = get_string_or_none(grab(nic_port, "id"))
             mac_address = get_string_or_none(grab(nic_port, "addresses.0"))  # get 1st mac address
-#            ipv4_addresses = grab(nic_port, "ipv4_addresses")
-#            ipv6_addresses = grab(nic_port, "ipv6_addresses")
             link_status = get_string_or_none(grab(nic_port, "link_status"))
             manager_ids = grab(nic_port, "manager_ids", fallback=list())
             hostname = get_string_or_none(grab(nic_port, "hostname"))
@@ -668,6 +690,11 @@ class CheckRedfish:
                 "health": health_status
             }
 
+            # collect ip addresses
+            nic_ips[port_name] = list()
+            nic_ips[port_name].extend(grab(nic_port, "ipv4_addresses", fallback=list()))
+            nic_ips[port_name].extend(grab(nic_port, "ipv6_addresses", fallback=list()))
+
         data = map_object_interfaces_to_current_interfaces(self.inventory, device_object, port_data_dict)
 
         for port_name, port_data in port_data_dict.items():
@@ -681,10 +708,12 @@ class CheckRedfish:
                 del(port_data["health"])
             if port_data.get("mac_address") is None:
                 del (port_data["mac_address"])
+            if self.overwrite_interface_name is False:
+                del (port_data["name"])
 
             # create or update interface with data
             if nic_object is None:
-                self.inventory.add_object(NBInterface, data=port_data, source=self)
+                nic_object = self.inventory.add_object(NBInterface, data=port_data, source=self)
             else:
                 tags = nic_object.get_tags()
                 if self.source_tag in tags:
@@ -701,6 +730,14 @@ class CheckRedfish:
                             data_to_update[key] = value
 
                     nic_object.update(data=data_to_update, source=self)
+
+            # check for interface ips
+            for nic_ip in nic_ips.get(port_name, list()):
+
+                if ip_valid_to_add_to_netbox(nic_ip, self.permitted_subnets, port_name) is False:
+                    continue
+
+                add_ip_address(self, nic_ip, nic_object, grab(device_object, "data.site.data.name"))
 
     def update_all_items(self, items):
 
