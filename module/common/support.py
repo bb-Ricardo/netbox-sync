@@ -441,18 +441,18 @@ def add_ip_address(source_handler, nic_ip, nic_object, site):
     else:
         log_text = f"No matching NetBox prefix for '{ip_object}' found"
 
-        if isinstance(ip_object, (IPv6Address, IPv4Address)):
+        if type(ip_object) in [IPv6Address, IPv4Address]:
             log.warning(f"{log_text}. Unable to add IP address to NetBox.")
             return None
         else:
             log.debug2(log_text)
 
-    if matching_ip_prefix is not None and isinstance(ip_object, (IPv6Address, IPv4Address)):
+    if matching_ip_prefix is not None and type(ip_object) in [IPv6Address, IPv4Address]:
         this_prefix = grab(matching_ip_prefix, "data.prefix")
-        if isinstance(this_prefix, (IPv4Network, IPv6Network)):
+        if type(ip_object) in [IPv4Network, IPv6Network]:
             ip_object = ip_interface(f"{ip_object}/{this_prefix.prefixlen}")
         else:
-            log.warning(f"{this_prefix.name} got wrong format. Unable to add IP to NetBox")
+            log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP to NetBox")
             return None
 
     # try to find matching IP address object
