@@ -14,14 +14,10 @@ import json
 
 from packaging import version
 
+from module.sources.common.source_base import SourceBase
 from module.common.logging import get_logger
 from module.common.misc import grab, get_string_or_none
-from module.common.support import (
-    normalize_mac_address,
-    ip_valid_to_add_to_netbox,
-    map_object_interfaces_to_current_interfaces,
-    add_ip_address
-)
+from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
     NBTag,
     NBManufacturer,
@@ -48,7 +44,7 @@ from module.netbox.inventory import interface_speed_type_mapping
 log = get_logger()
 
 
-class CheckRedfish:
+class CheckRedfish(SourceBase):
 
     minimum_check_redfish_version = "1.2.0"
 
@@ -80,7 +76,9 @@ class CheckRedfish:
         "permitted_subnets": None,
         "overwrite_host_name": False,
         "overwrite_power_supply_name": False,
-        "overwrite_interface_name": False
+        "overwrite_power_supply_attributes": True,
+        "overwrite_interface_name": False,
+        "overwrite_interface_attributes": True,
     }
 
     init_successful = False
@@ -307,8 +305,6 @@ class CheckRedfish:
                 "mark_connected": connected
             }
 
-            if name is not None and self.overwrite_power_supply_name is True:
-                ps_data["name"] = name
             if capacity_in_watt is not None:
                 ps_data["maximum_draw"] = capacity_in_watt
             if firmware is not None:
@@ -319,7 +315,11 @@ class CheckRedfish:
             if ps_object is None:
                 self.inventory.add_object(NBPowerPort, data=ps_data, source=self)
             else:
-                ps_object.update(data=ps_data, source=self)
+                if self.overwrite_power_supply_name is True:
+                    ps_data["name"] = name
+
+                data_to_update = self.patch_data(ps_object, ps_data, self.overwrite_power_supply_attributes)
+                ps_object.update(data=data_to_update, source=self)
 
             ps_index += 1
 
@@ -695,41 +695,31 @@ class CheckRedfish:
             nic_ips[port_name].extend(grab(nic_port, "ipv4_addresses", fallback=list()))
             nic_ips[port_name].extend(grab(nic_port, "ipv6_addresses", fallback=list()))
 
-        data = map_object_interfaces_to_current_interfaces(self.inventory, device_object, port_data_dict)
+        data = self.map_object_interfaces_to_current_interfaces(device_object, port_data_dict)
 
         for port_name, port_data in port_data_dict.items():
 
             # get current object for this interface if it exists
             nic_object = data.get(port_name)
 
-            if "inventory_type" in port_data:
-                del(port_data["inventory_type"])
-            if "health" in port_data:
-                del(port_data["health"])
+            # unset "illegal" attributes
+            for attribute in ["inventory_type", "health"]:
+                if attribute in port_data:
+                    del(port_data[attribute])
+
+            # del empty mac address attribute
             if port_data.get("mac_address") is None:
                 del (port_data["mac_address"])
-            if self.overwrite_interface_name is False:
-                del (port_data["name"])
 
             # create or update interface with data
             if nic_object is None:
                 nic_object = self.inventory.add_object(NBInterface, data=port_data, source=self)
             else:
-                tags = nic_object.get_tags()
-                if self.source_tag in tags:
-                    tags.remove(self.source_tag)
+                if self.overwrite_interface_name is False and port_data.get("name") is not None:
+                    del(port_data["name"])
 
-                # no other source for this interface
-                if len([x for x in tags if x.startswith("Source")]) == 0:
-                    nic_object.update(data=port_data, source=self)
-                else:
-                    # only append data
-                    data_to_update = dict()
-                    for key, value in port_data.items():
-                        if str(grab(nic_object, f"data.{key}")) == "":
-                            data_to_update[key] = value
-
-                    nic_object.update(data=data_to_update, source=self)
+                data_to_update = self.patch_data(nic_object, port_data, self.overwrite_interface_attributes)
+                nic_object.update(data=data_to_update, source=self)
 
             # check for interface ips
             for nic_ip in nic_ips.get(port_name, list()):
@@ -737,7 +727,7 @@ class CheckRedfish:
                 if ip_valid_to_add_to_netbox(nic_ip, self.permitted_subnets, port_name) is False:
                     continue
 
-                add_ip_address(self, nic_ip, nic_object, grab(device_object, "data.site.data.name"))
+                self.add_ip_address(nic_ip, nic_object, grab(device_object, "data.site.data.name"))
 
     def update_all_items(self, items):
 
