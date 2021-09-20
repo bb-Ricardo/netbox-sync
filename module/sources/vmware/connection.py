@@ -10,29 +10,44 @@
 import atexit
 import pprint
 import re
-from ipaddress import ip_address, ip_network, ip_interface, IPv4Address, IPv6Address
+from ipaddress import ip_address, ip_network, ip_interface
 from socket import gaierror
 
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 
+from module.sources.common.source_base import SourceBase
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural
-from module.common.support import (
-    normalize_mac_address,
-    ip_valid_to_add_to_netbox,
-    map_object_interfaces_to_current_interfaces,
-    return_longest_matching_prefix_for_ip,
-    add_ip_address
+from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
+from module.netbox.object_classes import (
+    NetBoxObject,
+    NBTag,
+    NBManufacturer,
+    NBDeviceType,
+    NBPlatform,
+    NBClusterType,
+    NBClusterGroup,
+    NBDeviceRole,
+    NBSite,
+    NBCluster,
+    NBDevice,
+    NBVM,
+    NBVMInterface,
+    NBInterface,
+    NBIPAddress,
+    NBPrefix,
+    NBTenant,
+    NBVRF,
+    NBVLAN
 )
-from module.netbox.object_classes import *
 from module.netbox.inventory import interface_speed_type_mapping
 
 log = get_logger()
 
 
 # noinspection PyTypeChecker
-class VMWareHandler:
+class VMWareHandler(SourceBase):
     """
     Source class to import data from a vCenter instance and add/update NetBox objects based on gathered information
     """
@@ -81,7 +96,7 @@ class VMWareHandler:
         "host_tenant_relation": None,
         "vm_platform_relation": None,
         "host_role_relation": None,
-        "vm_role_relation":None,
+        "vm_role_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -398,6 +413,7 @@ class VMWareHandler:
                     except Exception as e:
                         log.error(e)
 
+                # noinspection PyArgumentList
                 view_details.get("view_handler")(obj)
 
             container_view.Destroy()
@@ -689,7 +705,7 @@ class VMWareHandler:
             if vlan_site is not None and grab(vlan, "data.site") == vlan_site:
                 vlan_object_including_site = vlan
 
-            if grab(vlan, "data.site") == None:
+            if grab(vlan, "data.site") is None:
                 vlan_object_without_site = vlan
 
         if isinstance(vlan_object_including_site, NetBoxObject):
@@ -874,7 +890,7 @@ class VMWareHandler:
             interface_class = NBInterface
 
         # map interfaces of existing object with discovered interfaces
-        nic_object_dict = map_object_interfaces_to_current_interfaces(self.inventory, device_vm_object, nic_data)
+        nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
 
         if object_data.get("status", "") == "active" and (nic_ips is None or len(nic_ips.keys()) == 0):
             log.warning(f"No IP addresses for '{object_name}' found!")
@@ -904,7 +920,7 @@ class VMWareHandler:
                               "to be a valid IP address. Skipping!")
                     continue
 
-                ip_object = add_ip_address(self, nic_ip, nic_object, site_name)
+                ip_object = self.add_ip_address(nic_ip, nic_object, site_name)
 
                 if ip_object is None:
                     continue
@@ -1222,7 +1238,6 @@ class VMWareHandler:
                 log.debug2(f"Found {serial_num_key}: {get_string_or_none(identifier_dict.get(serial_num_key))}")
                 if serial is None:
                     serial = get_string_or_none(identifier_dict.get(serial_num_key))
-
 
         # add asset tag if desired and present
         asset_tag = None
