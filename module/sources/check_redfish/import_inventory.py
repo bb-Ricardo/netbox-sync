@@ -232,6 +232,7 @@ class CheckRedfish(SourceBase):
                 self.update_storage_enclosure(device_object, file_content)
                 self.update_network_adapter(device_object, file_content)
                 self.update_network_interface(device_object, file_content)
+                self.update_manager(device_object, file_content)
 
     def update_power_supply(self, device_object, inventory_data):
 
@@ -294,15 +295,11 @@ class CheckRedfish(SourceBase):
                 "firmware": firmware
             })
 
-            connected = False
-            if f"{health_status}" == "OK":
-                connected = True
-
             # compile power supply data
             ps_data = {
+                "name": name,
                 "device": device_object,
-                "description": ", ".join(description),
-                "mark_connected": connected
+                "description": ", ".join(description)
             }
 
             if capacity_in_watt is not None:
@@ -315,8 +312,8 @@ class CheckRedfish(SourceBase):
             if ps_object is None:
                 self.inventory.add_object(NBPowerPort, data=ps_data, source=self)
             else:
-                if self.overwrite_power_supply_name is True:
-                    ps_data["name"] = name
+                if self.overwrite_power_supply_name is False:
+                    del(ps_data["name"])
 
                 data_to_update = self.patch_data(ps_object, ps_data, self.overwrite_power_supply_attributes)
                 ps_object.update(data=data_to_update, source=self)
@@ -337,17 +334,25 @@ class CheckRedfish(SourceBase):
             health_status = get_string_or_none(grab(fan, "health_status"))
             physical_context = get_string_or_none(grab(fan, "physical_context"))
             fan_id = get_string_or_none(grab(fan, "id"))
+            reading = get_string_or_none(grab(fan, "reading"))
+            reading_unit = get_string_or_none(grab(fan, "reading_unit"))
 
             description = list()
+            speed = None
             if physical_context is not None:
                 description.append(f"Context: {physical_context}")
+
+            if reading is not None and reading_unit is not None:
+                reading_unit = "%" if reading_unit.lower() == "percent" else reading_unit
+                speed = f"{reading}{reading_unit}"
 
             items.append({
                 "inventory_type": "Fan",
                 "device": device_object,
                 "description": description,
                 "full_name": f"{fan_name} (ID: {fan_id})",
-                "health": health_status
+                "health": health_status,
+                "speed": speed
             })
 
         self.update_all_items(items)
@@ -372,14 +377,9 @@ class CheckRedfish(SourceBase):
             if size_in_mb == 0 or (health_status is None and grab(memory, "operation_status") != "GoodInUse"):
                 continue
 
-            size_in_gb = size_in_mb / 1024
-
             name_details = list()
-            name_details.append(f"{size_in_gb}GB")
             if dimm_type is not None:
                 name_details.append(f"{dimm_type}")
-            if speed is not None:
-                name_details.append(f"{speed}MHz")
 
             name += f" ({' '.join(name_details)})"
 
@@ -399,7 +399,9 @@ class CheckRedfish(SourceBase):
                 "serial": get_string_or_none(grab(memory, "serial")),
                 "manufacturer": get_string_or_none(grab(memory, "manufacturer")),
                 "part_number": get_string_or_none(grab(memory, "part_number")),
-                "health": health_status
+                "health": health_status,
+                "size": f"{size_in_mb / 1024}GB",
+                "speed": f"{speed}MHz",
             })
 
         self.update_all_items(items)
@@ -413,7 +415,7 @@ class CheckRedfish(SourceBase):
                 continue
 
             instruction_set = get_string_or_none(grab(processor, "instruction_set"))
-            current_speed = get_string_or_none(grab(processor, "current_speed"))
+            current_speed = grab(processor, "current_speed")
             model = get_string_or_none(grab(processor, "model"))
             cores = get_string_or_none(grab(processor, "cores"))
             threads = get_string_or_none(grab(processor, "threads"))
@@ -422,11 +424,15 @@ class CheckRedfish(SourceBase):
 
             name = f"{socket} ({model})"
 
+            if current_speed is not None:
+                current_speed = f"{current_speed / 1000}GHz"
+            size = None
+            if cores is not None and threads is not None:
+                size = f"{cores}/{threads}"
+
             description = list()
             if instruction_set is not None:
                 description.append(f"{instruction_set}")
-            if current_speed is not None:
-                description.append(f"{current_speed}MHz")
             if cores is not None:
                 description.append(f"Cores: {cores}")
             if threads is not None:
@@ -439,7 +445,9 @@ class CheckRedfish(SourceBase):
                 "manufacturer": get_string_or_none(grab(processor, "manufacturer")),
                 "full_name": name,
                 "serial": get_string_or_none(grab(processor, "serial")),
-                "health": health_status
+                "health": health_status,
+                "size": size,
+                "speed": current_speed
             })
 
         self.update_all_items(items)
@@ -458,7 +466,7 @@ class CheckRedfish(SourceBase):
             health_status = get_string_or_none(grab(pd, "health_status"))
             size_in_byte = grab(pd, "size_in_byte", fallback=0)
             model = get_string_or_none(grab(pd, "model"))
-            speed_in_rpm = get_string_or_none(grab(pd, "speed_in_rpm"))
+            speed_in_rpm = grab(pd, "speed_in_rpm")
             location = get_string_or_none(grab(pd, "location"))
             bay = get_string_or_none(grab(pd, "bay"))
             pd_type = get_string_or_none(grab(pd, "type"))
@@ -485,16 +493,19 @@ class CheckRedfish(SourceBase):
                 name_details.append(pd_type)
             if model is not None and model not in name:
                 name_details.append(model)
-            if size_in_byte is not None and size_in_byte != "0":
-                name_details.append("%dGB" % (size_in_byte / 1000 ** 3))
 
             name += f" ({' '.join(name_details)})"
 
             description = list()
             if interface_type is not None:
                 description.append(f"Interface: {interface_type}")
-            if speed_in_rpm is not None:
-                description.append(f"Speed: {speed_in_rpm}RPM")
+
+            size = None
+            speed = None
+            if size_in_byte is not None and size_in_byte != 0:
+                size = "%dGB" % (size_in_byte / 1000 ** 3)
+            if speed_in_rpm is not None and speed_in_rpm != 0:
+                speed = f"{speed_in_rpm}RPM"
 
             items.append({
                 "inventory_type": "Physical Drive",
@@ -505,7 +516,9 @@ class CheckRedfish(SourceBase):
                 "serial": serial,
                 "part_number": get_string_or_none(grab(pd, "part_number")),
                 "firmware": firmware,
-                "health": health_status
+                "health": health_status,
+                "size": size,
+                "speed": speed
             })
 
         self.update_all_items(items)
@@ -523,6 +536,7 @@ class CheckRedfish(SourceBase):
             location = get_string_or_none(grab(sc, "location"))
             logical_drive_ids = grab(sc, "logical_drive_ids", fallback=list())
             physical_drive_ids = grab(sc, "physical_drive_ids", fallback=list())
+            cache_size_in_mb = grab(sc, "cache_size_in_mb")
 
             if name.lower().startswith("hp"):
                 name = model
@@ -536,6 +550,10 @@ class CheckRedfish(SourceBase):
             if len(physical_drive_ids) > 0:
                 description.append(f"PDs: {len(physical_drive_ids)}")
 
+            size = None
+            if cache_size_in_mb is not None and cache_size_in_mb != 0:
+                size = f"{cache_size_in_mb}MB"
+
             items.append({
                 "inventory_type": "Storage Controller",
                 "device": device_object,
@@ -544,7 +562,8 @@ class CheckRedfish(SourceBase):
                 "full_name": name,
                 "serial": get_string_or_none(grab(sc, "serial")),
                 "firmware": get_string_or_none(grab(sc, "firmware")),
-                "health": get_string_or_none(grab(sc, "health_status"))
+                "health": get_string_or_none(grab(sc, "health_status")),
+                "size": size
             })
 
         self.update_all_items(items)
@@ -568,19 +587,19 @@ class CheckRedfish(SourceBase):
             if location is not None and location not in name:
                 name += f" {location}"
 
-            description = ""
+            size = None
             if num_bays is not None:
-                description = f"Bays: {num_bays}"
+                size = f"Bays: {num_bays}"
 
             items.append({
                 "inventory_type": "Storage Enclosure",
                 "device": device_object,
-                "description": description,
                 "manufacturer": get_string_or_none(grab(se, "manufacturer")),
                 "full_name": name,
                 "serial": get_string_or_none(grab(se, "serial")),
                 "firmware": get_string_or_none(grab(se, "firmware")),
-                "health": get_string_or_none(grab(se, "health_status"))
+                "health": get_string_or_none(grab(se, "health_status")),
+                "size": size
             })
 
         self.update_all_items(items)
@@ -605,10 +624,11 @@ class CheckRedfish(SourceBase):
                 adapter_name = f"{adapter_name} ({adapter_id})"
 
             name = adapter_name
+            size = None
             if model is not None:
                 name += f" - {model}"
             if num_ports is not None:
-                name += f" ({num_ports} ports)"
+                size = f"{num_ports} Ports"
 
             items.append({
                 "inventory_type": "NIC",
@@ -618,7 +638,8 @@ class CheckRedfish(SourceBase):
                 "serial": serial,
                 "part_number": get_string_or_none(grab(adapter, "part_number")),
                 "firmware": firmware,
-                "health": health_status
+                "health": health_status,
+                "size": size
             })
 
         self.update_all_items(items)
@@ -729,6 +750,38 @@ class CheckRedfish(SourceBase):
 
                 self.add_ip_address(nic_ip, nic_object, grab(device_object, "data.site.data.name"))
 
+    def update_manager(self, device_object, inventory_data):
+
+        print(grab(device_object, "data.device_type.data.manufacturer.data.name"))
+        items = list()
+        for manager in grab(inventory_data, "inventory.manager", fallback=list()):
+
+            name = get_string_or_none(grab(manager, "name"))
+            model = get_string_or_none(grab(manager, "model"))
+            licenses = grab(manager, "licenses", fallback=list())
+
+            if name == "Manager" and model is not None:
+                name = model
+
+            if model is not None and model not in name:
+                name += f" {model}"
+
+            description = None
+            if len(licenses) > 0:
+                description = f"Licenses: %s" % (", ".join(licenses))
+
+            items.append({
+                "inventory_type": "Manager",
+                "device": device_object,
+                "description": description,
+                "full_name": name,
+                "manufacturer": grab(device_object, "data.device_type.data.manufacturer.data.name"),
+                "firmware": get_string_or_none(grab(manager, "firmware")),
+                "health": get_string_or_none(grab(manager, "health_status"))
+            })
+
+        self.update_all_items(items)
+
     def update_all_items(self, items):
 
         if not isinstance(items, list):
@@ -781,6 +834,8 @@ class CheckRedfish(SourceBase):
         firmware = item_data.get("firmware")
         health = item_data.get("health")
         inventory_type = item_data.get("inventory_type")
+        size = item_data.get("size")
+        speed = item_data.get("speed")
 
         if device is None:
             return False
@@ -815,6 +870,10 @@ class CheckRedfish(SourceBase):
             custom_fields["health"] = health
         if inventory_type is not None:
             custom_fields["inventory-type"] = inventory_type
+        if size is not None:
+            custom_fields["inventory-size"] = size
+        if speed is not None:
+            custom_fields["inventory-speed"] = speed
 
         if len(custom_fields.keys()) > 0:
             inventory_data["custom_fields"] = custom_fields
@@ -855,7 +914,25 @@ class CheckRedfish(SourceBase):
             "label": "Type",
             "content_types": ["dcim.inventoryitem"],
             "type": "text",
-            "description": "Describes the type of inventory"
+            "description": "Describes the type of inventory item"
+        })
+
+        # add inventory size
+        self.add_update_custom_field({
+            "name": "inventory-size",
+            "label": "Size",
+            "content_types": ["dcim.inventoryitem"],
+            "type": "text",
+            "description": "Describes the size of the inventory item if applicable"
+        })
+
+        # add inventory speed
+        self.add_update_custom_field({
+            "name": "inventory-speed",
+            "label": "Speed",
+            "content_types": ["dcim.inventoryitem"],
+            "type": "text",
+            "description": "Describes the size of the inventory item if applicable"
         })
 
         # add health status
