@@ -7,21 +7,11 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-import json
-
 from module.netbox.object_classes import *
 from module.common.logging import get_logger
 from module.common.support import perform_ptr_lookups
 
 log = get_logger()
-
-interface_speed_type_mapping = {
-    100: "100base-tx",
-    1000: "1000base-t",
-    10000: "10gbase-t",
-    25000: "25gbase-x-sfp28",
-    40000: "40gbase-x-qsfpp"
-}
 
 
 class NetBoxInventory:

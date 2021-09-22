@@ -21,6 +21,7 @@ from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
+    NetBoxInterfaceType,
     NetBoxObject,
     NBTag,
     NBManufacturer,
@@ -41,7 +42,6 @@ from module.netbox.object_classes import (
     NBVRF,
     NBVLAN
 )
-from module.netbox.inventory import interface_speed_type_mapping
 
 log = get_logger()
 
@@ -1407,7 +1407,7 @@ class VMWareHandler(SourceBase):
                 "mac_address": normalize_mac_address(grab(pnic, "mac")),
                 "enabled": bool(grab(pnic, "linkSpeed")),
                 "description": pnic_description,
-                "type": interface_speed_type_mapping.get(pnic_link_speed, "other")
+                "type": NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type()
             }
 
             if pnic_mtu is not None:

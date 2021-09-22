@@ -19,6 +19,7 @@ from module.common.logging import get_logger
 from module.common.misc import grab, get_string_or_none
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
+    NetBoxInterfaceType,
     NBTag,
     NBManufacturer,
     NBDeviceType,
@@ -39,7 +40,6 @@ from module.netbox.object_classes import (
     NBInventoryItem,
     NBCustomField
 )
-from module.netbox.inventory import interface_speed_type_mapping
 
 log = get_logger()
 
@@ -88,6 +88,7 @@ class CheckRedfish(SourceBase):
     source_type = "check_redfish"
     enabled = False
     inventory_file_path = None
+    interface_adapter_type_dict = dict()
 
     def __init__(self, name=None, settings=None, inventory=None):
 
@@ -223,6 +224,10 @@ class CheckRedfish(SourceBase):
 
                 device_object.update(data=device_data, source=self)
 
+                # reset interface types
+                self.interface_adapter_type_dict = dict()
+
+                # parse all components
                 self.update_power_supply(device_object, file_content)
                 self.update_fan(device_object, file_content)
                 self.update_memory(device_object, file_content)
@@ -619,9 +624,25 @@ class CheckRedfish(SourceBase):
             health_status = get_string_or_none(grab(adapter, "health_status"))
             serial = get_string_or_none(grab(adapter, "serial"))
             num_ports = get_string_or_none(grab(adapter, "num_ports"))
+            manufacturer = get_string_or_none(grab(adapter, "manufacturer"))
+
+            if adapter_name.startswith("Network Adapter View"):
+                adapter_name = adapter_name.replace("Network Adapter View", "")
+            if adapter_name.startswith("Network Adapter"):
+                adapter_name = adapter_name.replace("Network Adapter", "")
+            adapter_name = adapter_name.strip()
 
             if adapter_id != adapter_name:
-                adapter_name = f"{adapter_name} ({adapter_id})"
+                if len(adapter_name) == 0:
+                    adapter_name = adapter_id
+                else:
+                    adapter_name = f"{adapter_name} ({adapter_id})"
+
+            if manufacturer is None:
+                if adapter_name.startswith("HPE"):
+                    manufacturer = "HPE"
+                elif adapter_name.startswith("HP"):
+                    manufacturer = "HP"
 
             name = adapter_name
             size = None
@@ -630,16 +651,22 @@ class CheckRedfish(SourceBase):
             if num_ports is not None:
                 size = f"{num_ports} Ports"
 
+            nic_type = NetBoxInterfaceType(name)
+
+            if adapter_id is not None:
+                self.interface_adapter_type_dict[adapter_id] = nic_type
+
             items.append({
                 "inventory_type": "NIC",
                 "device": device_object,
-                "manufacturer": get_string_or_none(grab(adapter, "manufacturer")),
+                "manufacturer": manufacturer,
                 "full_name": name,
                 "serial": serial,
                 "part_number": get_string_or_none(grab(adapter, "part_number")),
                 "firmware": firmware,
                 "health": health_status,
-                "size": size
+                "size": size,
+                "speed": nic_type.get_speed_human()
             })
 
         self.update_all_items(items)
@@ -662,6 +689,7 @@ class CheckRedfish(SourceBase):
             manager_ids = grab(nic_port, "manager_ids", fallback=list())
             hostname = get_string_or_none(grab(nic_port, "hostname"))
             health_status = get_string_or_none(grab(nic_port, "health_status"))
+            adapter_id = get_string_or_none(grab(nic_port, "adapter_id"))
 
             mac_address = normalize_mac_address(mac_address)
 
@@ -677,16 +705,16 @@ class CheckRedfish(SourceBase):
                 port_name = port_id
 
             # get port speed
-            link_speed = grab(nic_port, "capable_speed") or grab(nic_port, "current_speed")
+            link_speed = grab(nic_port, "capable_speed") or grab(nic_port, "current_speed") or 0
+
+            if link_speed == 0 and adapter_id is not None:
+                link_type = self.interface_adapter_type_dict.get(adapter_id)
+            else:
+                link_type = NetBoxInterfaceType(link_speed)
 
             description = list()
             if hostname is not None:
                 description.append(f"Hostname: {hostname}")
-            if link_speed is not None and link_speed > 0 and interface_speed_type_mapping.get(link_speed) is None:
-                if link_speed >= 1000:
-                    description.append("Speed: %iGb/s" % int(link_speed / 1000))
-                else:
-                    description.append(f"Speed: {link_speed}Mb/s")
 
             mgmt_only = False
             # if number of managers belonging to this port is not 0 then it's a BMC port
@@ -706,7 +734,7 @@ class CheckRedfish(SourceBase):
                 "mac_address": mac_address,
                 "enabled": enabled,
                 "description": ", ".join(description),
-                "type": interface_speed_type_mapping.get(link_speed, "other"),
+                "type": link_type.get_this_netbox_type(),
                 "mgmt_only": mgmt_only,
                 "health": health_status
             }
@@ -752,7 +780,6 @@ class CheckRedfish(SourceBase):
 
     def update_manager(self, device_object, inventory_data):
 
-        print(grab(device_object, "data.device_type.data.manufacturer.data.name"))
         items = list()
         for manager in grab(inventory_data, "inventory.manager", fallback=list()):
 

@@ -16,6 +16,143 @@ from module.common.logging import get_logger
 log = get_logger()
 
 
+class NetBoxInterfaceType:
+
+    fallback_type = "other"
+
+    valid_types = {
+        "virtual":         "Virtual",
+        "other":             "Other",
+        "100base-tx":            100,
+        "1000base-t":          1_000,
+        "1000base-x-sfp":      1_000,
+        "2.5gbase-t":          2_500,
+        "5gbase-t":            5_000,
+        "10gbase-t":          10_000,
+        "10gbase-x-sfpp":     10_000,
+        "10gbase-x-xfp":      10_000,
+        "25gbase-x-sfp28":    25_000,
+        "40gbase-x-qsfpp":    40_000,
+        "50gbase-x-sfp28":    50_000,
+        "50gbase-x-sfp56":    50_000,
+        "100gbase-x-cfp":    100_000,
+        "100gbase-x-cfp2":   100_000,
+        "100gbase-x-cfp4":   100_000,
+        "100gbase-x-cpak":   100_000,
+        "100gbase-x-qsfp28": 100_000,
+        "200gbase-x-qsfp56": 200_000,
+        "200gbase-x-cfp2":   200_000,
+        "400gbase-x-qsfpdd": 400_000,
+        "400gbase-x-osfp":   400_000
+    }
+
+    common_types = {
+        100: "100base-tx",
+        1000: "1000base-t",
+        2500: "2.5gbase-t",
+        5000: "5gbase-t",
+        10000: "10gbase-x-sfpp",
+        25000: "25gbase-x-sfp28",
+        40000: "40gbase-x-qsfpp",
+        50000: "50gbase-x-sfp28",
+        100000: "100gbase-x-qsfp28",
+        200000: "200gbase-x-qsfp56",
+        400000: "400gbase-x-qsfpdd"
+    }
+
+    detected_speed = 0
+    detected_type = None
+
+    def __init__(self, data=None):
+
+        try:
+            self.detected_speed = int(data)
+        except (TypeError, ValueError):
+            self.parse_data_from_adapter_name(data)
+
+    def get_netbox_type_list(self):
+
+        return list(self.valid_types.keys())
+
+    def get_common_type(self, speed=None) -> str:
+
+        try:
+            speed = int(speed)
+        except (TypeError, ValueError):
+            return self.fallback_type
+
+        return self.common_types.get(speed, self.fallback_type)
+
+    def parse_data_from_adapter_name(self, adapter_name=None):
+
+        if not isinstance(adapter_name, str):
+            return
+
+        detected_speed = 0
+        for nic_speed in ["400", "200", "100", "50", "40", "25", "10", "5", "2.5", "1"]:
+            if f"{nic_speed}gb" in adapter_name.lower():
+                detected_speed = nic_speed
+                break
+            elif f"{nic_speed}gbe" in adapter_name.lower():
+                detected_speed = nic_speed
+                break
+
+        if detected_speed == "2.5":
+            self.detected_speed = 2500
+        else:
+            self.detected_speed = int(detected_speed) * 1000
+
+        for nic_type in ["Base-T", "QSFP-DD", "QSFP28", "QSFP56", "SFP28", "QSFP+", "QSFP", "SFP+", "SFP", "XFP"]:
+            if nic_type.lower() in adapter_name.lower():
+                if nic_type == "QSFP-DD":
+                    nic_type = nic_type.replace("-", "")
+                elif "+" in nic_type:
+                    nic_type = nic_type.replace("+", "p")
+
+                self.detected_type = nic_type.lower()
+                break
+
+    def get_speed_human(self):
+        if self.detected_speed == 0:
+            return self.fallback_type
+
+        if self.detected_speed < 1000:
+            return f"{self.detected_speed}MbE"
+        else:
+            if self.detected_speed == 2500:
+                speed_to_return = "2.5"
+            else:
+                speed_to_return = int(self.detected_speed / 1000)
+
+            return f"{speed_to_return}GbE"
+
+    def get_this_netbox_type(self):
+
+        if self.detected_speed == 0:
+            return self.fallback_type
+
+        if self.detected_type is None:
+            return self.common_types.get(self.detected_speed, self.fallback_type)
+
+        # get possible speed types:
+        possible_speed_types = list()
+        for nic_type, nic_speed in self.valid_types.items():
+            if nic_speed == self.detected_speed:
+                possible_speed_types.append(nic_type)
+
+        # only one possible nic type
+        if len(possible_speed_types) == 1:
+            return self.common_types.get(self.detected_speed, self.fallback_type)
+
+        detected_nic_type = None
+        for possible_speed_type in possible_speed_types:
+            if self.detected_type in possible_speed_type:
+                return possible_speed_type
+
+        if detected_nic_type is None:
+            return self.common_types.get(self.detected_speed, self.fallback_type)
+
+
 class NetBoxObject:
     """
     Base class for all NetBox object types. Implements all methods used on a NetBox object.
@@ -1211,7 +1348,7 @@ class NBInterface(NetBoxObject):
         "name": 64,
         "device": NBDevice,
         "label": 64,
-        "type": ["virtual", "100base-tx", "1000base-t", "10gbase-t", "25gbase-x-sfp28", "40gbase-x-qsfpp", "other"],
+        "type": NetBoxInterfaceType().get_netbox_type_list(),
         "enabled": bool,
         "mac_address": str,
         "mgmt_only": bool,
