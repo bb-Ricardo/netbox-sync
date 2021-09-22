@@ -287,6 +287,10 @@ class CheckRedfish(SourceBase):
             if model is not None:
                 description.append(f"Model: {model}")
 
+            size = None
+            if capacity_in_watt is not None:
+                size = f"{capacity_in_watt}W"
+
             # compile inventory item data
             ps_items.append({
                 "inventory_type": "Power Supply",
@@ -297,7 +301,8 @@ class CheckRedfish(SourceBase):
                 "serial": get_string_or_none(grab(ps, "serial")),
                 "manufacturer": get_string_or_none(grab(ps, "vendor")),
                 "part_number": get_string_or_none(grab(ps, "part_number")),
-                "firmware": firmware
+                "firmware": firmware,
+                "size": size
             })
 
             # compile power supply data
