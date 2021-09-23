@@ -1282,7 +1282,8 @@ class NBDevice(NetBoxObject):
         "primary_ip4": object,
         "primary_ip6": object,
         "tags": NBTagList,
-        "tenant": NBTenant
+        "tenant": NBTenant,
+        "custom_fields": NBCustomField
     }
 
 

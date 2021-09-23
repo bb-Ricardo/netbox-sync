@@ -207,6 +207,7 @@ class CheckRedfish(SourceBase):
 
                 serial = get_string_or_none(grab(system, "serial"))
                 name = get_string_or_none(grab(system, "host_name"))
+
                 device_data = {
                     "device_type": {
                         "model": get_string_or_none(grab(system, "model")),
@@ -214,7 +215,10 @@ class CheckRedfish(SourceBase):
                             "name": get_string_or_none(grab(system, "manufacturer"))
                         },
                     },
-                    "status": status
+                    "status": status,
+                    "custom_fields": {
+                        "health": get_string_or_none(grab(system, "health_status"))
+                    }
                 }
 
                 if serial is not None:
@@ -391,7 +395,8 @@ class CheckRedfish(SourceBase):
             if dimm_type is not None:
                 name_details.append(f"{dimm_type}")
 
-            name += f" ({' '.join(name_details)})"
+            if len(name_details) > 0:
+                name += f" ({' '.join(name_details)})"
 
             description = list()
             if socket is not None:
@@ -400,6 +405,9 @@ class CheckRedfish(SourceBase):
                 description.append(f"Channel: {channel}")
             if slot is not None:
                 description.append(f"Slot: {slot}")
+
+            if speed is not None:
+                speed = f"{speed}MHz"
 
             items.append({
                 "inventory_type": "DIMM",
@@ -411,7 +419,7 @@ class CheckRedfish(SourceBase):
                 "part_number": get_string_or_none(grab(memory, "part_number")),
                 "health": health_status,
                 "size": f"{size_in_mb / 1024}GB",
-                "speed": f"{speed}MHz",
+                "speed": speed,
             })
 
         self.update_all_items(items)
@@ -772,7 +780,17 @@ class CheckRedfish(SourceBase):
                 if self.overwrite_interface_name is False and port_data.get("name") is not None:
                     del(port_data["name"])
 
+                this_link_type = port_data.get("type")
+                mgmt_only = port_data.get("mgmt_only")
                 data_to_update = self.patch_data(nic_object, port_data, self.overwrite_interface_attributes)
+
+                # always overwrite nic type if discovered
+                if port_data.get("type") != "other":
+                    data_to_update["type"] = this_link_type
+
+                data_to_update["mgmt_only"] = mgmt_only
+
+                # update nic object
                 nic_object.update(data=data_to_update, source=self)
 
             # check for interface ips
@@ -849,11 +867,6 @@ class CheckRedfish(SourceBase):
 
             self.update_item(item, mapped_items.get(item.get("full_name")))
 
-        for current_inventory_item in current_inventory_items:
-
-            if current_inventory_item not in mapped_items.values():
-                current_inventory_item.deleted = True
-
     def update_item(self, item_data: dict, inventory_object: NBInventoryItem = None):
 
         device = item_data.get("device")
@@ -863,11 +876,6 @@ class CheckRedfish(SourceBase):
         part_number = item_data.get("part_number")
         serial = item_data.get("serial")
         description = item_data.get("description")
-        firmware = item_data.get("firmware")
-        health = item_data.get("health")
-        inventory_type = item_data.get("inventory_type")
-        size = item_data.get("size")
-        speed = item_data.get("speed")
 
         if device is None:
             return False
@@ -878,7 +886,14 @@ class CheckRedfish(SourceBase):
         # compile inventory item data
         inventory_data = {
             "device": device,
-            "discovered": True
+            "discovered": True,
+            "custom_fields": {
+                "firmware": item_data.get("firmware"),
+                "health": item_data.get("health"),
+                "inventory-type": item_data.get("inventory_type"),
+                "inventory-size": item_data.get("size"),
+                "inventory-speed": item_data.get("speed")
+            }
         }
 
         if full_name is not None:
@@ -893,22 +908,6 @@ class CheckRedfish(SourceBase):
             inventory_data["part_id"] = part_number
         if label is not None:
             inventory_data["label"] = label
-
-        # custom fields
-        custom_fields = dict()
-        if firmware is not None:
-            custom_fields["firmware"] = firmware
-        if health is not None:
-            custom_fields["health"] = health
-        if inventory_type is not None:
-            custom_fields["inventory-type"] = inventory_type
-        if size is not None:
-            custom_fields["inventory-size"] = size
-        if speed is not None:
-            custom_fields["inventory-speed"] = speed
-
-        if len(custom_fields.keys()) > 0:
-            inventory_data["custom_fields"] = custom_fields
 
         if inventory_object is None:
             self.inventory.add_object(NBInventoryItem, data=inventory_data, source=self)
