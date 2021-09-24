@@ -17,6 +17,9 @@ log = get_logger()
 
 
 class SourceBase:
+    """
+    This is the base class for all import source classes. It provides some helpful common methods.
+    """
 
     inventory = None
     source_tag = None
@@ -154,7 +157,7 @@ class SourceBase:
 
         Parameters
         ----------
-        ip_to_match: (IPv4Address, IPv6Address)
+        ip_to_match: IPv4Address, IPv6Address
             IP address to find prefix for
         site_name: str
             name of the site the prefix needs to be in
@@ -198,6 +201,35 @@ class SourceBase:
         return current_longest_matching_prefix
 
     def add_ip_address(self, nic_ip, nic_object, site):
+        """
+        Try to add an IP address to an interface object.
+
+            Prefix length:
+              * If the 'nic_ip' does not contain a prefix length then a matching prefix will be looked up.
+                First a prefix in the same site and the globally. If no existing prefix matches the ip
+                the ip address can't be added.
+              * If the 'nic_ip' contains a prefix length then a matching prefix will be looked up the same
+                way as described above. But even if no existing matching prefix the IP address will be
+                added to NetBox
+
+            Also some sanity checking will be performed:
+              * is this ip assigned to another device
+              * does the matching prefix length match the supplied prefix length
+
+        Parameters
+        ----------
+        nic_ip: str
+            IP address to add
+        nic_object: NBInterface, NBVMInterface
+            The NetBox interface object to add the ip
+        site: str
+            The name of the site
+
+        Returns
+        -------
+        this_ip_object: NBIPAddress
+            The newly created/updated NetBox IP address object
+        """
 
         # get IP and prefix length
         try:
@@ -372,6 +404,23 @@ class SourceBase:
 
     @staticmethod
     def patch_data(object_to_patch, data, overwrite=False):
+        """
+        Patch data to only fill currently unset parameters.
+
+        Parameters
+        ----------
+        object_to_patch: NetBoxObject
+            Source object to patch
+        data: dict
+            New data to be patched in existing data
+        overwrite: bool
+            If True no patching will be performed and the data dict will be returned
+
+        Returns
+        -------
+        data_to_update: dict
+            dict with data to append/patch
+        """
 
         if overwrite is True:
             return data
