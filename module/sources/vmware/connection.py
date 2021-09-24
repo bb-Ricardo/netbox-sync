@@ -319,7 +319,7 @@ class VMWareHandler(SourceBase):
     def apply(self):
         """
         Main source handler method. This method is called for each source from "main" program
-        to retrieve data from it source and apply it to the netBox inventory.
+        to retrieve data from it source and apply it to the NetBox inventory.
 
         Every update of new/existing objects fot this source has to happen here.
         """

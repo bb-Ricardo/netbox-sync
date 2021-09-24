@@ -45,7 +45,11 @@ log = get_logger()
 
 
 class CheckRedfish(SourceBase):
+    """
+    Source class to import check_redfish inventory files
+    """
 
+    # minimum check_redfish inventory version
     minimum_check_redfish_version = "1.2.0"
 
     dependent_netbox_objects = [
@@ -109,6 +113,15 @@ class CheckRedfish(SourceBase):
         self.init_successful = True
 
     def parse_config_settings(self, config_settings):
+        """
+        Validate parsed settings from config file
+
+        Parameters
+        ----------
+        config_settings: dict
+            dict of config settings
+
+        """
 
         validation_failed = False
 
@@ -156,6 +169,15 @@ class CheckRedfish(SourceBase):
             setattr(self, setting, config_settings.get(setting))
 
     def apply(self):
+        """
+        Main source handler method. This method is called for each source from "main" program
+        to retrieve data from it source and apply it to the NetBox inventory.
+
+        Every update of new/existing objects fot this source has to happen here.
+
+        First try to find and iterate over each inventory file.
+        Then parse the system data first and then all components.
+        """
 
         self.add_necessary_custom_fields()
 
@@ -833,6 +855,23 @@ class CheckRedfish(SourceBase):
         self.update_all_items(items)
 
     def update_all_items(self, items):
+        """
+        Updates all inventory items of a certain type. Both (current and supplied list of items) will
+        be sorted by name and matched 1:1.
+
+        ToDo:
+            * enhance name matching by trying to match names first and if still items left over
+              match by order
+
+        Parameters
+        ----------
+        items: list
+            list of items to update
+
+        Returns
+        -------
+        None
+        """
 
         if not isinstance(items, list):
             raise ValueError(f"Value for 'items' must be type 'list' got: {items}")
@@ -868,6 +907,21 @@ class CheckRedfish(SourceBase):
             self.update_item(item, mapped_items.get(item.get("full_name")))
 
     def update_item(self, item_data: dict, inventory_object: NBInventoryItem = None):
+        """
+        Updates a single inventory item with the supplied data.
+        If no item is provided a new one will be created.
+
+        Parameters
+        ----------
+        item_data: dict
+            dict with data for item to update
+        inventory_object: NBInventoryItem, None
+            the NetBox inventory item to update.
+
+        Returns
+        -------
+        None
+        """
 
         device = item_data.get("device")
         full_name = item_data.get("full_name")
@@ -914,18 +968,37 @@ class CheckRedfish(SourceBase):
         else:
             inventory_object.update(data=inventory_data, source=self)
 
-        return True
+        return
 
     def add_update_custom_field(self, data):
+        """
+        Adds/updates a NBCustomField object with data.
+        Update will only update the 'content_types' attribute.
+
+        Parameters
+        ----------
+        data: dict
+            dictionary with NBCustomField attributes
+
+        Returns
+        -------
+        custom_field: NBCustomField
+            new or updated NBCustomField
+        """
 
         custom_field = self.inventory.get_by_data(NBCustomField, data={"name": data.get("name")})
 
         if custom_field is None:
-            self.inventory.add_object(NBCustomField, data=data, source=self)
+            custom_field = self.inventory.add_object(NBCustomField, data=data, source=self)
         else:
             custom_field.update(data={"content_types": data.get("content_types")}, source=self)
 
+        return custom_field
+
     def add_necessary_custom_fields(self):
+        """
+        Adds/updates all custom fields necessary fr this source.
+        """
 
         # add Firmware
         self.add_update_custom_field({
@@ -939,7 +1012,7 @@ class CheckRedfish(SourceBase):
             "description": "Item Firmware"
         })
 
-        # add inventory type
+        # add inventory item type
         self.add_update_custom_field({
             "name": "inventory-type",
             "label": "Type",
@@ -948,7 +1021,7 @@ class CheckRedfish(SourceBase):
             "description": "Describes the type of inventory item"
         })
 
-        # add inventory size
+        # add inventory item size
         self.add_update_custom_field({
             "name": "inventory-size",
             "label": "Size",
@@ -957,7 +1030,7 @@ class CheckRedfish(SourceBase):
             "description": "Describes the size of the inventory item if applicable"
         })
 
-        # add inventory speed
+        # add inventory item speed
         self.add_update_custom_field({
             "name": "inventory-speed",
             "label": "Speed",

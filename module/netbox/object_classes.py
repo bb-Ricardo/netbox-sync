@@ -17,9 +17,19 @@ log = get_logger()
 
 
 class NetBoxInterfaceType:
+    """
+    class to handle and determine NetBox interface types
+
+    Parameters
+    ----------
+    data: int, str
+        int: set interface speed
+        str: try to parse the adapter model and determine speed and interface type
+    """
 
     fallback_type = "other"
 
+    # valid types which can be used within netbox-sync
     valid_types = {
         "virtual":         "Virtual",
         "other":             "Other",
@@ -46,44 +56,71 @@ class NetBoxInterfaceType:
         "400gbase-x-osfp":   400_000
     }
 
+    # assign common types for a interface speed value
     common_types = {
-        100: "100base-tx",
-        1000: "1000base-t",
-        2500: "2.5gbase-t",
-        5000: "5gbase-t",
-        10000: "10gbase-x-sfpp",
-        25000: "25gbase-x-sfp28",
-        40000: "40gbase-x-qsfpp",
-        50000: "50gbase-x-sfp28",
-        100000: "100gbase-x-qsfp28",
-        200000: "200gbase-x-qsfp56",
-        400000: "400gbase-x-qsfpdd"
+        100:     "100base-tx",
+        1_000:   "1000base-t",
+        2_500:   "2.5gbase-t",
+        5_000:   "5gbase-t",
+        10_000:  "10gbase-x-sfpp",
+        25_000:  "25gbase-x-sfp28",
+        40_000:  "40gbase-x-qsfpp",
+        50_000:  "50gbase-x-sfp28",
+        100_000: "100gbase-x-qsfp28",
+        200_000: "200gbase-x-qsfp56",
+        400_000: "400gbase-x-qsfpdd"
     }
 
     detected_speed = 0
     detected_type = None
 
     def __init__(self, data=None):
+        """
+        Parameters
+        ----------
+        data: int, str
+            int: set interface speed
+            str: try to parse the adapter model and determine speed and interface type
+        """
 
         try:
             self.detected_speed = int(data)
         except (TypeError, ValueError):
             self.parse_data_from_adapter_name(data)
 
-    def get_netbox_type_list(self):
+    def get_netbox_type_list(self) -> list:
+        """
+        get a list of valid interface types
+
+        Returns
+        -------
+        valid_interface_types: list
+            list with valid types
+        """
 
         return list(self.valid_types.keys())
 
-    def get_common_type(self, speed=None) -> str:
+    def get_common_type(self) -> str:
+        """
+        return a interface type from the common type list
 
-        try:
-            speed = int(speed)
-        except (TypeError, ValueError):
-            return self.fallback_type
+        Returns
+        -------
+        common_type: str
+            NetBox interface type
+        """
 
-        return self.common_types.get(speed, self.fallback_type)
+        return self.common_types.get(self.detected_speed, self.fallback_type)
 
-    def parse_data_from_adapter_name(self, adapter_name=None):
+    def parse_data_from_adapter_name(self, adapter_name: str = None) -> None:
+        """
+        parses a provided adapter name and tries to determine speed and interface connector type
+
+        Parameters
+        ----------
+        adapter_name: str
+            the adapter name/description
+        """
 
         if not isinstance(adapter_name, str):
             return
@@ -112,7 +149,16 @@ class NetBoxInterfaceType:
                 self.detected_type = nic_type.lower()
                 break
 
-    def get_speed_human(self):
+    def get_speed_human(self) -> str:
+        """
+        return a human representation of the detected interface speed
+
+        Returns
+        -------
+        human_speed: str
+            human readable string of interface speed
+        """
+
         if self.detected_speed == 0:
             return self.fallback_type
 
@@ -126,13 +172,21 @@ class NetBoxInterfaceType:
 
             return f"{speed_to_return}GbE"
 
-    def get_this_netbox_type(self):
+    def get_this_netbox_type(self) -> str:
+        """
+        returns a NetBox interface type based on the detected parameters
+
+        Returns
+        -------
+        interface_type: str
+            NetBox interface type
+        """
 
         if self.detected_speed == 0:
             return self.fallback_type
 
         if self.detected_type is None:
-            return self.common_types.get(self.detected_speed, self.fallback_type)
+            return self.get_common_type()
 
         # get possible speed types:
         possible_speed_types = list()
@@ -142,7 +196,7 @@ class NetBoxInterfaceType:
 
         # only one possible nic type
         if len(possible_speed_types) == 1:
-            return self.common_types.get(self.detected_speed, self.fallback_type)
+            return self.get_common_type()
 
         detected_nic_type = None
         for possible_speed_type in possible_speed_types:
@@ -150,7 +204,7 @@ class NetBoxInterfaceType:
                 return possible_speed_type
 
         if detected_nic_type is None:
-            return self.common_types.get(self.detected_speed, self.fallback_type)
+            return self.get_common_type()
 
 
 class NetBoxObject:
