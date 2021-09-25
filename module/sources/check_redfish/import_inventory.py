@@ -93,6 +93,8 @@ class CheckRedfish(SourceBase):
     enabled = False
     inventory_file_path = None
     interface_adapter_type_dict = dict()
+    device_object = None
+    inventory_file_content = None
 
     def __init__(self, name=None, settings=None, inventory=None):
 
@@ -179,105 +181,146 @@ class CheckRedfish(SourceBase):
         Then parse the system data first and then all components.
         """
 
+        # first add all custom fields we need for this source
         self.add_necessary_custom_fields()
 
         for filename in glob.glob(f"{self.inventory_file_path}/*.json"):
 
-            if not os.path.isfile(filename):
-                continue
+            self.reset_inventory_state()
 
-            with open(filename) as json_file:
-                try:
-                    file_content = json.load(json_file)
-                except json.decoder.JSONDecodeError as e:
-                    log.error(f"Inventory file {filename} contains invalid json: {e}")
-                    continue
-
-            log.debug(f"Parsing inventory file {filename}")
-
-            # get inventory_layout_version
-            inventory_layout_version = grab(file_content, "meta.inventory_layout_version", fallback=0)
-
-            if version.parse(inventory_layout_version) < version.parse(self.minimum_check_redfish_version):
-                log.error(f"Inventory layout version '{inventory_layout_version}' of file {filename} not supported. "
-                          f"Minimum layout version {self.minimum_check_redfish_version} required.")
-
+            if self.read_inventory_file_content(filename) is False:
                 continue
 
             # try to get device by supplied NetBox id
-            inventory_id = grab(file_content, "meta.inventory_id")
-            device_object = self.inventory.get_by_id(NBDevice, inventory_id)
+            inventory_id = grab(self.inventory_file_content, "meta.inventory_id")
+            self.device_object = self.inventory.get_by_id(NBDevice, inventory_id)
 
             # try to find device by serial of first system in inventory
-            device_serial = grab(file_content, "inventory.system.0.serial")
-            if device_object is None:
-                device_object = self.inventory.get_by_data(NBDevice, data={
+            device_serial = grab(self.inventory_file_content, "inventory.system.0.serial")
+            if self.device_object is None:
+                self.device_object = self.inventory.get_by_data(NBDevice, data={
                     "serial": device_serial
                 })
 
-            if device_object is None:
+            if self.device_object is None:
                 log.error(f"Unable to find {NBDevice.name} with id '{inventory_id}' or "
                           f"serial '{device_serial}' in NetBox inventory from inventory file {filename}")
                 continue
 
-            for system in grab(file_content, "inventory.system", fallback=list()):
+            # parse all components
+            self.update_device()
+            self.update_power_supply()
+            self.update_fan()
+            self.update_memory()
+            self.update_proc()
+            self.update_physical_drive()
+            self.update_storage_controller()
+            self.update_storage_enclosure()
+            self.update_network_adapter()
+            self.update_network_interface()
+            self.update_manager()
 
-                # get status
-                status = "offline"
-                if get_string_or_none(grab(system, "power_state")) == "On":
-                    status = "active"
+    def reset_inventory_state(self):
+        """
+        reset attributes to make sure not using data from a previous inventory file
+        """
 
-                serial = get_string_or_none(grab(system, "serial"))
-                name = get_string_or_none(grab(system, "host_name"))
+        self.inventory_file_content = None
+        self.device_object = None
 
-                device_data = {
-                    "device_type": {
-                        "model": get_string_or_none(grab(system, "model")),
-                        "manufacturer": {
-                            "name": get_string_or_none(grab(system, "manufacturer"))
-                        },
-                    },
-                    "status": status,
-                    "custom_fields": {
-                        "health": get_string_or_none(grab(system, "health_status"))
-                    }
-                }
+        # reset interface types
+        self.interface_adapter_type_dict = dict()
 
-                if serial is not None:
-                    device_data["serial"] = serial
-                if name is not None and self.overwrite_host_name is True:
-                    device_data["name"] = name
+    def read_inventory_file_content(self, filename: str) -> bool:
+        """
+        open an inventory file, parse content to json and compare layout version.
 
-                device_object.update(data=device_data, source=self)
+        Parameters
+        ----------
+        filename: str
+            path ot the file to parse
 
-                # reset interface types
-                self.interface_adapter_type_dict = dict()
+        Returns
+        -------
+        success: bool
+            True if reading file content was successful otherwise False
+        """
 
-                # parse all components
-                self.update_power_supply(device_object, file_content)
-                self.update_fan(device_object, file_content)
-                self.update_memory(device_object, file_content)
-                self.update_proc(device_object, file_content)
-                self.update_physical_drive(device_object, file_content)
-                self.update_storage_controller(device_object, file_content)
-                self.update_storage_enclosure(device_object, file_content)
-                self.update_network_adapter(device_object, file_content)
-                self.update_network_interface(device_object, file_content)
-                self.update_manager(device_object, file_content)
+        if not os.path.isfile(filename):
+            log.error(f"Inventory file {filename} seems to be not a regular file")
+            return False
 
-    def update_power_supply(self, device_object, inventory_data):
+        with open(filename) as json_file:
+            try:
+                file_content = json.load(json_file)
+            except json.decoder.JSONDecodeError as e:
+                log.error(f"Inventory file {filename} contains invalid json: {e}")
+                return False
+
+        log.debug(f"Parsing inventory file {filename}")
+
+        # get inventory_layout_version
+        inventory_layout_version = grab(file_content, "meta.inventory_layout_version", fallback=0)
+
+        if version.parse(inventory_layout_version) < version.parse(self.minimum_check_redfish_version):
+            log.error(f"Inventory layout version '{inventory_layout_version}' of file {filename} not supported. "
+                      f"Minimum layout version {self.minimum_check_redfish_version} required.")
+
+            return False
+
+        self.inventory_file_content = file_content
+
+        return True
+
+    def update_device(self):
+
+        system = grab(self.inventory_file_content, "inventory.system.0")
+
+        if system is None:
+            log.error(f"No system data found for '{self.device_object.get_display_name()}' in inventory file.")
+            return
+
+        # get status
+        status = "offline"
+        if get_string_or_none(grab(system, "power_state")) == "On":
+            status = "active"
+
+        serial = get_string_or_none(grab(system, "serial"))
+        name = get_string_or_none(grab(system, "host_name"))
+
+        device_data = {
+            "device_type": {
+                "model": get_string_or_none(grab(system, "model")),
+                "manufacturer": {
+                    "name": get_string_or_none(grab(system, "manufacturer"))
+                },
+            },
+            "status": status,
+            "custom_fields": {
+                "health": get_string_or_none(grab(system, "health_status"))
+            }
+        }
+
+        if serial is not None:
+            device_data["serial"] = serial
+        if name is not None and self.overwrite_host_name is True:
+            device_data["name"] = name
+
+        self.device_object.update(data=device_data, source=self)
+
+    def update_power_supply(self):
 
         # get power supplies
         current_ps = list()
         for ps in self.inventory.get_all_items(NBPowerPort):
-            if grab(ps, "data.device") == device_object:
+            if grab(ps, "data.device") == self.device_object:
                 current_ps.append(ps)
 
         current_ps.sort(key=lambda x: grab(x, "data.name"))
 
         ps_index = 0
         ps_items = list()
-        for ps in grab(inventory_data, "inventory.power_supply", fallback=list()):
+        for ps in grab(self.inventory_file_content, "inventory.power_supply", fallback=list()):
 
             if grab(ps, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -321,7 +364,6 @@ class CheckRedfish(SourceBase):
             ps_items.append({
                 "inventory_type": "Power Supply",
                 "health": health_status,
-                "device": device_object,
                 "description": description,
                 "full_name": name,
                 "serial": get_string_or_none(grab(ps, "serial")),
@@ -334,7 +376,7 @@ class CheckRedfish(SourceBase):
             # compile power supply data
             ps_data = {
                 "name": name,
-                "device": device_object,
+                "device": self.device_object,
                 "description": ", ".join(description)
             }
 
@@ -358,10 +400,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(ps_items)
 
-    def update_fan(self, device_object, inventory_data):
+    def update_fan(self):
 
         items = list()
-        for fan in grab(inventory_data, "inventory.fan", fallback=list()):
+        for fan in grab(self.inventory_file_content, "inventory.fan", fallback=list()):
 
             if grab(fan, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -384,7 +426,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "Fan",
-                "device": device_object,
                 "description": description,
                 "full_name": f"{fan_name} (ID: {fan_id})",
                 "health": health_status,
@@ -393,10 +434,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_memory(self, device_object, inventory_data):
+    def update_memory(self):
 
         items = list()
-        for memory in grab(inventory_data, "inventory.memory", fallback=list()):
+        for memory in grab(self.inventory_file_content, "inventory.memory", fallback=list()):
 
             if grab(memory, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -433,7 +474,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "DIMM",
-                "device": device_object,
                 "description": description,
                 "full_name": name,
                 "serial": get_string_or_none(grab(memory, "serial")),
@@ -446,10 +486,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_proc(self, device_object, inventory_data):
+    def update_proc(self):
 
         items = list()
-        for processor in grab(inventory_data, "inventory.processor", fallback=list()):
+        for processor in grab(self.inventory_file_content, "inventory.processor", fallback=list()):
 
             if grab(processor, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -480,7 +520,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "CPU",
-                "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(processor, "manufacturer")),
                 "full_name": name,
@@ -492,10 +531,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_physical_drive(self, device_object, inventory_data):
+    def update_physical_drive(self):
 
         items = list()
-        for pd in grab(inventory_data, "inventory.physical_drive", fallback=list()):
+        for pd in grab(self.inventory_file_content, "inventory.physical_drive", fallback=list()):
 
             if grab(pd, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -549,7 +588,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "Physical Drive",
-                "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(pd, "manufacturer")),
                 "full_name": name,
@@ -563,10 +601,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_storage_controller(self, device_object, inventory_data):
+    def update_storage_controller(self):
 
         items = list()
-        for sc in grab(inventory_data, "inventory.storage_controller", fallback=list()):
+        for sc in grab(self.inventory_file_content, "inventory.storage_controller", fallback=list()):
 
             if grab(sc, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -596,7 +634,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "Storage Controller",
-                "device": device_object,
                 "description": description,
                 "manufacturer": get_string_or_none(grab(sc, "manufacturer")),
                 "full_name": name,
@@ -608,10 +645,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_storage_enclosure(self, device_object, inventory_data):
+    def update_storage_enclosure(self):
 
         items = list()
-        for se in grab(inventory_data, "inventory.storage_enclosure", fallback=list()):
+        for se in grab(self.inventory_file_content, "inventory.storage_enclosure", fallback=list()):
 
             if grab(se, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -633,7 +670,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "Storage Enclosure",
-                "device": device_object,
                 "manufacturer": get_string_or_none(grab(se, "manufacturer")),
                 "full_name": name,
                 "serial": get_string_or_none(grab(se, "serial")),
@@ -644,10 +680,10 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_network_adapter(self, device_object, inventory_data):
+    def update_network_adapter(self):
 
         items = list()
-        for adapter in grab(inventory_data, "inventory.network_adapter", fallback=list()):
+        for adapter in grab(self.inventory_file_content, "inventory.network_adapter", fallback=list()):
 
             if grab(adapter, "operation_status") in ["NotPresent", "Absent"]:
                 continue
@@ -693,7 +729,6 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "NIC",
-                "device": device_object,
                 "manufacturer": manufacturer,
                 "full_name": name,
                 "serial": serial,
@@ -706,13 +741,13 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
-    def update_network_interface(self, device_object, inventory_data):
+    def update_network_interface(self):
 
         port_data_dict = dict()
         nic_ips = dict()
         discovered_mac_list = list()
 
-        for nic_port in grab(inventory_data, "inventory.network_port", fallback=list()):
+        for nic_port in grab(self.inventory_file_content, "inventory.network_port", fallback=list()):
 
             if grab(nic_port, "operation_status") in ["Disabled"]:
                 continue
@@ -765,7 +800,6 @@ class CheckRedfish(SourceBase):
             port_data_dict[port_name] = {
                 "inventory_type": "NIC Port",
                 "name": port_name,
-                "device": device_object,
                 "mac_address": mac_address,
                 "enabled": enabled,
                 "description": ", ".join(description),
@@ -779,7 +813,7 @@ class CheckRedfish(SourceBase):
             nic_ips[port_name].extend(grab(nic_port, "ipv4_addresses", fallback=list()))
             nic_ips[port_name].extend(grab(nic_port, "ipv6_addresses", fallback=list()))
 
-        data = self.map_object_interfaces_to_current_interfaces(device_object, port_data_dict)
+        data = self.map_object_interfaces_to_current_interfaces(self.device_object, port_data_dict)
 
         for port_name, port_data in port_data_dict.items():
 
@@ -821,12 +855,12 @@ class CheckRedfish(SourceBase):
                 if ip_valid_to_add_to_netbox(nic_ip, self.permitted_subnets, port_name) is False:
                     continue
 
-                self.add_ip_address(nic_ip, nic_object, grab(device_object, "data.site.data.name"))
+                self.add_ip_address(nic_ip, nic_object, grab(self.device_object, "data.site.data.name"))
 
-    def update_manager(self, device_object, inventory_data):
+    def update_manager(self):
 
         items = list()
-        for manager in grab(inventory_data, "inventory.manager", fallback=list()):
+        for manager in grab(self.inventory_file_content, "inventory.manager", fallback=list()):
 
             name = get_string_or_none(grab(manager, "name"))
             model = get_string_or_none(grab(manager, "model"))
@@ -844,10 +878,9 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "inventory_type": "Manager",
-                "device": device_object,
                 "description": description,
                 "full_name": name,
-                "manufacturer": grab(device_object, "data.device_type.data.manufacturer.data.name"),
+                "manufacturer": grab(self.device_object, "data.device_type.data.manufacturer.data.name"),
                 "firmware": get_string_or_none(grab(manager, "firmware")),
                 "health": get_string_or_none(grab(manager, "health_status"))
             })
@@ -880,10 +913,9 @@ class CheckRedfish(SourceBase):
             return
 
         # get device
-        device = grab(items, "0.device")
         inventory_type = grab(items, "0.inventory_type")
 
-        if device is None or inventory_type is None:
+        if inventory_type is None:
             return
 
         # sort items by full_name
@@ -892,7 +924,7 @@ class CheckRedfish(SourceBase):
         # get current inventory items for
         current_inventory_items = list()
         for item in self.inventory.get_all_items(NBInventoryItem):
-            if grab(item, "data.device") == device and \
+            if grab(item, "data.device") == self.device_object and \
                     grab(item, "data.custom_fields.inventory-type") == inventory_type:
 
                 current_inventory_items.append(item)
@@ -923,7 +955,6 @@ class CheckRedfish(SourceBase):
         None
         """
 
-        device = item_data.get("device")
         full_name = item_data.get("full_name")
         label = item_data.get("label")
         manufacturer = item_data.get("manufacturer")
@@ -931,15 +962,9 @@ class CheckRedfish(SourceBase):
         serial = item_data.get("serial")
         description = item_data.get("description")
 
-        if device is None:
-            return False
-
-        if isinstance(description, list):
-            description = ", ".join(description)
-
         # compile inventory item data
         inventory_data = {
-            "device": device,
+            "device": self.device_object,
             "discovered": True,
             "custom_fields": {
                 "firmware": item_data.get("firmware"),
@@ -949,6 +974,9 @@ class CheckRedfish(SourceBase):
                 "inventory-speed": item_data.get("speed")
             }
         }
+
+        if isinstance(description, list):
+            description = ", ".join(description)
 
         if full_name is not None:
             inventory_data["name"] = full_name
