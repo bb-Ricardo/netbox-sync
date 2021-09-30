@@ -1,7 +1,11 @@
 
 # NetBox-Sync
 
-This is a tool to sync data from different sources (currently only VMWare vCenter) to a NetBox instance.
+This is a tool to sync data from different sources to a NetBox instance.
+
+Available Sources:
+* VMware vCenter Server
+* [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 
 **IMPORTANT: READ INSTRUCTIONS CAREFULLY BEFORE RUNNING THIS PROGRAM**
 
@@ -34,9 +38,9 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 
 ### Environment
 * NetBox >= 2.9
-#### Source: VMWare
+#### Source: VMWare (if used)
 * VMWare vCenter >= 6.0
-#### Source: check_redfish
+#### Source: check_redfish (if used)
 * check_redfish >= 1.2.0
 
 # Installing
@@ -101,13 +105,8 @@ Run the containerized application in a kubernetes cluster
  kubectl apply -f netbox-vsphere-sync-cronjob.yaml
  ```
 
-## Accounts and tokens
-In order to read data from a vCenter and updated data in NetBox you need credentials in both instances.
-
-### vCenter user
-* User account with "Read-only" role on vCenter root scope. The "Propagate to children" setting must also be checked.
-
-### NetBox API token
+## NetBox API token
+In order to updated data in NetBox you need a NetBox API token.
 * API token with all permissions (read, write) except:
   * auth
   * secrets
@@ -148,9 +147,6 @@ Also use the dry run option `-n` at the beginning to avoid changes directly in N
 ## Setup
 Copy the [settings-example.ini](settings-example.ini) sample settings file to `settings.ini`.
 All options are described in the example file.
-
-For VMWare source you should define the var `cluster_site_relation` which maps a vCenter cluster to an
-exiting Site in NetBox. If undefined a placeholder site will be created.
 
 ## Cron job
 In Order to sync all items regularly you can add a cron job like this one
