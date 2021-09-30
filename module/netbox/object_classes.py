@@ -1220,7 +1220,7 @@ class NBPrefix(NetBoxObject):
 class NBManufacturer(NetBoxObject):
     name = "manufacturer"
     api_path = "dcim/manufacturers"
-    primary_key = "name"
+    primary_key = "slug"
     prune = False
     data_model = {
         "name": 50,
