@@ -100,6 +100,10 @@ class NetBoxInventory:
         if data_id is not None and data_id != 0:
             return self.get_by_id(object_type, nb_id=data_id)
 
+        # add slug to data if slug is primary key
+        if object_type.primary_key == "slug" and data.get("name") is not None:
+            data["slug"] = NetBoxObject.format_slug(data.get("name"))
+
         # try to find by primary/secondary key
         if data.get(object_type.primary_key) is not None:
             object_name_to_find = None
