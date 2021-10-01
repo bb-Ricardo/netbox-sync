@@ -182,7 +182,7 @@ class CheckRedfish(SourceBase):
         """
 
         # first add all custom fields we need for this source
-        self.add_necessary_custom_fields()
+        self.add_necessary_base_objects()
 
         for filename in glob.glob(f"{self.inventory_file_path}/*.json"):
 
@@ -892,10 +892,6 @@ class CheckRedfish(SourceBase):
         Updates all inventory items of a certain type. Both (current and supplied list of items) will
         be sorted by name and matched 1:1.
 
-        ToDo:
-            * enhance name matching by trying to match names first and if still items left over
-              match by order
-
         Parameters
         ----------
         items: list
@@ -916,27 +912,59 @@ class CheckRedfish(SourceBase):
         inventory_type = grab(items, "0.inventory_type")
 
         if inventory_type is None:
+            log.error(f"Unable to find inventory type for inventory item {items[0]}")
             return
 
-        # sort items by full_name
-        items.sort(key=lambda x: x.get("full_name"))
-
-        # get current inventory items for
-        current_inventory_items = list()
+        # get current inventory items for this device and type
+        current_inventory_items = dict()
         for item in self.inventory.get_all_items(NBInventoryItem):
             if grab(item, "data.device") == self.device_object and \
                     grab(item, "data.custom_fields.inventory-type") == inventory_type:
 
-                current_inventory_items.append(item)
+                current_inventory_items[grab(item, "data.name")] = item
 
         # sort items by display name
-        current_inventory_items.sort(key=lambda x: x.get_display_name())
+        current_inventory_items = dict(sorted(current_inventory_items.items()))
 
-        mapped_items = dict(zip([x.get("full_name") for x in items], current_inventory_items))
+        # dict
+        #   key: NB inventory object
+        #   value: parsed data matching the exact name
+        matched_inventory = dict()
+        unmatched_inventory_items = list()
 
+        # try to match names to existing inventory
         for item in items:
 
-            self.update_item(item, mapped_items.get(item.get("full_name")))
+            current_item = current_inventory_items.get(item.get("full_name"))
+            if current_item is not None:
+                # log.debug2(f"Found 1:1 name match for inventory item '{item.get('full_name')}'")
+                matched_inventory[current_item] = item
+            else:
+                # log.debug2(f"No current NetBox inventory item found for '{item.get('full_name')}'")
+                unmatched_inventory_items.append(item)
+
+        # sort unmatched items by full_name
+        unmatched_inventory_items.sort(key=lambda x: x.get("full_name"))
+
+        # iterate over current NetBox inventory items
+        # if name did not match try to assign unmatched items in alphabetical order
+        for nb_inventory_item in current_inventory_items.values():
+
+            if nb_inventory_item not in matched_inventory.keys():
+                if len(unmatched_inventory_items) > 0:
+                    matched_inventory[nb_inventory_item] = unmatched_inventory_items.pop(0)
+
+                # set item health to absent if item can't be found in redfish inventory anymore
+                elif grab(nb_inventory_item, "data.custom_fields.health") != "Absent":
+                    nb_inventory_item.update(data={"custom_fields": {"health": "Absent"}}, source=self)
+
+        # update items with matching NetBox inventory item
+        for inventory_object, inventory_data in matched_inventory.items():
+            self.update_item(inventory_data, inventory_object)
+
+        # create new inventory item in NetBox
+        for unmatched_inventory_item in unmatched_inventory_items:
+            self.update_item(unmatched_inventory_item)
 
     def update_item(self, item_data: dict, inventory_object: NBInventoryItem = None):
         """
@@ -1023,10 +1051,16 @@ class CheckRedfish(SourceBase):
 
         return custom_field
 
-    def add_necessary_custom_fields(self):
+    def add_necessary_base_objects(self):
         """
-        Adds/updates all custom fields necessary fr this source.
+        Adds/updates source tag and all custom fields necessary for this source.
         """
+
+        # add source identification tag
+        self.inventory.add_update_object(NBTag, data={
+            "name": self.source_tag,
+            "description": f"Marks objects synced from check_redfish inventory '{self.name}' to this NetBox Instance."
+        })
 
         # add Firmware
         self.add_update_custom_field({
