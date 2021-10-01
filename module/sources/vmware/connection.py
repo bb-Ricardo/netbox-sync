@@ -1970,7 +1970,7 @@ class VMWareHandler(SourceBase):
         # add source identification tag
         self.inventory.add_update_object(NBTag, data={
             "name": self.source_tag,
-            "description": f"Marks sources synced from vCenter {self.name} "
+            "description": f"Marks objects synced from vCenter '{self.name}' "
                            f"({self.host_fqdn}) to this NetBox Instance."
         })
 
