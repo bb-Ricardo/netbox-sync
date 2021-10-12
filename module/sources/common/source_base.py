@@ -9,7 +9,17 @@
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
 
-from module.netbox.inventory import NBDevice, NBVM, NBInterface, NBVMInterface, NBSite, NBPrefix, NBIPAddress, NBVLAN
+from module.netbox.inventory import (
+    NetBoxObject,
+    NBDevice,
+    NBVM,
+    NBInterface,
+    NBVMInterface,
+    NBSite,
+    NBPrefix,
+    NBIPAddress,
+    NBVLAN
+)
 from module.common.logging import get_logger
 from module.common.misc import grab
 
@@ -171,7 +181,7 @@ class SourceBase:
             return
 
         if not isinstance(ip_to_match, (IPv4Address, IPv6Address)):
-            raise ValueError("Value of 'ip_to_match' needs to be an IPv4Address or IPv6Address this_object.")
+            raise ValueError("Value of 'ip_to_match' needs to be an IPv4Address or IPv6Address object.")
 
         site_object = None
         if site_name is not None:
@@ -180,6 +190,7 @@ class SourceBase:
             if site_object is None:
                 log.error(f"Unable to find site '{site_name}' for IP {ip_to_match}. "
                           "Skipping to find Prefix for this IP.")
+                return
 
         current_longest_matching_prefix_length = 0
         current_longest_matching_prefix = None
@@ -200,207 +211,276 @@ class SourceBase:
 
         return current_longest_matching_prefix
 
-    def add_ip_address(self, nic_ip, nic_object, site):
+    def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None):
         """
-        Try to add an IP address to an interface object.
-
-            Prefix length:
-              * If the 'nic_ip' does not contain a prefix length then a matching prefix will be looked up.
-                First a prefix in the same site and the globally. If no existing prefix matches the ip
-                the ip address can't be added.
-              * If the 'nic_ip' contains a prefix length then a matching prefix will be looked up the same
-                way as described above. But even if no existing matching prefix the IP address will be
-                added to NetBox
-
-            Also some sanity checking will be performed:
-              * is this ip assigned to another device
-              * does the matching prefix length match the supplied prefix length
+        Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
+        Validates/enriches data in following order:
+          * extract untagged_vlan from data
+          * try to find tagged_vlan_objects
+          * add/update interface
+          * loop over list of IPs and add each IP to the Interface if
+            * IP is valid
+            * does not belong to another active interface
+          * extract prefixes belonging to the IPs
+          * use VLAN data from prefixes to match/add to the interface
 
         Parameters
         ----------
-        nic_ip: str
-            IP address to add
-        nic_object: NBInterface, NBVMInterface
-            The NetBox interface object to add the ip
-        site: str
-            The name of the site
+        interface_object: NBVMInterface, NBInterface, None
+            object handle of the current interface (if existent, otherwise None)
+        device_object: NBVM, NBDevice
+            device object handle this interface belongs to
+        interface_data: dict
+            dictionary with interface attributes to add to this interface
+        interface_ips: list
+            list of ip addresses which are assigned to this interface
 
         Returns
         -------
-        this_ip_object: NBIPAddress
-            The newly created/updated NetBox IP address object
+        objects: tuple((NBVMInterface, NBInterface), list)
+            tuple with interface object that was added/updated and a list of ip address objects which were
+            added to this interface
         """
 
-        # get IP and prefix length
-        try:
-            if "/" in nic_ip:
-                ip_object = ip_interface(nic_ip)
-            else:
-                ip_object = ip_address(nic_ip)
-        except ValueError:
-            log.error(f"IP '{nic_ip}' ({nic_object.get_display_name()}) does not appear "
-                      "to be a valid IP address. Skipping!")
-            return
+        if not isinstance(interface_data, dict):
+            log.error(f"Attribute 'interface_data' must be a dict() got {type(interface_data)}.")
+            return None
 
-        log.debug2(f"Trying to find prefix for IP: {ip_object}")
-
-        possible_ip_vrf = None
-        possible_ip_tenant = None
-
-        # test for site prefixes first
-        matching_site_name = site
-        matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object, matching_site_name)
-
-        # nothing was found then check prefixes with site name
-        if matching_ip_prefix is None:
-            matching_site_name = None
-            matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object)
-
-        # matching prefix found, get data from prefix
-        if matching_ip_prefix is not None:
-
-            this_prefix = grab(matching_ip_prefix, f"data.{NBPrefix.primary_key}")
-            if matching_site_name is None:
-                log.debug2(f"Found IP '{ip_object}' matches global prefix '{this_prefix}'")
-            else:
-                log.debug2(f"Found IP '{ip_object}' matches site '{matching_site_name}' prefix "
-                           f"'{this_prefix}'")
-
-            # check if prefix net size and ip address prefix length match
-            if not isinstance(ip_object, (IPv6Address, IPv4Address)) and \
-                    this_prefix.prefixlen != ip_object.network.prefixlen:
-                log.warning(f"IP prefix length of '{ip_object}' ({nic_object.get_display_name()}) "
-                            f"does not match network prefix length '{this_prefix}'!")
-
-            # get prefix data
-            possible_ip_vrf = grab(matching_ip_prefix, "data.vrf")
-            prefix_tenant = grab(matching_ip_prefix, "data.tenant")
-            prefix_vlan = grab(matching_ip_prefix, "data.vlan")
-
-            # get NIC VLAN data
-            nic_vlan = grab(nic_object, "data.untagged_vlan")
-            nic_vlan_tenant = None
-            if nic_vlan is not None:
-                nic_vlan_tenant = grab(nic_vlan, "data.tenant")
-
-            # check if interface VLAN matches prefix VLAN for IP address
-
-            if isinstance(nic_vlan, NBVLAN) and isinstance(prefix_vlan, NBPrefix) and nic_vlan != prefix_vlan:
-                log.warning(f"Prefix vlan '{prefix_vlan.get_display_name()}' does not match interface vlan "
-                            f"'{nic_vlan.get_display_name()}' for '{nic_object.get_display_name()}")
-
-            if prefix_tenant is not None:
-                possible_ip_tenant = prefix_tenant
-            elif nic_vlan_tenant is not None:
-                possible_ip_tenant = nic_vlan_tenant
-
+        if type(device_object) == NBVM:
+            interface_class = NBVMInterface
+        elif type(device_object) == NBDevice:
+            interface_class = NBInterface
+        elif device_object is None:
+            log.error(f"No device/VM object submitted to attach interface '{grab(interface_data, 'name')}' to.")
+            return None
         else:
-            log_text = f"No matching NetBox prefix for '{ip_object}' found"
+            log.error(f"Device object for interface '{grab(interface_data, 'name')}' must be a 'NBVM' or 'NBDevice'. "
+                      f"Got {type(device_object)}")
+            return None
 
-            if type(ip_object) in [IPv6Address, IPv4Address]:
-                log.warning(f"{log_text}. Unable to add IP address to NetBox.")
-                return None
+        if interface_object is not None and not isinstance(interface_object, interface_class):
+            log.error(f"Interface object '{grab(interface_data, 'name')}' must be a '{interface_class.name}'.")
+            return None
+
+        site_name = grab(device_object, "data.site.data.name")
+
+        # get vlans from interface data and remove it for now from interface data dict
+        # vlans get added later once we have the prefixes for the IP addresses
+        untagged_vlan = interface_data.get("untagged_vlan")
+        if untagged_vlan is not None:
+            del(interface_data["untagged_vlan"])
+
+        # check tagged vlans and try to find NetBox VLAN objects based on VLAN id and site
+        tagged_vlans = list()
+        for tagged_vlan in interface_data.get("tagged_vlans") or list():
+
+            if isinstance(tagged_vlan, NBVLAN):
+                tagged_vlans.append(tagged_vlan)
             else:
-                log.debug2(log_text)
+                tagged_vlans.append(self.get_vlan_object_if_exists(tagged_vlan, site_name))
 
-        if matching_ip_prefix is not None and type(ip_object) in [IPv6Address, IPv4Address]:
-            this_prefix = grab(matching_ip_prefix, "data.prefix")
-            if type(this_prefix) in [IPv4Network, IPv6Network]:
-                ip_object = ip_interface(f"{ip_object}/{this_prefix.prefixlen}")
-            else:
-                log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP to NetBox")
-                return None
+        if len(tagged_vlans) > 0:
+            interface_data["tagged_vlans"] = tagged_vlans
 
-        # try to find matching IP address object
-        this_ip_object = None
-        skip_this_ip = False
-        for ip in self.inventory.get_all_items(NBIPAddress):
+        # add object to interface
+        interface_data[interface_class.secondary_key] = device_object
 
-            # check if address matches (without prefix length)
-            ip_address_string = grab(ip, "data.address", fallback="")
+        # create or update interface with data
+        if interface_object is None:
+            interface_object = self.inventory.add_object(interface_class, data=interface_data, source=self)
+        else:
+            interface_object.update(data=interface_data, source=self)
 
-            # not a matching address
-            if not ip_address_string.startswith(f"{ip_object.ip.compressed}/"):
+        ip_address_objects = list()
+        matching_ip_prefixes = list()
+
+        # add all interface IPs
+        for nic_ip in interface_ips or list():
+
+            # get IP and prefix length
+            try:
+                if "/" in nic_ip:
+                    ip_object = ip_interface(nic_ip)
+                else:
+                    ip_object = ip_address(nic_ip)
+            except ValueError:
+                log.error(f"IP '{nic_ip}' ({interface_object.get_display_name()}) does not appear "
+                          "to be a valid IP address. Skipping!")
                 continue
 
-            current_nic = grab(ip, "data.assigned_object_id")
+            log.debug2(f"Trying to find prefix for IP: {ip_object}")
 
-            # is it our current ip interface?
-            if current_nic == nic_object:
-                this_ip_object = ip
-                break
+            possible_ip_vrf = None
+            possible_ip_tenant = None
 
-            # check if IP has the same prefix
-            # continue if
-            #   * both are in global scope
-            #   * both ara part of the same vrf
-            if possible_ip_vrf != grab(ip, "data.vrf"):
+            # test for site prefixes first
+            matching_site_name = site_name
+            matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object, matching_site_name)
+
+            # nothing was found then check prefixes without site name
+            if matching_ip_prefix is None:
+                matching_site_name = None
+                matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object)
+
+            # matching prefix found, get data from prefix
+            if matching_ip_prefix is not None:
+
+                this_prefix = grab(matching_ip_prefix, f"data.{NBPrefix.primary_key}")
+                if matching_site_name is None:
+                    log.debug2(f"Found IP '{ip_object}' matches global prefix '{this_prefix}'")
+                else:
+                    log.debug2(f"Found IP '{ip_object}' matches site '{matching_site_name}' prefix "
+                               f"'{this_prefix}'")
+
+                # check if prefix net size and ip address prefix length match
+                if not isinstance(ip_object, (IPv6Address, IPv4Address)) and \
+                        this_prefix.prefixlen != ip_object.network.prefixlen:
+                    log.warning(f"IP prefix length of '{ip_object}' ({interface_object.get_display_name()}) "
+                                f"does not match network prefix length '{this_prefix}'!")
+
+                possible_ip_vrf = grab(matching_ip_prefix, "data.vrf")
+                possible_ip_tenant = grab(matching_ip_prefix, "data.tenant")
+
+                matching_ip_prefixes.append(matching_ip_prefix)
+
+            else:
+                log_text = f"No matching NetBox prefix for '{ip_object}' found"
+
+                # check if IP address is of type IP interface (includes prefix length)
+                if type(ip_object) in [IPv6Address, IPv4Address]:
+                    log.warning(f"{log_text}. Unable to add IP address to NetBox.")
+                    continue
+                else:
+                    log.debug2(log_text)
+
+            # try to add prefix length to IP address if present
+            if matching_ip_prefix is not None and type(ip_object) in [IPv6Address, IPv4Address]:
+                this_prefix = grab(matching_ip_prefix, "data.prefix")
+                if type(this_prefix) in [IPv4Network, IPv6Network]:
+                    ip_object = ip_interface(f"{ip_object}/{this_prefix.prefixlen}")
+                else:
+                    log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP to NetBox")
+                    continue
+
+            # try to find matching IP address object
+            this_ip_object = None
+            skip_this_ip = False
+            for ip in self.inventory.get_all_items(NBIPAddress):
+
+                # check if address matches (without prefix length)
+                ip_address_string = grab(ip, "data.address", fallback="")
+
+                # not a matching address
+                if not ip_address_string.startswith(f"{ip_object.ip.compressed}/"):
+                    continue
+
+                current_nic = grab(ip, "data.assigned_object_id")
+
+                # is it our current ip interface?
+                if current_nic == interface_object:
+                    this_ip_object = ip
+                    break
+
+                # check if IP has the same prefix
+                # continue if
+                #   * both are in global scope
+                #   * both are part of the same vrf
+                if possible_ip_vrf != grab(ip, "data.vrf"):
+                    continue
+
+                # IP address is not assigned to any interface
+                if not isinstance(current_nic, (NBInterface, NBVMInterface)):
+                    this_ip_object = ip
+                    break
+
+                # get current IP interface status
+                current_nic_enabled = grab(current_nic, "data.enabled", fallback=True)
+                this_nic_enabled = grab(interface_object, "data.enabled", fallback=True)
+
+                if current_nic_enabled is True and this_nic_enabled is False:
+                    log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_object}'"
+                              f" is enabled and this one '{interface_object.get_display_name()}' is disabled. "
+                              f"IP assignment skipped!")
+                    skip_this_ip = True
+                    break
+
+                if current_nic_enabled is False and this_nic_enabled is True:
+                    log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_object}'"
+                              f" is disabled and this one '{interface_object.get_display_name()}' is enabled. "
+                              f"IP will be assigned to this interface.")
+
+                    this_ip_object = ip
+
+                if current_nic_enabled == this_nic_enabled:
+                    state = "enabled" if this_nic_enabled is True else "disabled"
+                    log.warning(f"Current interface '{current_nic.get_display_name()}' for IP "
+                                f"'{ip_object}' and this one '{interface_object.get_display_name()}' are "
+                                f"both {state}. "
+                                f"IP assignment skipped because it is unclear which one is the correct one!")
+                    skip_this_ip = True
+                    break
+
+            if skip_this_ip is True:
                 continue
 
-            # IP address is not assigned to any interface
-            if not isinstance(current_nic, (NBInterface, NBVMInterface)):
-                this_ip_object = ip
+            nic_ip_data = {
+                "address": ip_object.compressed,
+                "assigned_object_id": interface_object,
+            }
+
+            if not isinstance(this_ip_object, NBIPAddress):
+                log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
+
+                if possible_ip_vrf is not None:
+                    nic_ip_data["vrf"] = possible_ip_vrf
+                if possible_ip_tenant is not None:
+                    nic_ip_data["tenant"] = possible_ip_tenant
+
+                this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
+
+            # update IP address with additional data if not already present
+            else:
+
+                log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
+
+                if grab(this_ip_object, "data.vrf") is None and possible_ip_vrf is not None:
+                    nic_ip_data["vrf"] = possible_ip_vrf
+
+                if grab(this_ip_object, "data.tenant") is None and possible_ip_tenant is not None:
+                    nic_ip_data["tenant"] = possible_ip_tenant
+
+                this_ip_object.update(data=nic_ip_data, source=self)
+
+            ip_address_objects.append(this_ip_object)
+
+        matching_untagged_vlan = None
+
+        for matching_prefix in matching_ip_prefixes:
+
+            prefix_vlan = grab(matching_prefix, "data.vlan")
+            if prefix_vlan is None:
+                continue
+
+            if untagged_vlan is None or str(grab(prefix_vlan, "data.vid")) == str(untagged_vlan.get("vid")):
+
+                log.debug(f"Found matching prefix VLAN {prefix_vlan.get_display_name()} for "
+                          f"untagged interface VLAN.")
+
+                matching_untagged_vlan = prefix_vlan
                 break
 
-            # get current IP interface status
-            current_nic_enabled = grab(current_nic, "data.enabled", fallback=True)
-            this_nic_enabled = grab(nic_object, "data.enabled", fallback=True)
+        # try to find vlan object if no matching prefix VLAN ws found
+        if matching_untagged_vlan is None:
+            matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
 
-            if current_nic_enabled is True and this_nic_enabled is False:
-                log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_object}'"
-                          f" is enabled and this one '{nic_object.get_display_name()}' is disabled. "
-                          f"IP assignment skipped!")
-                skip_this_ip = True
-                break
+        if matching_untagged_vlan is not None:
+            vlan_interface_data = dict({"untagged_vlan": matching_untagged_vlan})
+            if grab(interface_object, "data.mode") is None:
+                vlan_interface_data["mode"] = "access"
 
-            if current_nic_enabled is False and this_nic_enabled is True:
-                log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_object}'"
-                          f" is disabled and this one '{nic_object.get_display_name()}' is enabled. "
-                          f"IP will be assigned to this interface.")
+            interface_object.update(data=vlan_interface_data, source=self)
 
-                this_ip_object = ip
-
-            if current_nic_enabled == this_nic_enabled:
-                state = "enabled" if this_nic_enabled is True else "disabled"
-                log.warning(f"Current interface '{current_nic.get_display_name()}' for IP "
-                            f"'{ip_object}' and this one '{nic_object.get_display_name()}' are "
-                            f"both {state}. "
-                            f"IP assignment skipped because it is unclear which one is the correct one!")
-                skip_this_ip = True
-                break
-
-        if skip_this_ip is True:
-            return
-
-        nic_ip_data = {
-            "address": ip_object.compressed,
-            "assigned_object_id": nic_object,
-        }
-
-        if not isinstance(this_ip_object, NBIPAddress):
-            log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
-
-            if possible_ip_vrf is not None:
-                nic_ip_data["vrf"] = possible_ip_vrf
-            if possible_ip_tenant is not None:
-                nic_ip_data["tenant"] = possible_ip_tenant
-
-            this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
-
-        # update IP address with additional data if not already present
-        else:
-
-            log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
-
-            if grab(this_ip_object, "data.vrf") is None and possible_ip_vrf is not None:
-                nic_ip_data["vrf"] = possible_ip_vrf
-
-            if grab(this_ip_object, "data.tenant") is None and possible_ip_tenant is not None:
-                nic_ip_data["tenant"] = possible_ip_tenant
-
-            this_ip_object.update(data=nic_ip_data, source=self)
-
-        return this_ip_object
+        return interface_object, ip_address_objects
 
     @staticmethod
     def patch_data(object_to_patch, data, overwrite=False):
@@ -433,5 +513,74 @@ class SourceBase:
                 data_to_update[key] = value
 
         return data_to_update
+
+    def get_vlan_object_if_exists(self, vlan_data=None, vlan_site=None):
+        """
+        This function will try to find a matching VLAN object based on 'vlan_data'
+        Will return matching objects in following order:
+            * exact match: VLAN id and site match
+            * global match: VLAN id matches but the VLAN has no site assigned
+        If nothing matches the input data from 'vlan_data' will be returned
+
+        Parameters
+        ----------
+        vlan_data: dict
+            dict with NBVLAN data attributes
+        vlan_site: str
+            name of site the VLAN could be present
+
+        Returns
+        -------
+        (NBVLAN, dict, None): matching VLAN object, dict or None (content of vlan_data) if no match found
+
+        """
+
+        if vlan_data is None:
+            return None
+
+        if not isinstance(vlan_data, dict):
+            raise ValueError("Value of 'vlan_data' needs to be a dict.")
+
+        # check existing Devices for matches
+        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN id '{vlan_data.get('vid')}'")
+
+        if vlan_data.get("vid") is None:
+            log.debug("No VLAN id set in vlan_data while trying to find matching VLAN.")
+            return vlan_data
+
+        if vlan_site is None:
+            vlan_site = self.inventory.get_by_data(NBSite, data=vlan_data.get("site"))
+
+        return_data = vlan_data
+        vlan_object_including_site = None
+        vlan_object_without_site = None
+
+        for vlan in self.inventory.get_all_items(NBVLAN):
+
+            if grab(vlan, "data.vid") != vlan_data.get("vid"):
+                continue
+
+            if vlan_site is not None and grab(vlan, "data.site") == vlan_site:
+                vlan_object_including_site = vlan
+
+            if grab(vlan, "data.site") is None:
+                vlan_object_without_site = vlan
+
+        if isinstance(vlan_object_including_site, NetBoxObject):
+            return_data = vlan_object_including_site
+            log.debug2("Found a exact matching %s object: %s" %
+                       (vlan_object_including_site.name,
+                        vlan_object_including_site.get_display_name(including_second_key=True)))
+
+        elif isinstance(vlan_object_without_site, NetBoxObject):
+            return_data = vlan_object_without_site
+            log.debug2("Found a global matching %s object: %s" %
+                       (vlan_object_without_site.name,
+                        vlan_object_without_site.get_display_name(including_second_key=True)))
+
+        else:
+            log.debug2("No matching existing VLAN found for this VLAN id.")
+
+        return return_data
 
 # EOF
