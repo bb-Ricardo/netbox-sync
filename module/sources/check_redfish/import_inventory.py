@@ -810,8 +810,17 @@ class CheckRedfish(SourceBase):
 
             # collect ip addresses
             nic_ips[port_name] = list()
-            nic_ips[port_name].extend(grab(nic_port, "ipv4_addresses", fallback=list()))
-            nic_ips[port_name].extend(grab(nic_port, "ipv6_addresses", fallback=list()))
+            for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
+                if ip_valid_to_add_to_netbox(ipv4_address, self.permitted_subnets, port_name) is False:
+                    continue
+
+                nic_ips[port_name].append(ipv4_address)
+
+            for ipv6_address in grab(nic_port, "ipv6_addresses", fallback=list()):
+                if ip_valid_to_add_to_netbox(ipv6_address, self.permitted_subnets, port_name) is False:
+                    continue
+
+                nic_ips[port_name].append(ipv6_address)
 
         data = self.map_object_interfaces_to_current_interfaces(self.device_object, port_data_dict)
 
@@ -830,9 +839,7 @@ class CheckRedfish(SourceBase):
                 del (port_data["mac_address"])
 
             # create or update interface with data
-            if nic_object is None:
-                nic_object = self.inventory.add_object(NBInterface, data=port_data, source=self)
-            else:
+            if nic_object is not None:
                 if self.overwrite_interface_name is False and port_data.get("name") is not None:
                     del(port_data["name"])
 
@@ -849,13 +856,7 @@ class CheckRedfish(SourceBase):
                 # update nic object
                 nic_object.update(data=data_to_update, source=self)
 
-            # check for interface ips
-            for nic_ip in nic_ips.get(port_name, list()):
-
-                if ip_valid_to_add_to_netbox(nic_ip, self.permitted_subnets, port_name) is False:
-                    continue
-
-                self.add_ip_address(nic_ip, nic_object, grab(self.device_object, "data.site.data.name"))
+            self.add_update_interface(nic_object, self.device_object, port_data, nic_ips.get(port_name, list()))
 
     def update_manager(self):
 
