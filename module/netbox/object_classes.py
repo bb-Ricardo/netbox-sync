@@ -391,7 +391,7 @@ class NetBoxObject:
         )
 
         # Replace separators with dash
-        for sep in [" ", ",", "."]:
+        for sep in [" ", ",", ".", ":"]:
             text = text.replace(sep, "-")
 
         # Strip unacceptable characters
