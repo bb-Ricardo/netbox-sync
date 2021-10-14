@@ -48,12 +48,11 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 
 ## Ubuntu 18.04
 ```
-sudo apt-get install virtualenv
 cd /opt
 git clone https://github.com/bb-Ricardo/netbox-sync.git
 cd netbox-sync
-virtualenv -p python3 .env
-. .env/bin/activate
+python3 -m venv .venv
+. .venv/bin/activate
 pip3 install -r requirements.txt
 ```
 
