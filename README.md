@@ -46,16 +46,6 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 # Installing
 * here we assume we install in ```/opt```
 
-## Ubuntu 18.04
-```
-cd /opt
-git clone https://github.com/bb-Ricardo/netbox-sync.git
-cd netbox-sync
-python3 -m venv .venv
-. .venv/bin/activate
-pip3 install -r requirements.txt
-```
-
 ## RedHat based OS
 * on RedHat/CentOS 7 you need to install python3.6 and pip from EPEL first
 * on RedHat/CentOS 8 systems the package name changed to `python3-pip`
@@ -63,13 +53,19 @@ pip3 install -r requirements.txt
 yum install python36-pip
 ```
 
+## Ubuntu 18.04 & 20.04
+```
+apt-get update && apt-get install python3-venv
+```
+
+## Clone repo and install dependencies
 * download and setup of virtual environment
 ```
 cd /opt
 git clone https://github.com/bb-Ricardo/netbox-sync.git
 cd netbox-sync
-virtualenv-3 .env || virtualenv .env
-. .env/bin/activate
+python3 -m venv .venv
+. .venv/bin/activate
 pip3 install -r requirements.txt || pip install -r requirements.txt
 ```
 
