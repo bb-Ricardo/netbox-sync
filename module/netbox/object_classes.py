@@ -548,6 +548,7 @@ class NetBoxObject:
                                                    max_len=self.data_model.get("slug"))
 
         # update all data items
+        data_updated = False
         for key, new_value in parsed_data.items():
 
             # nothing changed, continue with next key
@@ -597,6 +598,7 @@ class NetBoxObject:
 
             self.data[key] = new_value
             self.updated_items.append(key)
+            data_updated = True
 
             if self.is_new is False:
                 new_value_str = new_value_str.replace("\n", " ")
@@ -604,6 +606,9 @@ class NetBoxObject:
                          f"'{current_value_str}' to '{new_value_str}'")
 
             self.resolve_relations()
+
+        if data_updated is True and self.is_new is False:
+            log.debug("Updated %s object: %s" % (self.name, self.get_display_name()))
 
     def get_display_name(self, data=None, including_second_key=False):
         """
@@ -760,7 +765,10 @@ class NetBoxObject:
         # list of parsed tag strings
         sanitized_tag_strings = list()
 
+        """
+        disable logging
         log.debug2(f"Compiling TAG list")
+        """
 
         new_tag_list = NBTagList()
 
@@ -835,9 +843,11 @@ class NetBoxObject:
         if tags is None or NBTagList not in self.data_model.values():
             return
 
+        """
+        disable logging
         action = "Adding" if remove is False else "Removing"
-
         log.debug2(f"{action} Tags: {tags}")
+        """
 
         current_tags = grab(self, "data.tags", fallback=NBTagList())
 
