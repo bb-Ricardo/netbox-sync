@@ -197,7 +197,6 @@ class NetBoxInventory:
 
         else:
             this_object.update(data, read_from_netbox=read_from_netbox, source=source)
-            log.debug("Updated %s object: %s" % (this_object.name, this_object.get_display_name()))
 
         return this_object
 
