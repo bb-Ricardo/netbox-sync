@@ -391,7 +391,7 @@ class NetBoxObject:
         )
 
         # Replace separators with dash
-        for sep in [" ", ",", ".", ":"]:
+        for sep in [" ", ",", "."]:
             text = text.replace(sep, "-")
 
         # Strip unacceptable characters
@@ -468,15 +468,14 @@ class NetBoxObject:
             # value must be a string witch a certain max length
             if isinstance(defined_value_type, int):
                 if not isinstance(value, str):
-                    log.error(f"Invalid data type for '{self.__class__.__name__}.{key}' (must be str), got: '{value}'")
+                    log.error(f"Invalid data type for '{self.__class__.__name__}.{key}' (must be str), got: "
+                              f"{value} ({type(value)})")
                     continue
 
                 value = value[0:defined_value_type]
 
                 if key == "slug":
                     value = self.format_slug(text=value, max_len=defined_value_type)
-                else:
-                    value = value[0:defined_value_type]
 
             if isinstance(defined_value_type, list):
 
@@ -1220,7 +1219,7 @@ class NBPrefix(NetBoxObject):
 class NBManufacturer(NetBoxObject):
     name = "manufacturer"
     api_path = "dcim/manufacturers"
-    primary_key = "slug"
+    primary_key = "name"
     prune = False
     data_model = {
         "name": 50,
