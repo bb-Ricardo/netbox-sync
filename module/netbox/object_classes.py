@@ -429,7 +429,8 @@ class NetBoxObject:
             self.nb_id = data.get("id")
 
         # skip item as it's missing it's primary key
-        if data.get(self.primary_key) is None and self.data.get(self.primary_key) is None:
+        if data.get(self.primary_key) is None and \
+                (read_from_netbox is True or self.data.get(self.primary_key) is None):
             log.error(f"This '{self.name}' data structure does not contain "
                       f"the primary key '{self.primary_key}' got: {data}")
             return None
