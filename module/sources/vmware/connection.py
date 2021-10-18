@@ -96,8 +96,6 @@ class VMWareHandler(SourceBase):
         "host_include_filter": None,
         "vm_exclude_filter": None,
         "vm_include_filter": None,
-        "netbox_host_device_role": "Server",
-        "netbox_vm_device_role": "Server",
         "permitted_subnets": None,
         "collect_hardware_asset_tag": True,
         "match_host_by_serial": True,
@@ -194,7 +192,13 @@ class VMWareHandler(SourceBase):
 
         validation_failed = False
         for deprecated_setting, alternative_setting in self.deprecated_settings.items():
-            if config_settings.get(deprecated_setting) != self.settings.get(deprecated_setting):
+            if config_settings.get(deprecated_setting) is not None and deprecated_setting not in self.settings.keys():
+                log_text = f"Setting '{deprecated_setting}' has been removed."
+                if alternative_setting is not None:
+                    log_text += f" You need to switch to the '{alternative_setting}' setting."
+                log.warning(log_text)
+
+            elif config_settings.get(deprecated_setting) != self.settings.get(deprecated_setting):
                 log.warning(f"Setting '{deprecated_setting}' is deprecated and will be removed soon. "
                             f"Consider changing your config to use the '{alternative_setting}' setting.")
 
@@ -889,15 +893,8 @@ class VMWareHandler(SourceBase):
         else:
             device_vm_object.update(data=object_data, source=self)
 
-        # add role if undefined
-        # DEPRECATED
-        role_name = None
-        if object_type == NBDevice and grab(device_vm_object, "data.device_role") is None:
-            role_name = self.netbox_host_device_role
-        if object_type == NBVM and grab(device_vm_object, "data.role") is None:
-            role_name = self.netbox_vm_device_role
-
         # update role according to config settings
+        role_name = None
         object_name = object_data.get(object_type.primary_key)
         for role_relation in grab(self, "host_role_relation" if object_type == NBDevice else "vm_role_relation",
                                   fallback=list()):
