@@ -12,6 +12,7 @@ import pprint
 import re
 from ipaddress import ip_address, ip_network, ip_interface
 from socket import gaierror
+from urllib.parse import unquote
 
 import urllib3
 import requests
@@ -24,7 +25,6 @@ from module.common.misc import grab, dump, get_string_or_none, plural
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
     NetBoxInterfaceType,
-    NetBoxObject,
     NBTag,
     NBManufacturer,
     NBDeviceType,
@@ -722,72 +722,6 @@ class VMWareHandler(SourceBase):
                            f"based on the primary IPv6 '{primary_ip6}'")
                 return device
 
-    def get_vlan_object_if_exists(self, vlan_data=None):
-        """
-        This function will try to find a matching VLAN object based on 'vlan_data'
-        Will return matching objects in following order:
-            * exact match: VLAN id and site match
-            * global match: VLAN id matches but the VLAN has no site assigned
-        If nothing matches the input data from 'vlan_data' will be returned
-
-        Parameters
-        ----------
-        vlan_data: dict
-            dict with NBVLAN data attributes
-
-        Returns
-        -------
-        (NBVLAN, dict, None): matching VLAN object, dict or None (content of vlan_data) if no match found
-
-        """
-
-        if vlan_data is None:
-            return None
-
-        if not isinstance(vlan_data, dict):
-            raise ValueError("Value of 'vlan_data' needs to be a dict.")
-
-        # check existing Devices for matches
-        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN id '{vlan_data.get('vid')}'")
-
-        if vlan_data.get("vid") is None:
-            log.debug("No VLAN id set in vlan_data while trying to find matching VLAN.")
-            return vlan_data
-
-        vlan_site = self.inventory.get_by_data(NBSite, data=vlan_data.get("site"))
-
-        return_data = vlan_data
-        vlan_object_including_site = None
-        vlan_object_without_site = None
-
-        for vlan in self.inventory.get_all_items(NBVLAN):
-
-            if grab(vlan, "data.vid") != vlan_data.get("vid"):
-                continue
-
-            if vlan_site is not None and grab(vlan, "data.site") == vlan_site:
-                vlan_object_including_site = vlan
-
-            if grab(vlan, "data.site") is None:
-                vlan_object_without_site = vlan
-
-        if isinstance(vlan_object_including_site, NetBoxObject):
-            return_data = vlan_object_including_site
-            log.debug2("Found a exact matching %s object: %s" %
-                       (vlan_object_including_site.name,
-                        vlan_object_including_site.get_display_name(including_second_key=True)))
-
-        elif isinstance(vlan_object_without_site, NetBoxObject):
-            return_data = vlan_object_without_site
-            log.debug2("Found a global matching %s object: %s" %
-                       (vlan_object_without_site.name,
-                        vlan_object_without_site.get_display_name(including_second_key=True)))
-
-        else:
-            log.debug2("No matching existing VLAN found for this VLAN id.")
-
-        return return_data
-
     def get_object_tags(self, obj, parent=False):
 
         if obj is None:
@@ -824,7 +758,7 @@ class VMWareHandler(SourceBase):
 
         return tag_list
 
-    def add_device_vm_to_inventory(self, object_type, object_data, site_name, pnic_data=None, vnic_data=None,
+    def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None):
         """
         Add/update device/VM object in inventory based on gathered data.
@@ -874,8 +808,6 @@ class VMWareHandler(SourceBase):
             NetBoxObject sub class of object to add
         object_data: dict
             data of object to add/update
-        site_name: str
-            site name this object is part of
         pnic_data: dict
             data of physical interfaces of this object, interface name as key
         vnic_data: dict
@@ -983,49 +915,46 @@ class VMWareHandler(SourceBase):
         # compile all nic data into one dictionary
         if object_type == NBVM:
             nic_data = vnic_data
-            interface_class = NBVMInterface
         else:
             nic_data = {**pnic_data, **vnic_data}
-            interface_class = NBInterface
 
         # map interfaces of existing object with discovered interfaces
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
 
         if object_data.get("status", "") == "active" and (nic_ips is None or len(nic_ips.keys()) == 0):
-            log.warning(f"No IP addresses for '{object_name}' found!")
+            log.debug(f"No IP addresses for '{object_name}' found!")
+
+        primary_ipv4_object = None
+        primary_ipv6_object = None
+
+        if p_ipv4 is not None:
+            try:
+                primary_ipv4_object = ip_interface(p_ipv4)
+            except ValueError:
+                log.error(f"Primary IPv4 ({p_ipv4}) does not appear to be a valid IP address (needs included suffix).")
+
+        if p_ipv6 is not None:
+            try:
+                primary_ipv6_object = ip_interface(p_ipv6)
+            except ValueError:
+                log.error(f"Primary IPv6 ({p_ipv6}) does not appear to be a valid IP address (needs included suffix).")
 
         for int_name, int_data in nic_data.items():
 
-            # add object to interface
-            int_data[interface_class.secondary_key] = device_vm_object
-
-            # get current object for this interface if it exists
-            nic_object = nic_object_dict.get(int_name)
-
-            # create or update interface with data
-            if nic_object is None:
-                nic_object = self.inventory.add_object(interface_class, data=int_data, source=self)
-            else:
-                nic_object.update(data=int_data, source=self)
+            # add/update interface with retrieved data
+            nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
+                                                                       int_data, nic_ips.get(int_name, list()))
 
             # add all interface IPs
-            for nic_ip in nic_ips.get(int_name, list()):
+            for ip_object in ip_address_objects:
 
-                # get IP and prefix length
-                try:
-                    ip_interface_object = ip_interface(nic_ip)
-                except ValueError:
-                    log.error(f"IP '{nic_ip}' (nic_object.get_display_name()) does not appear "
-                              "to be a valid IP address. Skipping!")
-                    continue
-
-                ip_object = self.add_ip_address(nic_ip, nic_object, site_name)
+                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
 
                 if ip_object is None:
                     continue
 
                 # continue if address is not a primary IP
-                if nic_ip not in [p_ipv4, p_ipv6]:
+                if ip_interface_object not in [primary_ipv4_object, primary_ipv6_object]:
                     continue
 
                 # set/update/remove primary IP addresses
@@ -1059,7 +988,7 @@ class VMWareHandler(SourceBase):
 
                 if set_this_primary_ip is True:
 
-                    log.debug(f"Setting IP '{nic_ip}' as primary IPv{ip_version} for "
+                    log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
                               f"'{device_vm_object.get_display_name()}'")
                     device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
 
@@ -1407,7 +1336,7 @@ class VMWareHandler(SourceBase):
         self.network_data["vswitch"][name] = dict()
         for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
 
-            vswitch_name = grab(vswitch, "name")
+            vswitch_name = unquote(grab(vswitch, "name"))
 
             vswitch_pnics = [str(x) for x in grab(vswitch, "pnic", fallback=list())]
 
@@ -1426,7 +1355,7 @@ class VMWareHandler(SourceBase):
         for pswitch in grab(obj, "config.network.proxySwitch", fallback=list()):
 
             pswitch_uuid = grab(pswitch, "dvsUuid")
-            pswitch_name = grab(pswitch, "dvsName")
+            pswitch_name = unquote(grab(pswitch, "dvsName"))
             pswitch_pnics = [str(x) for x in grab(pswitch, "pnic", fallback=list())]
 
             if pswitch_uuid is not None:
@@ -1458,7 +1387,7 @@ class VMWareHandler(SourceBase):
 
                 self.network_data["host_pgroup"][name][pgroup_name] = {
                     "vlan_id": grab(pgroup, "spec.vlanId"),
-                    "vswitch": grab(pgroup, "spec.vswitchName"),
+                    "vswitch": unquote(grab(pgroup, "spec.vswitchName")),
                     "nics": pgroup_nics
                 }
 
@@ -1520,11 +1449,11 @@ class VMWareHandler(SourceBase):
                     })
 
             pnic_data = {
-                "name": pnic_name,
+                "name": unquote(pnic_name),
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(pnic, "mac")),
                 "enabled": bool(grab(pnic, "linkSpeed")),
-                "description": pnic_description,
+                "description": unquote(pnic_description),
                 "type": NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type()
             }
 
@@ -1554,13 +1483,13 @@ class VMWareHandler(SourceBase):
                     if pnic_vlan.get("vid") == 0:
                         continue
 
-                    tagged_vlan_list.append(self.get_vlan_object_if_exists({
+                    tagged_vlan_list.append({
                         "name": pnic_vlan.get("name"),
                         "vid": pnic_vlan.get("vid"),
                         "site": {
                             "name": site_name
                         }
-                    }))
+                    })
 
                 if len(tagged_vlan_list) > 0:
                     pnic_data["tagged_vlans"] = tagged_vlan_list
@@ -1627,7 +1556,7 @@ class VMWareHandler(SourceBase):
 
             # add data
             vnic_data = {
-                "name": vnic_name,
+                "name": unquote(vnic_name),
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
                 "enabled": True,    # ESXi vmk interface is enabled by default
@@ -1639,19 +1568,19 @@ class VMWareHandler(SourceBase):
                 vnic_data["mode"] = vnic_mode
 
             if vnic_description is not None:
-                vnic_data["description"] = vnic_description
+                vnic_data["description"] = unquote(vnic_description)
             else:
                 vnic_description = ""
 
             if vnic_portgroup_data is not None and vnic_portgroup_vlan_id != 0:
 
-                vnic_data["untagged_vlan"] = self.get_vlan_object_if_exists({
-                    "name": f"ESXi {vnic_portgroup} (ID: {vnic_portgroup_vlan_id}) ({site_name})",
+                vnic_data["untagged_vlan"] = {
+                    "name": unquote(f"ESXi {vnic_portgroup} (ID: {vnic_portgroup_vlan_id}) ({site_name})"),
                     "vid": vnic_portgroup_vlan_id,
                     "site": {
                         "name": site_name
                     }
-                })
+                }
 
             elif vnic_dv_portgroup_data is not None:
 
@@ -1664,13 +1593,13 @@ class VMWareHandler(SourceBase):
                     if vnic_dv_portgroup_data_vlan_id == 0:
                         continue
 
-                    tagged_vlan_list.append(self.get_vlan_object_if_exists({
-                        "name": f"{vnic_dv_portgroup_data.get('name')}-{vnic_dv_portgroup_data_vlan_id}",
+                    tagged_vlan_list.append({
+                        "name": unquote(f"{vnic_dv_portgroup_data.get('name')}-{vnic_dv_portgroup_data_vlan_id}"),
                         "vid": vnic_dv_portgroup_data_vlan_id,
                         "site": {
                             "name": site_name
                         }
-                    }))
+                    })
 
                 if len(tagged_vlan_list) > 0:
                     vnic_data["tagged_vlans"] = tagged_vlan_list
@@ -1710,7 +1639,7 @@ class VMWareHandler(SourceBase):
                         host_primary_ip6 = int_v6
 
         # add host to inventory
-        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, site_name=site_name, pnic_data=pnic_data_dict,
+        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
                                         vnic_data=vnic_data_dict, nic_ips=vnic_ips,
                                         p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6)
 
@@ -2043,10 +1972,10 @@ class VMWareHandler(SourceBase):
                         vm_primary_ip6 = int_ip_address
 
             vm_nic_data = {
-                "name": int_full_name,
+                "name": unquote(int_full_name),
                 "virtual_machine": None,
                 "mac_address": int_mac,
-                "description": int_description,
+                "description": unquote(int_description),
                 "enabled": int_connected,
             }
 
@@ -2059,13 +1988,13 @@ class VMWareHandler(SourceBase):
 
                 if len(int_network_vlan_ids) == 1 and int_network_vlan_ids[0] != 0:
 
-                    vm_nic_data["untagged_vlan"] = self.get_vlan_object_if_exists({
-                        "name": int_network_name,
+                    vm_nic_data["untagged_vlan"] = {
+                        "name": unquote(int_network_name),
                         "vid": int_network_vlan_ids[0],
                         "site": {
                             "name": site_name
                         }
-                    })
+                    }
                 else:
                     tagged_vlan_list = list()
                     for int_network_vlan_id in int_network_vlan_ids:
@@ -2073,13 +2002,13 @@ class VMWareHandler(SourceBase):
                         if int_network_vlan_id == 0:
                             continue
 
-                        tagged_vlan_list.append(self.get_vlan_object_if_exists({
-                            "name": f"{int_network_name}-{int_network_vlan_id}",
+                        tagged_vlan_list.append({
+                            "name": unquote(f"{int_network_name}-{int_network_vlan_id}"),
                             "vid": int_network_vlan_id,
                             "site": {
                                 "name": site_name
                             }
-                        }))
+                        })
 
                     if len(tagged_vlan_list) > 0:
                         vm_nic_data["tagged_vlans"] = tagged_vlan_list
@@ -2087,7 +2016,7 @@ class VMWareHandler(SourceBase):
             nic_data[int_full_name] = vm_nic_data
 
         # add VM to inventory
-        self.add_device_vm_to_inventory(NBVM, object_data=vm_data, site_name=site_name, vnic_data=nic_data,
+        self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
                                         nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6)
 
         return
