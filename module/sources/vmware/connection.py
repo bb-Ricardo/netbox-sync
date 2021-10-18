@@ -10,13 +10,14 @@
 import atexit
 import pprint
 import re
+import ssl
 from ipaddress import ip_address, ip_network, ip_interface
 from socket import gaierror
 from urllib.parse import unquote
 
 import urllib3
 import requests
-from pyVim.connect import SmartConnectNoSSL, Disconnect
+from pyVim.connect import SmartConnect, Disconnect
 from pyVmomi import vim
 
 from module.sources.common.source_base import SourceBase
@@ -90,6 +91,7 @@ class VMWareHandler(SourceBase):
         "port": 443,
         "username": None,
         "password": None,
+        "validate_tls_certs": False,
         "cluster_exclude_filter": None,
         "cluster_include_filter": None,
         "host_exclude_filter": None,
@@ -319,12 +321,18 @@ class VMWareHandler(SourceBase):
 
         log.debug(f"Starting vCenter SDK connection to '{self.host_fqdn}'")
 
+        ssl_context = ssl.create_default_context()
+        if bool(self.validate_tls_certs) is False:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
         try:
-            instance = SmartConnectNoSSL(
+            instance = SmartConnect(
                 host=self.host_fqdn,
                 port=self.port,
                 user=self.username,
-                pwd=self.password
+                pwd=self.password,
+                sslContext=ssl_context
             )
             atexit.register(Disconnect, instance)
             self.session = instance.RetrieveContent()
@@ -367,10 +375,11 @@ class VMWareHandler(SourceBase):
 
         # create a requests session to enable/disable TLS verification
         session = requests.session()
-        session.verify = False
+        session.verify = bool(self.validate_tls_certs)
 
         # disable TLS insecure warnings if user explicitly switched off validation
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        if bool(self.validate_tls_certs) is False:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         try:
             self.tag_session = create_vsphere_client(
