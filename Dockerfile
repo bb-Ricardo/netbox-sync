@@ -1,7 +1,7 @@
-FROM python:3.9-alpine
+FROM python:3.9-slim-bullseye
 
 # Install dependencies
-RUN apk add --no-cache build-base libffi-dev git
+RUN apt-get update && apt-get upgrade && apt-get install -y git-core
 
 # Prepare the application
 COPY . /opt
