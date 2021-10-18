@@ -11,10 +11,10 @@ import json
 import os
 import pickle
 import pprint
-import urllib3
 from datetime import datetime
 from http.client import HTTPConnection
 
+import urllib3
 import requests
 from packaging import version
 
