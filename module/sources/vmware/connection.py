@@ -1315,6 +1315,9 @@ class VMWareHandler(SourceBase):
                 log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tag '{tag_name}'")
                 host_tags.append(tag_name)
 
+        # get vCenter tags
+        host_tags.extend(self.get_object_tags(obj))
+
         # prepare host data model
         host_data = {
             "name": name,
@@ -1338,10 +1341,6 @@ class VMWareHandler(SourceBase):
             host_data["platform"] = {"name": platform}
         if tenant_name is not None:
             host_data["tenant"] = {"name": tenant_name}
-        if len(host_tags) > 0:
-            host_data["tags"] = host_tags
-
-        host_tags = self.get_object_tags(obj)
         if len(host_tags) > 0:
             host_data["tags"] = host_tags
 
@@ -1803,6 +1802,9 @@ class VMWareHandler(SourceBase):
                 log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tag '{tag_name}'")
                 vm_tags.append(tag_name)
 
+        # get vCenter tags
+        vm_tags.extend(self.get_object_tags(obj))
+
         vm_data = {
             "name": name,
             "cluster": {"name": cluster_name},
@@ -1818,10 +1820,6 @@ class VMWareHandler(SourceBase):
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
-        if len(vm_tags) > 0:
-            vm_data["tags"] = vm_tags
-
-        vm_tags = self.get_object_tags(obj)
         if len(vm_tags) > 0:
             vm_data["tags"] = vm_tags
 
