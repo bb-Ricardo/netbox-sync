@@ -13,6 +13,8 @@ import re
 from ipaddress import ip_address, ip_network, ip_interface
 from socket import gaierror
 
+import urllib3
+import requests
 from pyVim.connect import SmartConnectNoSSL, Disconnect
 from pyVmomi import vim
 
@@ -42,6 +44,15 @@ from module.netbox.object_classes import (
     NBVRF,
     NBVLAN
 )
+
+vsphere_automation_sdk_available = True
+try:
+    # noinspection PyUnresolvedReferences
+    from com.vmware.vapi.std_client import DynamicID
+    # noinspection PyUnresolvedReferences
+    from vmware.vapi.vsphere.client import create_vsphere_client
+except ImportError:
+    vsphere_automation_sdk_available = False
 
 log = get_logger()
 
@@ -103,7 +114,9 @@ class VMWareHandler(SourceBase):
         "skip_vm_comments": False,
         "skip_vm_templates": True,
         "strip_host_domain_name": False,
-        "strip_vm_domain_name": False
+        "strip_vm_domain_name": False,
+        "sync_tags": False,
+        "sync_parent_tags": False
     }
 
     deprecated_settings = {
@@ -119,6 +132,7 @@ class VMWareHandler(SourceBase):
 
     # internal vars
     session = None
+    tag_session = None
 
     site_name = None
 
@@ -155,11 +169,13 @@ class VMWareHandler(SourceBase):
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
-        self.create_session()
+        self.create_sdk_session()
 
         if self.session is None:
             log.info(f"Source '{name}' is currently unavailable. Skipping")
             return
+
+        self.create_api_session()
 
         self.init_successful = True
 
@@ -278,9 +294,9 @@ class VMWareHandler(SourceBase):
         for setting in self.settings.keys():
             setattr(self, setting, config_settings.get(setting))
 
-    def create_session(self):
+    def create_sdk_session(self):
         """
-        Initialize session with vCenter
+        Initialize SDK session with vCenter
 
         Returns
         -------
@@ -290,7 +306,7 @@ class VMWareHandler(SourceBase):
         if self.session is not None:
             return True
 
-        log.debug(f"Starting vCenter connection to '{self.host_fqdn}'")
+        log.debug(f"Starting vCenter SDK connection to '{self.host_fqdn}'")
 
         try:
             instance = SmartConnectNoSSL(
@@ -312,7 +328,54 @@ class VMWareHandler(SourceBase):
             log.error(f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}. {e.msg}")
             return False
 
-        log.info(f"Successfully connected to vCenter '{self.host_fqdn}'")
+        log.info(f"Successfully connected to vCenter SDK '{self.host_fqdn}'")
+
+        return True
+
+    def create_api_session(self):
+        """
+        Initialize API session with vCenter
+
+        Returns
+        -------
+        bool: if initialization was successful or not
+        """
+
+        if self.tag_session is not None:
+            return True
+
+        log.debug(f"Starting vCenter API connection to '{self.host_fqdn}'")
+
+        if bool(self.sync_tags) is True or bool(self.sync_parent_tags) is True:
+
+            if vsphere_automation_sdk_available is False:
+                self.__setattr__("sync_tags", False)
+                self.__setattr__("sync_parent_tags", False)
+                log.warning(f"Unable to import Python 'vsphere-automation-sdk'. Tag syncing will be disabled.")
+                return False
+
+        # create a requests session to enable/disable TLS verification
+        session = requests.session()
+        session.verify = False
+
+        # disable TLS insecure warnings if user explicitly switched off validation
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        try:
+            self.tag_session = create_vsphere_client(
+                server=f"{self.host_fqdn}:{self.port}",
+                username=self.username,
+                password=self.password,
+                session=session)
+
+        except Exception as e:
+            self.__setattr__("sync_tags", False)
+            self.__setattr__("sync_parent_tags", False)
+            log.warning(f"Unable to connect to vCenter API instance '{self.host_fqdn}' on port {self.port}: {e}")
+            log.warning("Tag syncing will be disabled.")
+            return False
+
+        log.info(f"Successfully connected to vCenter API '{self.host_fqdn}'")
 
         return True
 
@@ -725,6 +788,42 @@ class VMWareHandler(SourceBase):
 
         return return_data
 
+    def get_object_tags(self, obj, parent=False):
+
+        if obj is None:
+            return
+
+        tag_list = list()
+        if vsphere_automation_sdk_available is True:
+            if bool(self.sync_tags) is True:
+                # noinspection PyBroadException
+                try:
+                    object_tag_ids = self.tag_session.tagging.TagAssociation.list_attached_tags(
+                        DynamicID(type=grab(obj, "_wsdlName"), id=grab(obj, "_moId")))
+                except Exception as e:
+                    log.error(f"Unable to retrieve vCenter tags for '{obj.name}': {e}")
+                    object_tag_ids = list()
+
+                for tag_id in object_tag_ids:
+
+                    # noinspection PyBroadException
+                    try:
+                        tag_name = self.tag_session.tagging.Tag.get(tag_id).name
+                        tag_description = self.tag_session.tagging.Tag.get(tag_id).description
+                    except Exception as e:
+                        log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
+                        continue
+
+                    tag_list.append(self.inventory.add_update_object(NBTag, data={
+                        "name": tag_name,
+                        "description": tag_description
+                    }))
+
+            if bool(self.sync_parent_tags) is True and parent is False:
+                tag_list.extend(self.get_object_tags(obj.parent, parent=True))
+
+        return tag_list
+
     def add_device_vm_to_inventory(self, object_type, object_data, site_name, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None):
         """
@@ -1019,6 +1118,10 @@ class VMWareHandler(SourceBase):
             "site": {"name": site_name}
         }
 
+        cluster_tags = self.get_object_tags(obj)
+        if len(cluster_tags) > 0:
+            data["tags"] = cluster_tags
+
         self.inventory.add_update_object(NBCluster, data=data, source=self)
 
         self.permitted_clusters[name] = site_name
@@ -1284,6 +1387,10 @@ class VMWareHandler(SourceBase):
             host_data["platform"] = {"name": platform}
         if tenant_name is not None:
             host_data["tenant"] = {"name": tenant_name}
+
+        host_tags = self.get_object_tags(obj)
+        if len(host_tags) > 0:
+            host_data["tags"] = host_tags
 
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
@@ -1749,6 +1856,10 @@ class VMWareHandler(SourceBase):
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
+
+        vm_tags = self.get_object_tags(obj)
+        if len(vm_tags) > 0:
+            vm_data["tags"] = vm_tags
 
         vm_primary_ip4 = None
         vm_primary_ip6 = None

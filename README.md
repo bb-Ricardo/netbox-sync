@@ -69,6 +69,14 @@ python3 -m venv .venv
 pip3 install -r requirements.txt || pip install -r requirements.txt
 ```
 
+### VMware tag sync (if necessary)
+The `vsphere-automation-sdk` must be installed if tags should be synced from vCenter to NetBox
+* assuming we are still in an activated virtual env
+```
+pip install --upgrade pip setuptools
+pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
+```
+
 ## Docker
 
 Run the application in docker container
