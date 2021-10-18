@@ -108,6 +108,8 @@ class VMWareHandler(SourceBase):
         "vm_platform_relation": None,
         "host_role_relation": None,
         "vm_role_relation": None,
+        "host_tag_relation": None,
+        "vm_tag_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -233,9 +235,7 @@ class VMWareHandler(SourceBase):
 
             config_settings[setting] = re_compiled
 
-        for relation_option in ["cluster_site_relation", "host_site_relation", "host_tenant_relation",
-                                "vm_tenant_relation", "vm_platform_relation",
-                                "host_role_relation", "vm_role_relation"]:
+        for relation_option in [x for x in self.settings.keys() if "relation" in x]:
 
             if config_settings.get(relation_option) is None:
                 continue
@@ -1364,6 +1364,15 @@ class VMWareHandler(SourceBase):
                 log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tenant '{tenant_name}'")
                 break
 
+        # assign host_tag_relation
+        host_tags = list()
+        for tag_relation in grab(self, "host_tag_relation", fallback=list()):
+            object_regex = tag_relation.get("object_regex")
+            if object_regex.match(name):
+                tag_name = tag_relation.get("tag_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tag '{tag_name}'")
+                host_tags.append(tag_name)
+
         # prepare host data model
         host_data = {
             "name": name,
@@ -1387,6 +1396,8 @@ class VMWareHandler(SourceBase):
             host_data["platform"] = {"name": platform}
         if tenant_name is not None:
             host_data["tenant"] = {"name": tenant_name}
+        if len(host_tags) > 0:
+            host_data["tags"] = host_tags
 
         host_tags = self.get_object_tags(obj)
         if len(host_tags) > 0:
@@ -1841,6 +1852,15 @@ class VMWareHandler(SourceBase):
                 log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tenant '{tenant_name}'")
                 break
 
+        # assign vm_tag_relation
+        vm_tags = list()
+        for tag_relation in grab(self, "vm_tag_relation", fallback=list()):
+            object_regex = tag_relation.get("object_regex")
+            if object_regex.match(name):
+                tag_name = tag_relation.get("tag_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tag '{tag_name}'")
+                vm_tags.append(tag_name)
+
         vm_data = {
             "name": name,
             "cluster": {"name": cluster_name},
@@ -1856,6 +1876,8 @@ class VMWareHandler(SourceBase):
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
+        if len(vm_tags) > 0:
+            vm_data["tags"] = vm_tags
 
         vm_tags = self.get_object_tags(obj)
         if len(vm_tags) > 0:
