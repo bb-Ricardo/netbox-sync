@@ -99,8 +99,6 @@ class VMWareHandler(SourceBase):
         "vm_exclude_filter": None,
         "vm_include_filter": None,
         "permitted_subnets": None,
-        "netbox_host_device_role": None,
-        "netbox_vm_device_role": None,
         "collect_hardware_asset_tag": True,
         "match_host_by_serial": True,
         "cluster_site_relation": None,
@@ -125,15 +123,12 @@ class VMWareHandler(SourceBase):
         "sync_parent_tags": False
     }
 
-    deprecated_settings = {
+    deprecated_settings = {}
+
+    removed_settings = {
         "netbox_host_device_role": "host_role_relation",
         "netbox_vm_device_role": "vm_role_relation"
     }
-
-    removed_settings = [
-        "netbox_host_device_role",
-        "netbox_vm_device_role"
-    ]
 
     init_successful = False
     inventory = None
@@ -202,16 +197,6 @@ class VMWareHandler(SourceBase):
         """
 
         validation_failed = False
-        for deprecated_setting, alternative_setting in self.deprecated_settings.items():
-            if config_settings.get(deprecated_setting) is not None and deprecated_setting in self.removed_settings:
-                log_text = f"Setting '{deprecated_setting}' has been removed."
-                if alternative_setting is not None:
-                    log_text += f" You need to switch to '{alternative_setting}' setting."
-                log.warning(log_text)
-
-            elif config_settings.get(deprecated_setting) != self.settings.get(deprecated_setting):
-                log.warning(f"Setting '{deprecated_setting}' is deprecated and will be removed soon. "
-                            f"Consider changing your config to use the '{alternative_setting}' setting.")
 
         for setting in ["host_fqdn", "port", "username", "password"]:
             if config_settings.get(setting) is None:
@@ -559,8 +544,6 @@ class VMWareHandler(SourceBase):
             raise ValueError(f"Object must be a '{NBCluster.name}' or '{NBDevice.name}'.")
 
         log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
-
-        site_name = None
 
         # check if site was provided in config
         relation_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
