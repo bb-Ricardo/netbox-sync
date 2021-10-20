@@ -125,7 +125,12 @@ def instantiate_sources(config_handler=None, inventory=None):
             log.error(f"Unknown source type '{source_type}' defined for '{source_section}'")
             continue
 
-        source_config = get_config(config_handler, section=source_section, valid_settings=source_class.settings)
+        source_config = get_config(config_handler,
+                                   section=source_section,
+                                   valid_settings=source_class.settings,
+                                   deprecated_settings=getattr(source_class, "deprecated_settings", None),
+                                   removed_settings=getattr(source_class, "removed_settings", None)
+                                   )
 
         source_handler = source_class(name=source_section.replace("source/", ""),
                                       inventory=inventory,

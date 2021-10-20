@@ -72,7 +72,7 @@ def open_config_file(config_file):
     return config_handler
 
 
-def get_config(config_handler=None, section=None, valid_settings=None):
+def get_config(config_handler=None, section=None, valid_settings=None, deprecated_settings=None, removed_settings=None):
     """
     read config items from a defined section
 
@@ -86,6 +86,14 @@ def get_config(config_handler=None, section=None, valid_settings=None):
         a dictionary with valid config items to read from this section.
         key: is the config item name
         value: default value if config option is undefined
+    deprecated_settings: dict
+        a dictionary of deprecated config settings
+        key: name of deprecated setting
+        value: name of superseding setting or None if no substitution applies
+    removed_settings: dict
+        a dictionary of removed setting names
+        key: name of removed setting
+        value: name of superseding setting or None if no substitution applies
 
     Returns
     -------
@@ -121,12 +129,34 @@ def get_config(config_handler=None, section=None, valid_settings=None):
         log.error("No valid settings passed to config parser!")
 
     # read specified section section
-    if section is not None:
-        if section not in config_handler.sections():
-            log.error(f"Section '{section}' not found in config_file")
-        else:
-            for config_item, default_value in valid_settings.items():
-                get_config_option(section, config_item, default=default_value)
+    if section is None:
+        return config_dict
+
+    if section not in config_handler.sections():
+        log.error(f"Section '{section}' not found in config_file")
+        return config_dict
+
+    for config_item, default_value in valid_settings.items():
+        get_config_option(section, config_item, default=default_value)
+
+    # check for deprecated settings
+    if isinstance(deprecated_settings, dict):
+        for deprecated_setting, alternative_setting in deprecated_settings.items():
+            if config_handler.get(section, deprecated_setting) is not None:
+                log_text = f"Setting '{deprecated_setting}' is deprecated and will be removed soon."
+                if alternative_setting is not None:
+                    log_text += f" Consider changing your config to use the '{alternative_setting}' setting."
+                log.warning(log_text)
+
+    # check for removed settings
+    if isinstance(removed_settings, dict):
+        for removed_setting, alternative_setting in removed_settings.items():
+            if config_handler.get(section, removed_setting) is not None:
+                log_text = f"Setting '{removed_setting}' has been removed " \
+                           f"but still defined in config section '{section}'."
+                if alternative_setting is not None:
+                    log_text += f" You need to switch to '{alternative_setting}' setting."
+                log.warning(log_text)
 
     return config_dict
 
