@@ -1320,6 +1320,7 @@ class NBCluster(NetBoxObject):
         "name": 100,
         "comments": str,
         "type": NBClusterType,
+        "tenant": NBTenant,
         "group": NBClusterGroup,
         "site": NBSite,
         "tags": NBTagList

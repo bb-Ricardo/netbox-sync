@@ -104,14 +104,16 @@ class VMWareHandler(SourceBase):
         "collect_hardware_asset_tag": True,
         "match_host_by_serial": True,
         "cluster_site_relation": None,
+        "cluster_tag_relation": None,
+        "cluster_tenant_relation": None,
+        "host_role_relation": None,
         "host_site_relation": None,
-        "vm_tenant_relation": None,
+        "host_tag_relation": None,
         "host_tenant_relation": None,
         "vm_platform_relation": None,
-        "host_role_relation": None,
         "vm_role_relation": None,
-        "host_tag_relation": None,
         "vm_tag_relation": None,
+        "vm_tenant_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -279,7 +281,7 @@ class VMWareHandler(SourceBase):
 
                 relation_data.append({
                     "object_regex": re_compiled,
-                    f"{relation_type}_name": relation_name
+                    f"assigned_name": relation_name
                 })
 
             config_settings[relation_option] = relation_data
@@ -561,16 +563,9 @@ class VMWareHandler(SourceBase):
         site_name = None
 
         # check if site was provided in config
-        config_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
+        relation_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
 
-        site_relations = grab(self, config_name, fallback=list())
-
-        for site_relation in site_relations:
-            object_regex = site_relation.get("object_regex")
-            if object_regex.match(object_name):
-                site_name = site_relation.get("site_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {object_name}, using site '{site_name}'")
-                break
+        site_name = self.get_object_relation(object_name, relation_name)
 
         if object_type == NBDevice and site_name is None:
             site_name = self.permitted_clusters.get(cluster_name) or \
@@ -778,6 +773,30 @@ class VMWareHandler(SourceBase):
 
         return tag_list
 
+    def get_object_relation(self, name, relation):
+
+        relation_name = None
+        if relation is not None:
+            relation_name = grab(relation.split("_"), "1")
+
+        resolved_name = None
+        resolved_list = list()
+        for single_relation in grab(self, relation, fallback=list()):
+            object_regex = single_relation.get("object_regex")
+            if object_regex.match(name):
+                resolved_name = single_relation.get("assigned_name")
+                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, "
+                           f"using {relation_name} '{resolved_name}'")
+                if relation_name == "tag":
+                    resolved_list.append(resolved_name)
+                else:
+                    break
+
+        if relation_name == "tag":
+            return resolved_list
+        else:
+            return resolved_name
+
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None):
         """
@@ -910,15 +929,9 @@ class VMWareHandler(SourceBase):
             device_vm_object.update(data=object_data, source=self)
 
         # update role according to config settings
-        role_name = None
         object_name = object_data.get(object_type.primary_key)
-        for role_relation in grab(self, "host_role_relation" if object_type == NBDevice else "vm_role_relation",
-                                  fallback=list()):
-            object_regex = role_relation.get("object_regex")
-            if object_regex.match(object_name):
-                role_name = role_relation.get("role_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {object_name}, using role '{role_name}'")
-                break
+        role_name = self.get_object_relation(object_name,
+                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation")
 
         if role_name is not None and object_type == NBDevice:
             device_vm_object.update(data={"device_role": {"name": role_name}})
@@ -1060,7 +1073,12 @@ class VMWareHandler(SourceBase):
             "site": {"name": site_name}
         }
 
-        cluster_tags = self.get_object_tags(obj)
+        tenant_name = self.get_object_relation(name, "cluster_tenant_relation")
+        if tenant_name is not None:
+            data["tenant"] = {"name": tenant_name}
+
+        cluster_tags = self.get_object_relation(name, "cluster_tag_relation")
+        cluster_tags.extend(self.get_object_tags(obj))
         if len(cluster_tags) > 0:
             data["tags"] = cluster_tags
 
@@ -1297,23 +1315,11 @@ class VMWareHandler(SourceBase):
             if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
                 asset_tag = this_asset_tag
 
-        # assign host_tenant_relation
-        tenant_name = None
-        for tenant_relation in grab(self, "host_tenant_relation", fallback=list()):
-            object_regex = tenant_relation.get("object_regex")
-            if object_regex.match(name):
-                tenant_name = tenant_relation.get("tenant_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tenant '{tenant_name}'")
-                break
+        # get host_tenant_relation
+        tenant_name = self.get_object_relation(name, "host_tenant_relation")
 
-        # assign host_tag_relation
-        host_tags = list()
-        for tag_relation in grab(self, "host_tag_relation", fallback=list()):
-            object_regex = tag_relation.get("object_regex")
-            if object_regex.match(name):
-                tag_name = tag_relation.get("tag_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tag '{tag_name}'")
-                host_tags.append(tag_name)
+        # get host_tag_relation
+        host_tags = self.get_object_relation(name, "host_tag_relation")
 
         # get vCenter tags
         host_tags.extend(self.get_object_tags(obj))
@@ -1763,16 +1769,10 @@ class VMWareHandler(SourceBase):
         platform = grab(obj, "config.guestFullName")
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
-        for platform_relation in grab(self, "vm_platform_relation", fallback=list()):
-
-            if platform is None:
-                break
-
-            object_regex = platform_relation.get("object_regex")
-            if object_regex.match(platform):
-                platform = platform_relation.get("platform_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {platform}, using mapped platform '{platform}'")
-                break
+        if platform is not None:
+            platform_relation_name = self.get_object_relation(platform, "vm_platform_relation")
+            if platform_relation_name is not None:
+                platform = platform_relation_name
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
@@ -1785,22 +1785,10 @@ class VMWareHandler(SourceBase):
             annotation = get_string_or_none(grab(obj, "config.annotation"))
 
         # assign vm_tenant_relation
-        tenant_name = None
-        for tenant_relation in grab(self, "vm_tenant_relation", fallback=list()):
-            object_regex = tenant_relation.get("object_regex")
-            if object_regex.match(name):
-                tenant_name = tenant_relation.get("tenant_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tenant '{tenant_name}'")
-                break
+        tenant_name = self.get_object_relation(name, "vm_tenant_relation")
 
         # assign vm_tag_relation
-        vm_tags = list()
-        for tag_relation in grab(self, "vm_tag_relation", fallback=list()):
-            object_regex = tag_relation.get("object_regex")
-            if object_regex.match(name):
-                tag_name = tag_relation.get("tag_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, using tag '{tag_name}'")
-                vm_tags.append(tag_name)
+        vm_tags = self.get_object_relation(name, "vm_tag_relation")
 
         # get vCenter tags
         vm_tags.extend(self.get_object_tags(obj))
