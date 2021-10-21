@@ -721,7 +721,22 @@ class VMWareHandler(SourceBase):
                 return device
 
     def get_object_tags(self, obj, parent=False):
+        """
+        Get tags from vCenter for submitted object.
 
+        Parameters
+        ----------
+        obj
+            pyvmomi object to retrieve tags for
+        parent: bool
+            True if request is performed for a parent object otherwise False
+            Needed for own recursion
+
+        Returns
+        -------
+        tag_list: list
+            list of NBTag objets retrieved from vCenter for this object
+        """
         if obj is None:
             return
 
@@ -756,28 +771,43 @@ class VMWareHandler(SourceBase):
 
         return tag_list
 
-    def get_object_relation(self, name, relation):
+    def get_object_relation(self, name, relation, fallback=None):
+        """
 
-        relation_name = None
-        if relation is not None:
-            relation_name = grab(relation.split("_"), "1")
+        Parameters
+        ----------
+        name: str
+            name of the object to find a relation for
+        relation: str
+            name of the config variable relation (i.e: vm_tag_relation)
+        fallback: str
+            fallback string if no relation matched
 
-        resolved_name = None
+        Returns
+        -------
+        data: str, list, None
+            string of matching relation or list of matching tags
+        """
+
         resolved_list = list()
         for single_relation in grab(self, relation, fallback=list()):
             object_regex = single_relation.get("object_regex")
             if object_regex.match(name):
                 resolved_name = single_relation.get("assigned_name")
-                log.debug2(f"Found a match ({object_regex.pattern}) for {name}, "
-                           f"using {relation_name} '{resolved_name}'")
-                if relation_name == "tag":
-                    resolved_list.append(resolved_name)
-                else:
-                    break
+                log.debug2(f"Found a match '{resolved_name}' ({object_regex.pattern}) for {name}.")
+                resolved_list.append(resolved_name)
 
-        if relation_name == "tag":
+        if grab(f"{relation}".split("_"), "1") == "tag":
             return resolved_list
+
         else:
+            resolved_name = fallback
+            if len(resolved_list) >= 1:
+                resolved_name = resolved_list[0]
+                if len(resolved_list) > 1:
+                    log.debug(f"Found {len(resolved_list)} matches for {name} in {relation}."
+                              f" Using first on: {resolved_name}")
+
             return resolved_name
 
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
@@ -914,11 +944,12 @@ class VMWareHandler(SourceBase):
         # update role according to config settings
         object_name = object_data.get(object_type.primary_key)
         role_name = self.get_object_relation(object_name,
-                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation")
+                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation",
+                                             fallback="Server")
 
-        if role_name is not None and object_type == NBDevice:
+        if object_type == NBDevice:
             device_vm_object.update(data={"device_role": {"name": role_name}})
-        if role_name is not None and object_type == NBVM:
+        if object_type == NBVM:
             device_vm_object.update(data={"role": {"name": role_name}})
 
         # compile all nic data into one dictionary
@@ -1749,13 +1780,11 @@ class VMWareHandler(SourceBase):
             site_name = self.get_site_name(NBCluster, cluster_name)
 
         # first check against vm_platform_relation
-        platform = grab(obj, "config.guestFullName")
+        platform = get_string_or_none(grab(obj, "config.guestFullName"))
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
         if platform is not None:
-            platform_relation_name = self.get_object_relation(platform, "vm_platform_relation")
-            if platform_relation_name is not None:
-                platform = platform_relation_name
+            platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
