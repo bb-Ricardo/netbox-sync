@@ -256,7 +256,7 @@ class NetBoxObject:
     # _mandatory_attrs must be set at subclasses
     _mandatory_attrs = ("name", "api_path", "primary_key", "data_model")
 
-    # list of default attributes which are added to every netbox object during init
+    # list of default attributes which are added to every NetBox object during init
     default_attributes = {
         "data": None,
         "is_new": True,
@@ -574,7 +574,7 @@ class NetBoxObject:
             if isinstance(current_value, (NetBoxObject, NBObjectList)):
                 current_value_str = str(current_value.get_display_name())
 
-            # if data model is a list then we need to read the netbox data value
+            # if data model is a list then we need to read the NetBox data value
             elif isinstance(self.data_model.get(key), list) and isinstance(current_value, dict):
                 current_value_str = str(current_value.get("value"))
 

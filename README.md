@@ -3,7 +3,7 @@
 
 This is a tool to sync data from different sources to a NetBox instance.
 
-Available Sources:
+Available source types:
 * VMware vCenter Server
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 
@@ -126,6 +126,7 @@ usage: netbox-sync.py [-h] [-c settings.ini]
 Sync objects from various sources to NetBox
 
 Version: 1.1.2 (2021-09-14)
+Project URL: https://github.com/bb-ricardo/netbox-sync
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -166,7 +167,7 @@ The program operates mainly like this
 1. parsing and validating config
 2. instantiating all sources and setting up connection to NetBox
 3. read current data from NetBox
-4. read data from sources and add/update objects in memory
+4. read data from all sources and add/update objects in memory
 5. Update data in NetBox based on data from sources
 6. Prune old objects
 
@@ -182,12 +183,32 @@ Check out the documentations for the different sources
 * [vmware](docs/source_vmware.md)
 * [check_redfish](docs/source_check_redfish.md)
 
-New sources can be added via a new source class.
+If you have multiple vCenter instances or check_redfish folders just add another source with the same type
+in the **same** file.
 
-ToDo:
-* add documentation of source implementation here
+Example:
+```ini
+[source/vcenter-BLN]
 
-### Pruning
+enabled = True
+host_fqdn = vcenter1.berlin.example.com
+
+[source/vcenter-NYC]
+
+enabled = True
+host_fqdn = vcenter2.new-york.example.com
+
+[source/redfish-hardware]
+
+type = check_redfish
+inventory_file_path = /opt/redfish_inventory
+```
+
+**Developers**:
+If you are interested in adding more source types please open an issue/discussion
+because the documentation of implementing a new source hasn't been finished yet. 🤷
+
+## Pruning
 Prune objects in NetBox if they are no longer present in any source.
 First they will be marked as Orphaned and after X (config option) days they will be
 deleted from NetBox.

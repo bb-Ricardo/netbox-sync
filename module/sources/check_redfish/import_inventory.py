@@ -148,7 +148,7 @@ class CheckRedfish(SourceBase):
         # check permitted ip subnets
         if config_settings.get("permitted_subnets") is None:
             log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
-                     f"No IP addresses will be populated to Netbox!")
+                     f"No IP addresses will be populated to NetBox!")
         else:
             config_settings["permitted_subnets"] = \
                 [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]

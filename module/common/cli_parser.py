@@ -14,7 +14,7 @@ from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from module.common.logging import valid_log_levels
 
 
-def parse_command_line(version=None, self_description=None, version_date=None, default_config_file_path=None):
+def parse_command_line(version=None, self_description=None, version_date=None, url=None, default_config_file_path=None):
     """
     parse command line arguments, also add current version and version date to description
 
@@ -26,6 +26,8 @@ def parse_command_line(version=None, self_description=None, version_date=None, d
         short self description of this program
     version_date: str
         release date of this version
+    url: str
+        project url
     default_config_file_path: str
         path to default config file
 
@@ -35,7 +37,7 @@ def parse_command_line(version=None, self_description=None, version_date=None, d
     """
 
     # define command line options
-    description = f"{self_description}\nVersion: {version} ({version_date})"
+    description = f"{self_description}\nVersion: {version} ({version_date})\nProject URL: {url}"
 
     parser = ArgumentParser(
         description=description,
