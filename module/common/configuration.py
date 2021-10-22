@@ -10,7 +10,7 @@
 import configparser
 import os
 
-from module.common.misc import grab, do_error_exit
+from module.common.misc import do_error_exit
 from module.common.logging import get_logger
 
 log = get_logger()
