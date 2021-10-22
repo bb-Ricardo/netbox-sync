@@ -270,17 +270,9 @@ class SourceBase:
         if untagged_vlan is not None:
             del(interface_data["untagged_vlan"])
 
-        # check tagged vlans and try to find NetBox VLAN objects based on VLAN id and site
-        tagged_vlans = list()
-        for tagged_vlan in interface_data.get("tagged_vlans") or list():
-
-            if isinstance(tagged_vlan, NBVLAN):
-                tagged_vlans.append(tagged_vlan)
-            else:
-                tagged_vlans.append(self.get_vlan_object_if_exists(tagged_vlan, site_name))
-
+        tagged_vlans = interface_data.get("tagged_vlans") or list()
         if len(tagged_vlans) > 0:
-            interface_data["tagged_vlans"] = tagged_vlans
+            del (interface_data["tagged_vlans"])
 
         # add object to interface
         interface_data[interface_class.secondary_key] = device_object
@@ -293,7 +285,6 @@ class SourceBase:
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
-
         # add all interface IPs
         for nic_ip in interface_ips or list():
 
@@ -454,30 +445,64 @@ class SourceBase:
             ip_address_objects.append(this_ip_object)
 
         matching_untagged_vlan = None
+        matching_tagged_vlans = dict()
+        tagged_vlan_ids = list()
+        compiled_tagged_vlans = list()
 
+        # compile list of tagged VLAN IDs
+        for tagged_vlan in tagged_vlans:
+            if isinstance(tagged_vlan, NBVLAN):
+                compiled_tagged_vlans.append(tagged_vlan)
+            else:
+                tagged_vlan_ids.append(grab(tagged_vlan, "vid"))
+
+        # try to match prefix VLANs
         for matching_prefix in matching_ip_prefixes:
 
             prefix_vlan = grab(matching_prefix, "data.vlan")
             if prefix_vlan is None:
                 continue
 
-            if untagged_vlan is None or str(grab(prefix_vlan, "data.vid")) == str(untagged_vlan.get("vid")):
+            # find untagged vlans
+            if untagged_vlan is None or grab(prefix_vlan, "data.vid") == untagged_vlan.get("vid"):
 
-                log.debug(f"Found matching prefix VLAN {prefix_vlan.get_display_name()} for "
-                          f"untagged interface VLAN.")
+                if matching_untagged_vlan is None:
+                    matching_untagged_vlan = prefix_vlan
 
-                matching_untagged_vlan = prefix_vlan
-                break
+            # find tagged vlans
+            if grab(prefix_vlan, "data.vid") in tagged_vlan_ids:
+                matching_tagged_vlans[grab(prefix_vlan, "data.vid")] = prefix_vlan
 
         # try to find vlan object if no matching prefix VLAN ws found
-        if matching_untagged_vlan is None:
-            matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
+        vlan_interface_data = dict()
+        if untagged_vlan is not None or (untagged_vlan is None and len(tagged_vlans) == 0):
+            if matching_untagged_vlan is None and untagged_vlan is not None:
+                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
+            elif matching_untagged_vlan is not None:
+                log.debug2(f"Found matching prefix VLAN {matching_untagged_vlan.get_display_name()} for "
+                           f"untagged interface VLAN.")
 
-        if matching_untagged_vlan is not None:
-            vlan_interface_data = dict({"untagged_vlan": matching_untagged_vlan})
-            if grab(interface_object, "data.mode") is None:
-                vlan_interface_data["mode"] = "access"
+            if matching_untagged_vlan is not None:
+                vlan_interface_data["untagged_vlan"] = matching_untagged_vlan
+                if grab(interface_object, "data.mode") is None:
+                    vlan_interface_data["mode"] = "access"
 
+        # try to find tagged vlan prefixes
+        for tagged_vlan in [x for x in tagged_vlans if not isinstance(tagged_vlans, NBVLAN)]:
+
+            matching_tagged_vlan = matching_tagged_vlans.get(grab(tagged_vlan, "vid"))
+            if matching_tagged_vlan is not None:
+                log.debug2(f"Found matching prefix VLAN {matching_tagged_vlan.get_display_name()} for "
+                           f"tagged interface VLAN.")
+            else:
+                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
+
+            compiled_tagged_vlans.append(matching_tagged_vlan)
+
+        if len(compiled_tagged_vlans) > 0:
+            vlan_interface_data["tagged_vlans"] = compiled_tagged_vlans
+
+        if len(vlan_interface_data.keys()) > 0:
             interface_object.update(data=vlan_interface_data, source=self)
 
         return interface_object, ip_address_objects
@@ -538,6 +563,9 @@ class SourceBase:
         if vlan_data is None:
             return None
 
+        if isinstance(vlan_data, NBVLAN):
+            return vlan_data
+
         if not isinstance(vlan_data, dict):
             raise ValueError("Value of 'vlan_data' needs to be a dict.")
 
@@ -550,6 +578,8 @@ class SourceBase:
 
         if vlan_site is None:
             vlan_site = self.inventory.get_by_data(NBSite, data=vlan_data.get("site"))
+        elif isinstance(vlan_site, str):
+            vlan_site = self.inventory.get_by_data(NBSite, data={"name": vlan_site})
 
         return_data = vlan_data
         vlan_object_including_site = None

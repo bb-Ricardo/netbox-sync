@@ -794,7 +794,7 @@ class VMWareHandler(SourceBase):
             object_regex = single_relation.get("object_regex")
             if object_regex.match(name):
                 resolved_name = single_relation.get("assigned_name")
-                log.debug2(f"Found a match '{resolved_name}' ({object_regex.pattern}) for {name}.")
+                log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}.")
                 resolved_list.append(resolved_name)
 
         if grab(f"{relation}".split("_"), "1") == "tag":
@@ -1050,7 +1050,7 @@ class VMWareHandler(SourceBase):
         if name is None:
             return
 
-        log.debug2(f"Parsing vCenter datacenter: {name}")
+        log.debug(f"Parsing vCenter datacenter: {name}")
 
         self.inventory.add_update_object(NBClusterGroup, data={"name": name}, source=self)
 
@@ -1073,7 +1073,7 @@ class VMWareHandler(SourceBase):
         if name is None or group is None:
             return
 
-        log.debug2(f"Parsing vCenter cluster: {name}")
+        log.debug(f"Parsing vCenter cluster: {name}")
 
         if self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
             return
@@ -1118,7 +1118,7 @@ class VMWareHandler(SourceBase):
         if uuid is None or name is None:
             return
 
-        log.debug2(f"Parsing vCenter virtual switch: {name}")
+        log.debug(f"Parsing vCenter virtual switch: {name}")
 
         # add ports
         self.network_data["dpgroup_ports"][uuid] = dict()
@@ -1150,7 +1150,7 @@ class VMWareHandler(SourceBase):
         if key is None or name is None:
             return
 
-        log.debug2(f"Parsing vCenter port group: {name}")
+        log.debug(f"Parsing vCenter port group: {name}")
 
         vlan_info = grab(obj, "config.defaultPortConfig.vlan")
 
@@ -1209,7 +1209,7 @@ class VMWareHandler(SourceBase):
             name = name.split(".")[0]
 
         # parse data
-        log.debug2(f"Parsing vCenter host: {name}")
+        log.debug(f"Parsing vCenter host: {name}")
 
         #
         # Filtering
@@ -1719,7 +1719,7 @@ class VMWareHandler(SourceBase):
         if vm_uuid is None or vm_uuid in self.processed_vm_uuid:
             return
 
-        log.debug2(f"Parsing vCenter VM: {name}")
+        log.debug(f"Parsing vCenter VM: {name}")
 
         # get VM power state
         status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
