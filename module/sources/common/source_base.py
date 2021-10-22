@@ -106,7 +106,7 @@ class SourceBase:
                 current_object_interfaces[int_name] = interface
                 current_object_interface_names.append(int_name)
 
-        log.debug2("Found '%d' NICs in Netbox for '%s'" %
+        log.debug2("Found '%d' NICs in NetBox for '%s'" %
                    (len(current_object_interface_names), device_vm_object.get_display_name()))
 
         unmatched_interface_names = list()

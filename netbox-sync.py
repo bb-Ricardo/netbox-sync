@@ -44,6 +44,7 @@ def main():
     args = parse_command_line(self_description=self_description,
                               version=__version__,
                               version_date=__version_date__,
+                              url=__url__,
                               default_config_file_path=default_config_file_path)
 
     # get config file path
@@ -69,7 +70,7 @@ def main():
     log = setup_logging(log_level, log_file)
 
     # now we are ready to go
-    log.info("Starting " + __description__)
+    log.info(f"Starting {__description__} v{__version__} ({__version_date__})")
     log.debug(f"Using config file: {config_file}")
 
     # initialize an empty inventory which will be used to hold and reference all objects
@@ -102,11 +103,11 @@ def main():
         exit(1)
 
     # collect all dependent object classes
-    log.info("Querying necessary objects from Netbox. This might take a while.")
+    log.info("Querying necessary objects from NetBox. This might take a while.")
     for source in sources:
         nb_handler.query_current_data(source.dependent_netbox_objects)
 
-    log.info("Finished querying necessary objects from Netbox")
+    log.info("Finished querying necessary objects from NetBox")
 
     # resolve object relations within the initial inventory
     inventory.resolve_relations()

@@ -153,7 +153,7 @@ def get_config(config_handler=None, section=None, valid_settings=None, deprecate
         for removed_setting, alternative_setting in removed_settings.items():
             if config_handler.get(section, removed_setting) is not None:
                 log_text = f"Setting '{removed_setting}' has been removed " \
-                           f"but still defined in config section '{section}'."
+                           f"but is still defined in config section '{section}'."
                 if alternative_setting is not None:
                     log_text += f" You need to switch to '{alternative_setting}' setting."
                 log.warning(log_text)

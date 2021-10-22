@@ -7,7 +7,7 @@ type = vmware
 ```
 All options for this source are described in the [settings-example.ini](../settings-example.ini) file.
 
-If you have multiple vCenter instances just add another source with the same type.
+If you have multiple vCenter instances just add another source with the same type in the **same** file.
 
 ***IMPORTANT:*** For VMware source you should define the var `cluster_site_relation` which maps a vCenter cluster to an
 exiting Site in NetBox. If undefined a placeholder site will be created.

@@ -52,7 +52,7 @@ def get_logger():
     log handler
     """
 
-    return logging.getLogger("Netbox-Sync")
+    return logging.getLogger("NetBox-Sync")
 
 
 def setup_logging(log_level=None, log_file=None):

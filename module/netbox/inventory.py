@@ -269,7 +269,7 @@ class NetBoxInventory:
     def tag_all_the_things(self, netbox_handler):
         """
         Tag all items which have been created/updated/inherited by this program
-        * add main tag (Netbox: Synced) to all objects retrieved from a source
+        * add main tag (NetBox: Synced) to all objects retrieved from a source
         * add source tag (source: $name) all objects of that source
         * check for orphaned objects
             * objects tagged by main tag but not present in source anymore (add)

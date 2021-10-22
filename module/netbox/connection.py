@@ -106,7 +106,7 @@ class NetBoxHandler:
                           "HTTP header 'API-Version' missing.")
 
         if version.parse(api_version) < version.parse(self.minimum_api_version):
-            do_error_exit(f"Netbox API version '{api_version}' not supported. "
+            do_error_exit(f"NetBox API version '{api_version}' not supported. "
                           f"Minimum API version: {self.minimum_api_version}")
 
         self.setup_caching()
@@ -821,9 +821,9 @@ class NetBoxHandler:
         This way we don't need to care about dependencies.
         """
 
-        log.info("Querying necessary objects from Netbox. This might take a while.")
+        log.info("Querying necessary objects from NetBox. This might take a while.")
         self.query_current_data(NetBoxObject.__subclasses__())
-        log.info("Finished querying necessary objects from Netbox")
+        log.info("Finished querying necessary objects from NetBox")
 
         self.inventory.resolve_relations()
 
