@@ -142,22 +142,6 @@ class VMWareHandler(SourceBase):
 
     site_name = None
 
-    network_data = {
-        "vswitch": dict(),
-        "pswitch": dict(),
-        "host_pgroup": dict(),
-        "dpgroup": dict(),
-        "dpgroup_ports": dict()
-    }
-
-    permitted_clusters = dict()
-
-    processed_host_names = dict()
-    processed_vm_names = dict()
-    processed_vm_uuid = list()
-
-    parsing_vms_the_first_time = True
-
     def __init__(self, name=None, settings=None, inventory=None):
 
         if name is None:
@@ -184,6 +168,20 @@ class VMWareHandler(SourceBase):
         self.create_api_session()
 
         self.init_successful = True
+
+        # instantiate source specific vars
+        self.network_data = {
+            "vswitch": dict(),
+            "pswitch": dict(),
+            "host_pgroup": dict(),
+            "dpgroup": dict(),
+            "dpgroup_ports": dict()
+        }
+        self.permitted_clusters = dict()
+        self.processed_host_names = dict()
+        self.processed_vm_names = dict()
+        self.processed_vm_uuid = list()
+        self.parsing_vms_the_first_time = True
 
     def parse_config_settings(self, config_settings):
         """

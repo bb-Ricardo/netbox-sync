@@ -117,6 +117,7 @@ def main():
 
     # loop over sources and patch netbox data
     for source in sources:
+        log.debug(f"Retrieving data from source '{source.name}'")
         source.apply()
 
     # add/remove tags to/from all inventory items
