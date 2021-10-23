@@ -142,7 +142,7 @@ def get_config(config_handler=None, section=None, valid_settings=None, deprecate
     # check for deprecated settings
     if isinstance(deprecated_settings, dict):
         for deprecated_setting, alternative_setting in deprecated_settings.items():
-            if config_handler.get(section, deprecated_setting) is not None:
+            if config_handler.get(section, deprecated_setting, fallback=None) is not None:
                 log_text = f"Setting '{deprecated_setting}' is deprecated and will be removed soon."
                 if alternative_setting is not None:
                     log_text += f" Consider changing your config to use the '{alternative_setting}' setting."
@@ -151,7 +151,7 @@ def get_config(config_handler=None, section=None, valid_settings=None, deprecate
     # check for removed settings
     if isinstance(removed_settings, dict):
         for removed_setting, alternative_setting in removed_settings.items():
-            if config_handler.get(section, removed_setting) is not None:
+            if config_handler.get(section, removed_setting, fallback=None) is not None:
                 log_text = f"Setting '{removed_setting}' has been removed " \
                            f"but is still defined in config section '{section}'."
                 if alternative_setting is not None:

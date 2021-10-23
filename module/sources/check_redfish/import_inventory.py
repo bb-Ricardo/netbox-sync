@@ -92,7 +92,6 @@ class CheckRedfish(SourceBase):
     source_type = "check_redfish"
     enabled = False
     inventory_file_path = None
-    interface_adapter_type_dict = dict()
     device_object = None
     inventory_file_content = None
 
@@ -113,6 +112,8 @@ class CheckRedfish(SourceBase):
             return
 
         self.init_successful = True
+
+        self.interface_adapter_type_dict = dict()
 
     def parse_config_settings(self, config_settings):
         """
