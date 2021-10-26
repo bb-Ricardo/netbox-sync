@@ -348,6 +348,9 @@ class VMWareHandler(SourceBase):
         if self.tag_session is not None:
             return True
 
+        if bool(self.sync_tags) is False and bool(self.sync_parent_tags) is False:
+            return False
+
         log.debug(f"Starting vCenter API connection to '{self.host_fqdn}'")
 
         if bool(self.sync_tags) is True or bool(self.sync_parent_tags) is True:
