@@ -1377,13 +1377,6 @@ class NBCluster(NetBoxObject):
 
 
 class NBDevice(NetBoxObject):
-    """
-    data key "primary_ip*" has "object" assigned as valid data type.
-    This has been done to avoid circular dependencies.
-
-    would be happy if someone could come up with a proper solution
-    """
-
     name = "device"
     api_path = "dcim/devices"
     primary_key = "name"
@@ -1411,13 +1404,6 @@ class NBDevice(NetBoxObject):
 
 
 class NBVM(NetBoxObject):
-    """
-    data key "primary_ip*" has "object" assigned as valid data type.
-    This has been done to avoid circular dependencies.
-
-    would be happy if someone could come up with a proper solution
-    """
-
     name = "virtual machine"
     api_path = "virtualization/virtual-machines"
     primary_key = "name"
