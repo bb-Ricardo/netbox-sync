@@ -1,7 +1,7 @@
 FROM python:3.9-slim-bullseye
 
 # Install dependencies
-RUN apt-get update && apt-get upgrade && apt-get install -y git-core
+RUN apt-get update && apt-get -y upgrade && apt-get install -y git-core
 
 # Prepare the application
 COPY . /opt
