@@ -25,6 +25,7 @@ from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
+    NetBoxObject,
     NetBoxInterfaceType,
     NBTag,
     NBManufacturer,
@@ -43,7 +44,8 @@ from module.netbox.object_classes import (
     NBPrefix,
     NBTenant,
     NBVRF,
-    NBVLAN
+    NBVLAN,
+    NBCustomField
 )
 
 vsphere_automation_sdk_available = True
@@ -82,7 +84,8 @@ class VMWareHandler(SourceBase):
         NBPrefix,
         NBTenant,
         NBVRF,
-        NBVLAN
+        NBVLAN,
+        NBCustomField
     ]
 
     settings = {
@@ -120,7 +123,8 @@ class VMWareHandler(SourceBase):
         "strip_host_domain_name": False,
         "strip_vm_domain_name": False,
         "sync_tags": False,
-        "sync_parent_tags": False
+        "sync_parent_tags": False,
+        "sync_custom_attributes": False
     }
 
     deprecated_settings = {}
@@ -772,6 +776,61 @@ class VMWareHandler(SourceBase):
 
         return tag_list
 
+    def get_object_custom_fields(self, obj):
+        """
+        Get custom attributes from vCenter for submitted object and as NetBox custom fields
+
+        Parameters
+        ----------
+        obj
+            pyvmomi object to retrieve custom attributes from
+
+        Returns
+        -------
+        custom_fields: dict
+            dictionary with assigned custom fields
+        """
+
+        return_custom_fields = dict()
+
+        custom_value = grab(obj, "customValue", fallback=list())
+
+        if self.sync_custom_attributes is False or len(custom_value) == 0:
+            return return_custom_fields
+
+        if grab(obj, "_wsdlName") == "VirtualMachine":
+            content_type = "virtualization.virtualmachine"
+        else:
+            content_type = "dcim.device"
+
+        field_definition = {grab(k, "key"): grab(k, "name") for k in grab(obj, "availableField", fallback=list())}
+
+        for obj_custom_field in custom_value:
+            key = grab(obj_custom_field, "key")
+            value = grab(obj_custom_field, "value")
+
+            if key is None or value is None:
+                continue
+
+            label = field_definition.get(key)
+
+            if label is None:
+                continue
+
+            name = NetBoxObject.format_slug(f"vcsa-{label}", 50).replace("--", "-").strip("-")
+
+            self.add_update_custom_field({
+                "name": name,
+                "label": label,
+                "content_types": [content_type],
+                "type": "text",
+                "description": f"vCenter '{self.name}' synced custom attribute '{label}'"
+            })
+
+            return_custom_fields[name] = value
+
+        return return_custom_fields
+
     def get_object_relation(self, name, relation, fallback=None):
         """
 
@@ -1365,6 +1424,11 @@ class VMWareHandler(SourceBase):
         if len(host_tags) > 0:
             host_data["tags"] = host_tags
 
+        # add custom fields if present and configured
+        host_custom_fields = self.get_object_custom_fields(obj)
+        if len(host_custom_fields) > 0:
+            host_data["custom_fields"] = host_custom_fields
+
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
         for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
@@ -1823,6 +1887,11 @@ class VMWareHandler(SourceBase):
             vm_data["tenant"] = {"name": tenant_name}
         if len(vm_tags) > 0:
             vm_data["tags"] = vm_tags
+
+        # add custom fields if present and configured
+        vm_custom_fields = self.get_object_custom_fields(obj)
+        if len(vm_custom_fields) > 0:
+            vm_data["custom_fields"] = vm_custom_fields
 
         vm_primary_ip4 = None
         vm_primary_ip6 = None
