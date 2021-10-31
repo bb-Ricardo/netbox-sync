@@ -1028,31 +1028,6 @@ class CheckRedfish(SourceBase):
 
         return
 
-    def add_update_custom_field(self, data):
-        """
-        Adds/updates a NBCustomField object with data.
-        Update will only update the 'content_types' attribute.
-
-        Parameters
-        ----------
-        data: dict
-            dictionary with NBCustomField attributes
-
-        Returns
-        -------
-        custom_field: NBCustomField
-            new or updated NBCustomField
-        """
-
-        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": data.get("name")})
-
-        if custom_field is None:
-            custom_field = self.inventory.add_object(NBCustomField, data=data, source=self)
-        else:
-            custom_field.update(data={"content_types": data.get("content_types")}, source=self)
-
-        return custom_field
-
     def add_necessary_base_objects(self):
         """
         Adds/updates source tag and all custom fields necessary for this source.

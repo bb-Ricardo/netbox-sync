@@ -1013,7 +1013,8 @@ class NBCustomField(NetBoxObject):
         "dcim.interface",
         "dcim.inventoryitem",
         "dcim.powerport",
-        "virtualization.vminterface"
+        "virtualization.vminterface",
+        "virtualization.virtualmachine"
     ]
 
     def __init__(self, *args, **kwargs):
@@ -1424,7 +1425,8 @@ class NBVM(NetBoxObject):
             "primary_ip4": object,
             "primary_ip6": object,
             "tags": NBTagList,
-            "tenant": NBTenant
+            "tenant": NBTenant,
+            "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
 

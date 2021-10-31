@@ -18,7 +18,8 @@ from module.netbox.inventory import (
     NBSite,
     NBPrefix,
     NBIPAddress,
-    NBVLAN
+    NBVLAN,
+    NBCustomField
 )
 from module.common.logging import get_logger
 from module.common.misc import grab
@@ -612,5 +613,30 @@ class SourceBase:
             log.debug2("No matching existing VLAN found for this VLAN id.")
 
         return return_data
+
+    def add_update_custom_field(self, data):
+        """
+        Adds/updates a NBCustomField object with data.
+        Update will only update the 'content_types' attribute.
+
+        Parameters
+        ----------
+        data: dict
+            dictionary with NBCustomField attributes
+
+        Returns
+        -------
+        custom_field: NBCustomField
+            new or updated NBCustomField
+        """
+
+        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": data.get("name")})
+
+        if custom_field is None:
+            custom_field = self.inventory.add_object(NBCustomField, data=data, source=self)
+        else:
+            custom_field.update(data={"content_types": data.get("content_types")}, source=self)
+
+        return custom_field
 
 # EOF
