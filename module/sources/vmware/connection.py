@@ -1477,9 +1477,9 @@ class VMWareHandler(SourceBase):
 
                 nic_order = grab(pgroup, "computedPolicy.nicTeaming.nicOrder")
                 pgroup_nics = list()
-                if nic_order.activeNic is not None:
+                if grab(nic_order, "activeNic") is not None:
                     pgroup_nics += nic_order.activeNic
-                if nic_order.standbyNic is not None:
+                if grab(nic_order, "standbyNic") is not None:
                     pgroup_nics += nic_order.standbyNic
 
                 self.network_data["host_pgroup"][name][pgroup_name] = {
