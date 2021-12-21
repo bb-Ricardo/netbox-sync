@@ -1471,6 +1471,7 @@ class NBInterface(NetBoxObject):
             "type": NetBoxInterfaceType().get_netbox_type_list(),
             "enabled": bool,
             "mac_address": str,
+            "wwn": str,
             "mgmt_only": bool,
             "mtu": int,
             "mode": ["access", "tagged", "tagged-all"],
