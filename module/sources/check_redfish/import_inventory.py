@@ -746,7 +746,7 @@ class CheckRedfish(SourceBase):
 
         port_data_dict = dict()
         nic_ips = dict()
-        discovered_mac_list = list()
+        discovered_int_list = list()
 
         for nic_port in grab(self.inventory_file_content, "inventory.network_port", fallback=list()):
 
@@ -755,20 +755,34 @@ class CheckRedfish(SourceBase):
 
             port_name = get_string_or_none(grab(nic_port, "name"))
             port_id = get_string_or_none(grab(nic_port, "id"))
-            mac_address = get_string_or_none(grab(nic_port, "addresses.0"))  # get 1st mac address
+            interface_addresses = grab(nic_port, "addresses", fallback=list())
             link_status = get_string_or_none(grab(nic_port, "link_status"))
             manager_ids = grab(nic_port, "manager_ids", fallback=list())
             hostname = get_string_or_none(grab(nic_port, "hostname"))
             health_status = get_string_or_none(grab(nic_port, "health_status"))
             adapter_id = get_string_or_none(grab(nic_port, "adapter_id"))
 
-            mac_address = normalize_mac_address(mac_address)
+            mac_address = None
+            wwn = None
+            if isinstance(interface_addresses, list):
+                for interface_address in interface_addresses:
+                    interface_address = normalize_mac_address(interface_address)
 
-            if mac_address in discovered_mac_list:
+                    # get 1. mac address
+                    if mac_address is None and len(interface_address.split(":")) == 6:
+                        mac_address = interface_address
+
+                    if wwn is None and len(interface_address.split(":")) == 8:
+                        wwn = interface_address
+
+            if mac_address in discovered_int_list or wwn in discovered_int_list:
                 continue
 
             if mac_address is not None:
-                discovered_mac_list.append(mac_address)
+                discovered_int_list.append(mac_address)
+
+            if wwn is not None:
+                discovered_int_list.append(wwn)
 
             if port_name is not None:
                 port_name += f" ({port_id})"
@@ -802,6 +816,7 @@ class CheckRedfish(SourceBase):
                 "inventory_type": "NIC Port",
                 "name": port_name,
                 "mac_address": mac_address,
+                "wwn": wwn,
                 "enabled": enabled,
                 "description": ", ".join(description),
                 "type": link_type.get_this_netbox_type(),
@@ -838,6 +853,10 @@ class CheckRedfish(SourceBase):
             # del empty mac address attribute
             if port_data.get("mac_address") is None:
                 del (port_data["mac_address"])
+
+            # del empty wwn attribute
+            if port_data.get("wwn") is None:
+                del (port_data["wwn"])
 
             # create or update interface with data
             if nic_object is not None:
