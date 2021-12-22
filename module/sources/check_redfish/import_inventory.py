@@ -940,7 +940,7 @@ class CheckRedfish(SourceBase):
         current_inventory_items = dict()
         for item in self.inventory.get_all_items(NBInventoryItem):
             if grab(item, "data.device") == self.device_object and \
-                    grab(item, "data.custom_fields.inventory-type") == inventory_type:
+                    grab(item, "data.custom_fields.inventory_type") == inventory_type:
 
                 current_inventory_items[grab(item, "data.name")] = item
 
@@ -1018,9 +1018,9 @@ class CheckRedfish(SourceBase):
             "custom_fields": {
                 "firmware": item_data.get("firmware"),
                 "health": item_data.get("health"),
-                "inventory-type": item_data.get("inventory_type"),
-                "inventory-size": item_data.get("size"),
-                "inventory-speed": item_data.get("speed")
+                "inventory_type": item_data.get("inventory_type"),
+                "inventory_size": item_data.get("size"),
+                "inventory_speed": item_data.get("speed")
             }
         }
 
@@ -1072,7 +1072,7 @@ class CheckRedfish(SourceBase):
 
         # add inventory item type
         self.add_update_custom_field({
-            "name": "inventory-type",
+            "name": "inventory_type",
             "label": "Type",
             "content_types": ["dcim.inventoryitem"],
             "type": "text",
@@ -1081,7 +1081,7 @@ class CheckRedfish(SourceBase):
 
         # add inventory item size
         self.add_update_custom_field({
-            "name": "inventory-size",
+            "name": "inventory_size",
             "label": "Size",
             "content_types": ["dcim.inventoryitem"],
             "type": "text",
@@ -1090,7 +1090,7 @@ class CheckRedfish(SourceBase):
 
         # add inventory item speed
         self.add_update_custom_field({
-            "name": "inventory-speed",
+            "name": "inventory_speed",
             "label": "Speed",
             "content_types": ["dcim.inventoryitem"],
             "type": "text",
