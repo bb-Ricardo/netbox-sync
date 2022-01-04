@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import os
+import sys
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -102,7 +103,7 @@ def setup_logging(log_level=None, log_file=None):
     # setup stream handler
     # in DEBUG3 the root logger gets redefined, that would print every log message twice
     if log_level != "DEBUG3":
-        log_stream = logging.StreamHandler()
+        log_stream = logging.StreamHandler(sys.stdout)
         log_stream.setFormatter(log_format)
         logger.addHandler(log_stream)
 
