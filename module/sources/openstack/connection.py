@@ -84,7 +84,7 @@ class OpenStackHandler(SourceBase):
         "region": None,
         "user_domain": None,
         "project_domain": None,
-        "group_name": "Openstack"
+        "group_name": "Openstack",
         "validate_tls_certs": False,
         "cluster_exclude_filter": None,
         "cluster_include_filter": None,
@@ -163,6 +163,7 @@ class OpenStackHandler(SourceBase):
         self.init_successful = True
         self.permitted_clusters = dict()
         self.cluster_host_map = dict()
+        self.volume_map = dict()
         self.processed_host_names = dict()
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
@@ -354,13 +355,17 @@ class OpenStackHandler(SourceBase):
         for availability_zone in availability_zones:
             self.add_cluster(availability_zone)
 
-        servers = self.session.compute.servers(details=True, all_projects=True)
-        for server in servers:
-            self.add_virtual_machine(server)
-
         hypervisors = self.session.compute.hypervisors(details=True)
         for hypervisor in hypervisors:
             self.add_host(hypervisor)
+
+        volumes = self.session.block_storage.volumes(details=True, all_projects=True)
+        for volume in volumes:
+            self.add_volume(volume)
+
+        servers = self.session.compute.servers(details=True, all_projects=True)
+        for server in servers:
+            self.add_virtual_machine(server)
 
         self.update_basic_data()
 
@@ -951,7 +956,7 @@ class OpenStackHandler(SourceBase):
         if log.level == DEBUG3:
             try:
                 log.info("Cluster data")
-                dump(obj.service_details)
+                dump(obj.service_details.to_dict())
             except Exception as e:
                 log.error(e)
 
@@ -1043,9 +1048,19 @@ class OpenStackHandler(SourceBase):
 
         return
 
+    def add_volume(self, obj):
+        """
+        Parse OpenStack volume and store in in a map.
+        """
+
+        id = obj.id
+        size = obj.size
+
+        self.volume_map[id] = size
+
     def add_virtual_machine(self, obj):
         """
-        Parse a OpenStack VM  add to NetBox once all data is gathered.
+        Parse a OpenStack VM add to NetBox once all data is gathered.
 
         Parameters
         ----------
@@ -1109,7 +1124,11 @@ class OpenStackHandler(SourceBase):
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
 
-        disk = int(obj.flavor["disk"])
+        disk = 0
+        for volume in obj.attached_volumes:
+            volid = volume["id"]
+            size = self.volume_map[volid]
+            disk += int(size)
 
         annotation = None
         if bool(self.skip_vm_comments) is False:
@@ -1145,9 +1164,9 @@ class OpenStackHandler(SourceBase):
             nic_ips[network] = list()
             for address in addresses:
                 nic_ips[network].append(address["addr"])
-                if address["version"] == 4:
+                if int(address["version"]) == 4:
                     vm_primary_ip4 = address["addr"]
-                if address["version"] == 6:
+                if int(address["version"]) == 6:
                     vm_primary_ip6 = address["addr"]
                 full_name = unquote(f"vNIC{count} ({network})")
                 vm_nic_data = {
