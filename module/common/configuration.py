@@ -58,7 +58,8 @@ def open_config_file(config_file):
         do_error_exit("ERROR: Config file not defined.")
 
     # setup config parser and read config
-    config_handler = configparser.ConfigParser(strict=True, allow_no_value=True, empty_lines_in_values=False)
+    config_handler = configparser.ConfigParser(strict=True, allow_no_value=True,
+                                               empty_lines_in_values=False, interpolation=None)
 
     # noinspection PyBroadException
     try:
