@@ -12,4 +12,13 @@ RUN cd /opt && \
 
 # Run the application
 WORKDIR /opt
+
+RUN set -eux; \
+  addgroup --gid 1000 netbox-sync; \
+  adduser --uid 1000 --ingroup netbox-sync --shell /bin/sh --home /home/netbox-sync --disabled-password netbox-sync
+
+RUN chown -R netbox-sync:netbox-sync /opt
+
+USER netbox-sync
+
 ENTRYPOINT ["python3", "netbox-sync.py"]
