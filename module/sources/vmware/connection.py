@@ -120,6 +120,8 @@ class VMWareHandler(SourceBase):
         "set_primary_ip": "when-undefined",
         "skip_vm_comments": False,
         "skip_vm_templates": True,
+        "skip_offline_vms": False,
+        "skip_srm_placeholder_vms": False,
         "strip_host_domain_name": False,
         "strip_vm_domain_name": False,
         "sync_tags": False,
@@ -449,6 +451,11 @@ class VMWareHandler(SourceBase):
                 "view_handler": self.add_virtual_machine
             }
         }
+
+        # skip virtual machines which are reported offline
+        if self.skip_offline_vms is True:
+            log.info("Skipping offline VMs")
+            del object_mapping["offline virtual machine"]
 
         for view_name, view_details in object_mapping.items():
 
@@ -1793,6 +1800,11 @@ class VMWareHandler(SourceBase):
         template = grab(obj, "config.template")
         if bool(self.skip_vm_templates) is True and template is True:
             log.debug2(f"VM '{name}' is a template. Skipping")
+            return
+
+        if bool(self.skip_srm_placeholder_vms) is True \
+                and f"{grab(obj, 'config.managedBy.extensionKey')}".startswith("com.vmware.vcDr"):
+            log.debug2(f"VM '{name}' is a SRM placeholder VM. Skipping")
             return
 
         # ignore offline VMs during first run
