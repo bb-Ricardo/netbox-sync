@@ -665,6 +665,8 @@ class NetBoxHandler:
 
                 this_object.update(data=returned_object_data, read_from_netbox=True)
 
+                this_object.resolve_relations()
+
             elif issued_request is True:
                 log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {data_to_patch}")
 
