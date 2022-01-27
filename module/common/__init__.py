@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2021 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2022 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
