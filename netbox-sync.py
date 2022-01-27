@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2021 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2022 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -25,8 +25,8 @@ from module.netbox.object_classes import *
 from module.sources import instantiate_sources
 
 
-__version__ = "1.2.1"
-__version_date__ = "2021-11-03"
+__version__ = "1.2.2"
+__version_date__ = "2022-01-27"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
 __description__ = "NetBox Sync"
 __license__ = "MIT"
