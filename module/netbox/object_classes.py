@@ -1494,7 +1494,7 @@ class NBIPAddress(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "address": str,
-            "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
+            "assigned_object_type": ["dcim.interface", "virtualization.vminterface", "ipam.fhrpgroup"],
             "assigned_object_id": [NBInterface, NBVMInterface],
             "description": 200,
             "dns_name": 255,
