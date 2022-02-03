@@ -1,5 +1,5 @@
 packaging
-urllib3
+urllib3==1.25.11
 wheel
 requests==2.24.0
 pyvmomi==6.7.3
