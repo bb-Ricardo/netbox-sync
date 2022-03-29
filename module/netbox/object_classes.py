@@ -256,6 +256,9 @@ class NetBoxObject:
     # _mandatory_attrs must be set at subclasses
     _mandatory_attrs = ("name", "api_path", "primary_key", "data_model")
 
+    # just skip this object if a mandatory attribute is missing
+    skip_object_if_mandatory_attr_is_missing = False
+
     # list of default attributes which are added to every NetBox object during init
     default_attributes = {
         "data": None,
@@ -442,8 +445,13 @@ class NetBoxObject:
         # skip item as it's missing it's primary key
         if data.get(self.primary_key) is None and \
                 (read_from_netbox is True or self.data.get(self.primary_key) is None):
-            log.error(f"This '{self.name}' data structure does not contain "
-                      f"the primary key '{self.primary_key}' got: {data}")
+
+            if self.skip_object_if_mandatory_attr_is_missing is True:
+                log.debug2(f"This '{self.name}' data structure does not contain "
+                           f"the primary key '{self.primary_key}'. Skipping")
+            else:
+                log.error(f"This '{self.name}' data structure does not contain "
+                          f"the primary key '{self.primary_key}' got: {data}")
             return None
 
         if read_from_netbox is True:
@@ -1383,6 +1391,8 @@ class NBDevice(NetBoxObject):
     primary_key = "name"
     secondary_key = "site"
     prune = True
+
+    skip_object_if_mandatory_attr_is_missing = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
