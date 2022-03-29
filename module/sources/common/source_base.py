@@ -249,8 +249,10 @@ class SourceBase:
 
         if type(device_object) == NBVM:
             interface_class = NBVMInterface
+            site_name = grab(device_object, "data.cluster.data.site.data.name")
         elif type(device_object) == NBDevice:
             interface_class = NBInterface
+            site_name = grab(device_object, "data.site.data.name")
         elif device_object is None:
             log.error(f"No device/VM object submitted to attach interface '{grab(interface_data, 'name')}' to.")
             return None
@@ -262,8 +264,6 @@ class SourceBase:
         if interface_object is not None and not isinstance(interface_object, interface_class):
             log.error(f"Interface object '{grab(interface_data, 'name')}' must be a '{interface_class.name}'.")
             return None
-
-        site_name = grab(device_object, "data.site.data.name")
 
         # get vlans from interface data and remove it for now from interface data dict
         # vlans get added later once we have the prefixes for the IP addresses
