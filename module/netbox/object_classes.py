@@ -759,10 +759,19 @@ class NetBoxObject:
 
         Returns
         -------
-        list: of strings of tga names
+        list: of strings of tag names
         """
 
-        return [x.get_display_name() for x in self.data.get("tags", list())]
+        tag_list = list()
+        for tag in self.data.get("tags", list()):
+            if isinstance(tag, NetBoxObject):
+                tag_name = tag.get_display_name()
+                if tag_name not in tag_list:
+                    tag_list.append(tag_name)
+            else:
+                log.error(f"This tag is not an NetBox object: {tag}")
+                log.error(f"Please report this here: https://github.com/bb-Ricardo/netbox-sync/issues/120")
+        return tag_list
 
     def compile_tags(self, tags, remove=False):
         """
