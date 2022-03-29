@@ -447,8 +447,9 @@ class NetBoxObject:
                 (read_from_netbox is True or self.data.get(self.primary_key) is None):
 
             if self.skip_object_if_mandatory_attr_is_missing is True:
-                log.debug2(f"This '{self.name}' data structure does not contain "
-                           f"the primary key '{self.primary_key}'. Skipping")
+                device_url = data.get("url") or self.data.get('url')
+                log.debug2(f"This '{self.name}' ({self.nb_id}) data structure does not contain "
+                           f"the primary key '{self.primary_key}'. Skipping. Link: {device_url}")
             else:
                 log.error(f"This '{self.name}' data structure does not contain "
                           f"the primary key '{self.primary_key}' got: {data}")
