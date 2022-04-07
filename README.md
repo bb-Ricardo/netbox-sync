@@ -49,18 +49,18 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 ## RedHat based OS
 * on RedHat/CentOS 7 you need to install python3.6 and pip from EPEL first
 * on RedHat/CentOS 8 systems the package name changed to `python3-pip`
-```
+```shell
 yum install python36-pip
 ```
 
 ## Ubuntu 18.04 & 20.04
-```
+```shell
 apt-get update && apt-get install python3-venv
 ```
 
 ## Clone repo and install dependencies
 * download and setup of virtual environment
-```
+```shell
 cd /opt
 git clone https://github.com/bb-Ricardo/netbox-sync.git
 cd netbox-sync
@@ -72,34 +72,41 @@ pip3 install -r requirements.txt || pip install -r requirements.txt
 ### VMware tag sync (if necessary)
 The `vsphere-automation-sdk` must be installed if tags should be synced from vCenter to NetBox
 * assuming we are still in an activated virtual env
-```
+```shell
 pip install --upgrade pip setuptools
 pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 ```
 
 ## Docker
 
-Run the application in docker container
+Run the application in a docker container. You can build it yourself or use the ones from docker hub.
 
-* The application working directory is ```/opt```
+Available here: bbricardo/netbox-sync
+
+* The application working directory is ```/app```
 * Required to mount your ```settings.ini```
 
+To build it by yourself just run:
+```shell
+docker build -t bbricardo/netbox-sync:latest .
 ```
-docker build -t netbox-sync .
-docker run --rm -it -v $(pwd)/settings.ini:/opt/settings.ini netbox-sync [some args...]
+
+To start the container just use:
+```shell
+docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini bbricardo/netbox-sync:latest
 ```
 
 ## Kubernetes
 
 Run the containerized application in a kubernetes cluster
 
- * Build the container image following the docker instructions above
+ * Build the container image
  * Tag and push the image to a container registry you have access to
  * Create a secret from the settings.ini
  * Update the image field in the manifest
  * Deploy the manifest to your k8s cluster and check the job is running
 
- ```
+ ```shell
  docker build -t netbox-vsphere-sync .
  docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:v1.2.0
  docker image push your-registry.host/netbox-vsphere-sync:v1.2.0

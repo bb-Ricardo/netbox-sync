@@ -12,11 +12,11 @@ spec:
         spec:
           containers:
           - name: netbox-vsphere-sync
-            image: your.container.registry/netbox-vsphere-sync:v1.2.0
+            image: bbricardo/netbox-sync:latest
             imagePullPolicy: IfNotPresent
             volumeMounts:
             - name: netbox-vsphere-sync
-              mountPath: /opt/settings.ini
+              mountPath: /app/settings.ini
               subPath: settings.ini
           volumes:
           - name: netbox-vsphere-sync
