@@ -764,6 +764,9 @@ class NetBoxObject:
         """
 
         tag_list = list()
+        if "tags" not in self.data_model.keys():
+            return tag_list
+
         for tag in self.data.get("tags", list()):
             if isinstance(tag, NetBoxObject):
                 tag_name = tag.get_display_name()
@@ -1290,7 +1293,8 @@ class NBManufacturer(NetBoxObject):
         self.data_model = {
             "name": 50,
             "slug": 50,
-            "description": 200
+            "description": 200,
+            "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
@@ -1324,7 +1328,8 @@ class NBPlatform(NetBoxObject):
             "name": 100,
             "slug": 100,
             "manufacturer": NBManufacturer,
-            "description": 200
+            "description": 200,
+            "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
@@ -1339,7 +1344,8 @@ class NBClusterType(NetBoxObject):
         self.data_model = {
             "name": 50,
             "slug": 50,
-            "description": 200
+            "description": 200,
+            "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
@@ -1354,7 +1360,8 @@ class NBClusterGroup(NetBoxObject):
         self.data_model = {
             "name": 50,
             "slug": 50,
-            "description": 200
+            "description": 200,
+            "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
@@ -1371,7 +1378,8 @@ class NBDeviceRole(NetBoxObject):
             "slug": 50,
             "color": 6,
             "description": 200,
-            "vm_role": bool
+            "vm_role": bool,
+            "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
