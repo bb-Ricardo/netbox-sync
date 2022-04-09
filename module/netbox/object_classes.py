@@ -1450,8 +1450,8 @@ class NBVM(NetBoxObject):
             "memory": int,
             "disk": int,
             "comments": str,
-            "primary_ip4": object,
-            "primary_ip6": object,
+            "primary_ip4": NBIPAddress,
+            "primary_ip6": NBIPAddress,
             "tags": NBTagList,
             "tenant": NBTenant,
             "custom_fields": NBCustomField
