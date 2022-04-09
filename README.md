@@ -73,7 +73,6 @@ pip3 install -r requirements.txt || pip install -r requirements.txt
 The `vsphere-automation-sdk` must be installed if tags should be synced from vCenter to NetBox
 * assuming we are still in an activated virtual env
 ```shell
-pip install --upgrade pip setuptools
 pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 ```
 
@@ -81,7 +80,7 @@ pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-pytho
 
 Run the application in a docker container. You can build it yourself or use the ones from docker hub.
 
-Available here: bbricardo/netbox-sync
+Available here: [bbricardo/netbox-sync](https://hub.docker.com/r/bbricardo/netbox-sync)
 
 * The application working directory is ```/app```
 * Required to mount your ```settings.ini```
