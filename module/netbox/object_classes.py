@@ -1523,7 +1523,7 @@ class NBIPAddress(NetBoxObject):
         self.data_model = {
             "address": str,
             "assigned_object_type": ["dcim.interface", "virtualization.vminterface", "ipam.fhrpgroup"],
-            "assigned_object_id": [NBInterface, NBVMInterface],
+            "assigned_object_id": [NBInterface, NBVMInterface, NBFHRPGroupItem],
             "description": 200,
             "dns_name": 255,
             "tags": NBTagList,
@@ -1534,8 +1534,10 @@ class NBIPAddress(NetBoxObject):
         self.data_model_relation = {
             "dcim.interface": NBInterface,
             "virtualization.vminterface": NBVMInterface,
+            "ipam.fhrpgroup": NBFHRPGroupItem,
             NBInterface: "dcim.interface",
-            NBVMInterface: "virtualization.vminterface"
+            NBVMInterface: "virtualization.vminterface",
+            NBFHRPGroupItem: "ipam.fhrpgroup"
         }
         super().__init__(*args, **kwargs)
 
@@ -1550,7 +1552,7 @@ class NBIPAddress(NetBoxObject):
             log.error(f"Attribute 'assigned_object_type' for '{self.get_display_name()}' invalid: {o_type}")
             do_error_exit(f"Error while resolving relations for {self.get_display_name()}")
 
-        if isinstance(o_id, int):
+        if isinstance(o_id, int) and o_type is not None:
             self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
 
         super().resolve_relations()
@@ -1577,6 +1579,26 @@ class NBIPAddress(NetBoxObject):
         # we need to tell NetBox which object type this is meant to be
         if "assigned_object_id" in self.updated_items:
             self.updated_items.append("assigned_object_type")
+
+
+class NBFHRPGroupItem(NetBoxObject):
+    """
+        This object is currently not used directly in any class.
+        It is used to handle IP address object properly.
+    """
+    name = "FHRP group"
+    api_path = "/ipam/fhrp-groups"
+    primary_key = "group_id"
+    prune = False
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "group_id": int,
+            "ip_addresses": NBIPAddress,
+            "description": 200,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBInventoryItem(NetBoxObject):
