@@ -7,6 +7,8 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
+import re
+
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
 
 from module.netbox.inventory import (
@@ -629,6 +631,10 @@ class SourceBase:
         custom_field: NBCustomField
             new or updated NBCustomField
         """
+
+        # enforce NetBox name constrains
+        data["name"] = NetBoxObject.format_slug(
+            re.sub('-+', '-', data.get("name").replace("_", "-")).strip("-"), 100)[0:50].replace("-", "_")
 
         custom_field = self.inventory.get_by_data(NBCustomField, data={"name": data.get("name")})
 
