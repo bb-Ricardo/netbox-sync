@@ -414,39 +414,6 @@ class NetBoxObject:
         # Enforce max length
         return text[0:max_len]
 
-    def format_label(text=None, max_len=150):
-        """
-        Format string to comply to NetBox custom field acceptable pattern and max length.
-
-        Parameters
-        ----------
-        text: str
-            name to format into a NetBox custom field
-
-        Returns
-        -------
-        str: input name formatted
-        """
-
-        if text is None or len(text) == 0:
-            raise AttributeError("Argument 'text' can't be None or empty!")
-
-        permitted_chars = (
-            "abcdefghijklmnopqrstuvwxyz"  # alphabet
-            "0123456789"  # numbers
-            "_"  # symbols
-        )
-
-        # Replace separators with dash
-        for sep in [" ", ",", "."]:
-            text = text.replace(sep, "_")
-
-        # Strip unacceptable characters
-        text = "".join([c for c in text.lower() if c in permitted_chars])
-
-        # Enforce max length
-        return text[0:max_len]
-
     # noinspection PyAttributeOutsideInit
     def update(self, data=None, read_from_netbox=False, source=None):
         """
