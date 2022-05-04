@@ -824,7 +824,7 @@ class VMWareHandler(SourceBase):
             if label is None:
                 continue
 
-            name = NetBoxObject.format_slug(f"vcsa_{label}", 50).replace("-", "_").strip("-")
+            name = NetBoxObject.format_slug(f"vcsa_{label}", 50).replace("-", "_").strip("-_")
 
             self.add_update_custom_field({
                 "name": name,
