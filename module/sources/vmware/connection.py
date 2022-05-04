@@ -824,17 +824,15 @@ class VMWareHandler(SourceBase):
             if label is None:
                 continue
 
-            name = NetBoxObject.format_slug(f"vcsa_{label}", 50).replace("-", "_").strip("-_")
-
-            self.add_update_custom_field({
-                "name": name,
+            custom_field = self.add_update_custom_field({
+                "name": f"vcsa_{label}",
                 "label": label,
                 "content_types": [content_type],
                 "type": "text",
                 "description": f"vCenter '{self.name}' synced custom attribute '{label}'"
             })
 
-            return_custom_fields[name] = value
+            return_custom_fields[grab(custom_field, "data.name")] = value
 
         return return_custom_fields
 
