@@ -85,16 +85,13 @@ class OpenStackHandler(SourceBase):
         "user_domain": None,
         "project_domain": None,
         "group_name": "Openstack",
-        "validate_tls_certs": False,
+        "permitted_subnets": None,
         "cluster_exclude_filter": None,
         "cluster_include_filter": None,
         "host_exclude_filter": None,
         "host_include_filter": None,
         "vm_exclude_filter": None,
         "vm_include_filter": None,
-        "permitted_subnets": None,
-        "collect_hardware_asset_tag": True,
-        "match_host_by_serial": True,
         "cluster_site_relation": None,
         "cluster_tag_relation": None,
         "cluster_tenant_relation": None,
@@ -108,14 +105,12 @@ class OpenStackHandler(SourceBase):
         "vm_tenant_relation": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
+        "validate_tls_certs": False,
         "set_primary_ip": "when-undefined",
+        "skip_vm_platform": False,
         "skip_vm_comments": False,
-        "skip_vm_templates": True,
         "strip_host_domain_name": False,
-        "strip_vm_domain_name": False,
-        "sync_tags": False,
-        "sync_parent_tags": False,
-        "sync_custom_attributes": False
+        "strip_vm_domain_name": False
     }
 
     deprecated_settings = {}
@@ -652,8 +647,7 @@ class OpenStackHandler(SourceBase):
         Try to find object first based on the object data, interface MAC addresses and primary IPs.
             1. try to find by name and cluster/site
             2. try to find by mac addresses interfaces
-            3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
-            4. try to find by primary IP
+            3. try to find by primary IP
 
         IP addresses for each interface are added here as well. First they will be checked and added
         if all checks pass. For each IP address a matching IP prefix will be searched for. First we
@@ -741,21 +735,6 @@ class OpenStackHandler(SourceBase):
             nic_macs = [x.get("mac_address") for x in mac_source_data.values()]
 
             device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
-
-        # look for devices with same serial or asset tag
-        if object_type == NBDevice:
-
-            if device_vm_object is None and object_data.get("serial") is not None and \
-                    bool(self.match_host_by_serial) is True:
-                log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
-
-                device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
-
-            if device_vm_object is None and object_data.get("asset_tag") is not None:
-                log.debug2(f"No match found. Trying to find {object_type.name} based on asset tag")
-
-                device_vm_object = self.inventory.get_by_data(object_type,
-                                                              data={"asset_tag": object_data.get("asset_tag")})
 
         if device_vm_object is not None:
             log.debug2("Found a matching %s object: %s" %
@@ -919,13 +898,8 @@ class OpenStackHandler(SourceBase):
              does the host pass the host_include_filter and host_exclude_filter
 
         Then all necessary host data will be collected.
-            host model, manufacturer, serial, physical interfaces, virtual interfaces,
-            virtual switches, proxy switches, host port groups, interface VLANs, IP addresses
 
-        Primary IPv4/6 will be determined by
-            1. if the interface port group name contains
-                "management" or "mngt"
-            2. interface is the default route of this host
+        Primary IPv4/6 will be determined by 'host_ip' value
 
         Parameters
         ----------
@@ -1005,9 +979,6 @@ class OpenStackHandler(SourceBase):
         if get_string_or_none(obj.status) == "enabled":
             status = "active"
 
-        # add asset tag if desired and present
-        asset_tag = None
-
         # get host_tenant_relation
         tenant_name = self.get_object_relation(name, "host_tenant_relation")
 
@@ -1029,8 +1000,6 @@ class OpenStackHandler(SourceBase):
         }
 
         # add data if present
-        if asset_tag is not None:
-            host_data["asset_tag"] = asset_tag
         if platform is not None:
             host_data["platform"] = {"name": platform}
         if tenant_name is not None:
@@ -1078,7 +1047,6 @@ class OpenStackHandler(SourceBase):
         # get VM power state
         status = "active" if get_string_or_none(obj.status) == "ACTIVE" else "offline"
 
-        # hypervisor_name = get_string_or_none(obj.hypervisor_hostname)
         cluster_name = get_string_or_none(obj.availability_zone)
 
         # honor strip_host_domain_name
@@ -1113,16 +1081,13 @@ class OpenStackHandler(SourceBase):
         # Collect data
         #
 
-        # check if cluster is a Standalone ESXi
-        site_name = self.permitted_clusters.get(cluster_name)
-        if site_name is None:
-            site_name = self.get_site_name(NBCluster, cluster_name)
-
         # first check against vm_platform_relation
-        platform = get_string_or_none(obj.flavor["original_name"])
+        platform = None
+        if bool(self.skip_vm_platform) is False:
+            platform = get_string_or_none(obj.flavor["original_name"])
 
-        if platform is not None:
-            platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
+            if platform is not None:
+                platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
 
         disk = 0
         for volume in obj.attached_volumes:
