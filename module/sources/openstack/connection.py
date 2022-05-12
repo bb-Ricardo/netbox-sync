@@ -1007,12 +1007,25 @@ class OpenStackHandler(SourceBase):
         if len(host_tags) > 0:
             host_data["tags"] = host_tags
 
+        pnic_data_dict = dict()
+        pnic_data = {
+                "name": "eth0",
+                "device": None,
+                "enabled": True,
+                "type": "10gbase-t"
+        }
+        pnic_data_dict["eth0"] = pnic_data
+
+        vnic_ips = dict()
+        vnic_ips["eth0"] = list()
+        vnic_ips["eth0"].append(obj.host_ip)
+
         host_primary_ip4 = obj.host_ip
         host_primary_ip6 = None
 
         # add host to inventory
-        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=dict(),
-                                        vnic_data=dict(), nic_ips=None,
+        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
+                                        vnic_data=dict(), nic_ips=vnic_ips,
                                         p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6)
 
         return
