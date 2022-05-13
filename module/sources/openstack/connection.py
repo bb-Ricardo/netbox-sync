@@ -1016,11 +1016,18 @@ class OpenStackHandler(SourceBase):
         }
         pnic_data_dict["eth0"] = pnic_data
 
+        ip_addr = obj.host_ip
+        prefix = None
+        matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr))
+        if matched_prefix is not None:
+            prefix = matched_prefix.data["prefix"].prefixlen
+            ip_addr = f"{ip_addr}/{prefix}"
+
         vnic_ips = dict()
         vnic_ips["eth0"] = list()
-        vnic_ips["eth0"].append(obj.host_ip)
+        vnic_ips["eth0"].append(ip_addr)
 
-        host_primary_ip4 = obj.host_ip
+        host_primary_ip4 = ip_addr
         host_primary_ip6 = None
 
         # add host to inventory
@@ -1141,11 +1148,19 @@ class OpenStackHandler(SourceBase):
             count += 1
             nic_ips[network] = list()
             for address in addresses:
-                nic_ips[network].append(address["addr"])
+                ip_addr = address["addr"]
+                prefix = None
+
+                matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr))
+                if matched_prefix is not None:
+                    prefix = matched_prefix.data["prefix"].prefixlen
+                    ip_addr = f"{ip_addr}/{prefix}"
+
+                nic_ips[network].append(ip_addr)
                 if int(address["version"]) == 4:
-                    vm_primary_ip4 = address["addr"]
+                    vm_primary_ip4 = ip_addr
                 if int(address["version"]) == 6:
-                    vm_primary_ip6 = address["addr"]
+                    vm_primary_ip6 = ip_addr
                 full_name = unquote(f"vNIC{count} ({network})")
                 vm_nic_data = {
                     "name": full_name,
@@ -1154,8 +1169,10 @@ class OpenStackHandler(SourceBase):
                     "description": full_name,
                     "enabled": True,
                 }
-                if ip_valid_to_add_to_netbox(address["addr"], self.permitted_subnets, full_name) is True:
+                if ip_valid_to_add_to_netbox(ip_addr, self.permitted_subnets, full_name) is True:
                     vm_nic_dict[network] = vm_nic_data
+                else:
+                    log.debug(f"Virtual machine '{name}' address '{ip_addr}' is not valid to add. Skipping")
 
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=vm_nic_dict,
