@@ -732,7 +732,7 @@ class OpenStackHandler(SourceBase):
             # on VMs vnic data is used, on physical devices pnic data is used
             mac_source_data = vnic_data if object_type == NBVM else pnic_data
 
-            nic_macs = [x.get("mac_address") for x in mac_source_data.values()]
+            nic_macs = [x.get("mac_address") for x in mac_source_data.values() if x.get("mac_address") is not None]
 
             device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
 
