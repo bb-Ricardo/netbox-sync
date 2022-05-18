@@ -302,7 +302,9 @@ class NetBoxInventory:
                         continue
 
                     if getattr(this_object, "prune", False) is True:
-                        if netbox_handler.primary_tag in this_object.get_tags():
+                        if netbox_handler.primary_tag in this_object.get_tags() and \
+                                netbox_handler.ignore_unknown_source_object_pruning is False:
+
                             this_object.add_tags(netbox_handler.orphaned_tag)
 
                     # or just remove primary tag if pruning is disabled
