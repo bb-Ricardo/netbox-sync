@@ -459,9 +459,19 @@ class VMWareHandler(SourceBase):
 
         for view_name, view_details in object_mapping.items():
 
-            if self.session is None:
+            # test if session is still alive
+            try:
+                self.session.sessionManager.sessionList
+            except (vim.fault.NotAuthenticated, AttributeError):
                 log.info("No existing vCenter session found.")
-                self.create_session()
+                self.session = None
+                self.tag_session = None
+                self.create_sdk_session()
+                self.create_api_session()
+
+            if self.session is None:
+                log.error("Recreating session failed")
+                break
 
             view_data = {
                 "container": self.session.rootFolder,
