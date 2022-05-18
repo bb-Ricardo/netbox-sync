@@ -45,7 +45,8 @@ class NetBoxHandler:
         "default_netbox_result_limit": 200,
         "timeout": 30,
         "max_retry_attempts": 4,
-        "use_caching": True
+        "use_caching": True,
+        "ignore_unknown_source_object_pruning": False
     }
 
     # This tag gets added to all objects create/updated/inherited by this program
