@@ -469,7 +469,7 @@ class VMWareHandler(SourceBase):
 
             # test if session is still alive
             try:
-                self.session.sessionManager.sessionList
+                self.session.sessionManager.currentSession.key
             except (vim.fault.NotAuthenticated, AttributeError):
                 log.info("No existing vCenter session found.")
                 self.session = None
