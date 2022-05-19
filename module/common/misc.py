@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import sys
+import re
 
 
 def grab(structure=None, path=None, separator=".", fallback=None):
@@ -190,5 +191,34 @@ def plural(length):
     """
 
     return "s" if length != 1 else ""
+
+
+def quoted_split(string_to_split):
+    """
+        Splits a comma separated string into a list.
+        It obeys quoted parts which could contain a comma as well.
+
+        thanks to: https://stackoverflow.com/a/64333329
+
+        Parameters
+        ----------
+        string_to_split: str
+            the string to split
+
+        Returns
+        -------
+        list
+            of separated string parts
+    """
+
+    return_data = list()
+
+    if not isinstance(string_to_split, str):
+        return return_data
+
+    for part in re.split(r",(?=(?:[^\"']*[\"'][^\"']*[\"'])*[^\"']*$)", string_to_split):
+        return_data.append(part.strip(' "\''))
+
+    return return_data
 
 # EOF

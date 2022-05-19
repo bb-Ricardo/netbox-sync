@@ -1041,7 +1041,7 @@ class NBCustomField(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "content_types": list,
-            "type": ["text", "integer", "boolean", "date", "url", "select", "multiselect"],
+            "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect"],
             "name": 50,
             "label": 50,
             "description": 200,

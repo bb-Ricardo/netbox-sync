@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import atexit
+import datetime
 import pprint
 import re
 import ssl
@@ -19,10 +20,11 @@ import urllib3
 import requests
 from pyVim.connect import SmartConnect, Disconnect
 from pyVmomi import vim
+from pyVmomi.VmomiSupport import VmomiJSONEncoder
 
 from module.sources.common.source_base import SourceBase
 from module.common.logging import get_logger, DEBUG3
-from module.common.misc import grab, dump, get_string_or_none, plural
+from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
     NetBoxObject,
@@ -126,7 +128,9 @@ class VMWareHandler(SourceBase):
         "strip_vm_domain_name": False,
         "sync_tags": False,
         "sync_parent_tags": False,
-        "sync_custom_attributes": False
+        "sync_custom_attributes": False,
+        "host_custom_object_attributes": None,
+        "vm_custom_object_attributes": None
     }
 
     deprecated_settings = {}
@@ -248,10 +252,7 @@ class VMWareHandler(SourceBase):
 
             relation_type = relation_option.split("_")[1]
 
-            # obey quotations to be able to add names including a comma
-            # thanks to: https://stackoverflow.com/a/64333329
-            for relation in re.split(r",(?=(?:[^\"']*[\"'][^\"']*[\"'])*[^\"']*$)",
-                                     config_settings.get(relation_option)):
+            for relation in quoted_split(config_settings.get(relation_option)):
 
                 object_name = relation.split("=")[0].strip(' "')
                 relation_name = relation.split("=")[1].strip(' "')
@@ -274,6 +275,13 @@ class VMWareHandler(SourceBase):
                 })
 
             config_settings[relation_option] = relation_data
+
+        for custom_object_option in [x for x in self.settings.keys() if "custom_object_attributes" in x]:
+
+            if config_settings.get(custom_object_option) is None:
+                continue
+
+            config_settings[custom_object_option] = quoted_split(config_settings.get(custom_object_option))
 
         if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
 
@@ -810,15 +818,53 @@ class VMWareHandler(SourceBase):
 
         return_custom_fields = dict()
 
-        custom_value = grab(obj, "customValue", fallback=list())
-
-        if self.sync_custom_attributes is False or len(custom_value) == 0:
-            return return_custom_fields
+        custom_value = list()
+        if self.sync_custom_attributes is True:
+            custom_value = grab(obj, "customValue", fallback=list())
 
         if grab(obj, "_wsdlName") == "VirtualMachine":
             content_type = "virtualization.virtualmachine"
+            custom_object_attributes = self.vm_custom_object_attributes or list()
+            object_attribute_prefix = "vm"
         else:
             content_type = "dcim.device"
+            custom_object_attributes = self.host_custom_object_attributes or list()
+            object_attribute_prefix = "host"
+
+        # add basic host data to device
+        if content_type == "dcim.device":
+            num_cpu_cores = grab(obj, "summary.hardware.numCpuCores")
+            cpu_model = grab(obj, "summary.hardware.cpuModel")
+            memory_size = grab(obj, "summary.hardware.memorySize")
+
+            if num_cpu_cores is not None:
+                custom_field = self.add_update_custom_field({
+                    "name": "vcsa_host_cpu_cores",
+                    "label": "Physical CPU Cores",
+                    "content_types": [content_type],
+                    "type": "text",
+                    "description": f"vCenter '{self.name}' reported Host CPU cores"
+                })
+
+                return_custom_fields[grab(custom_field, "data.name")] = f"{num_cpu_cores} {cpu_model}"
+
+            if isinstance(memory_size, int):
+                custom_field = self.add_update_custom_field({
+                    "name": "vcsa_host_memory",
+                    "label": "Memory",
+                    "content_types": [content_type],
+                    "type": "text",
+                    "description": f"vCenter '{self.name}' reported Memory"
+                })
+
+                memory_size = round(memory_size / 1024 ** 3)
+                memory_unit = "GB"
+
+                if memory_size >= 1024:
+                    memory_size = memory_size / 1024
+                    memory_unit = "TB"
+
+                return_custom_fields[grab(custom_field, "data.name")] = f"{memory_size} {memory_unit}"
 
         field_definition = {grab(k, "key"): grab(k, "name") for k in grab(obj, "availableField", fallback=list())}
 
@@ -843,6 +889,43 @@ class VMWareHandler(SourceBase):
             })
 
             return_custom_fields[grab(custom_field, "data.name")] = value
+
+        for custom_object_attribute in custom_object_attributes:
+
+            attribute_data = grab(obj, custom_object_attribute, fallback="NOT FOUND")
+
+            if attribute_data == "NOT FOUND":
+                log.warning(f"This object has no attribute '{custom_object_attribute}' or attribute is undefined.")
+                continue
+
+            if isinstance(attribute_data, datetime.datetime):
+                custom_field_type = "text"
+                attribute_data = attribute_data.strftime("%Y-%m-%dT%H:%M:%S%z")
+            elif isinstance(attribute_data, bool):
+                custom_field_type = "boolean"
+            elif isinstance(attribute_data, int):
+                custom_field_type = "integer"
+            elif isinstance(attribute_data, str):
+                custom_field_type = "text"
+            else:
+                import json
+                # noinspection PyBroadException
+                try:
+                    attribute_data = json.loads(json.dumps(attribute_data, cls=VmomiJSONEncoder, sort_keys=True))
+                except Exception:
+                    attribute_data = json.loads(json.dumps(str(attribute_data)))
+
+                custom_field_type = "json"
+
+            custom_field = self.add_update_custom_field({
+                "name": f"vcsa_{object_attribute_prefix}_{custom_object_attribute}",
+                "label": custom_object_attribute,
+                "content_types": [content_type],
+                "type": custom_field_type,
+                "description": f"vCenter '{self.name}' synced object attribute '{custom_object_attribute}'"
+            })
+
+            return_custom_fields[grab(custom_field, "data.name")] = attribute_data
 
         return return_custom_fields
 
