@@ -1580,6 +1580,33 @@ class NBIPAddress(NetBoxObject):
         if "assigned_object_id" in self.updated_items:
             self.updated_items.append("assigned_object_type")
 
+    def get_interface(self):
+        o_id = self.data.get("assigned_object_id")
+        o_type = self.data.get("assigned_object_type")
+
+        if isinstance(o_id, (NBInterface, NBVMInterface)):
+            return o_id
+
+        if o_type is None or not isinstance(o_id, int):
+            return
+
+        if o_type not in self.data_model.get("assigned_object_type"):
+            return
+
+        return self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+
+    def get_device_vm(self):
+
+        o_interface = self.get_interface()
+
+        if o_interface is None:
+            return
+
+        if isinstance(o_interface, NBInterface):
+            return o_interface.data.get("device")
+        elif isinstance(o_interface, NBVMInterface):
+            return o_interface.data.get("virtual_machine")
+
 
 class NBFHRPGroupItem(NetBoxObject):
     """
@@ -1590,6 +1617,7 @@ class NBFHRPGroupItem(NetBoxObject):
     api_path = "/ipam/fhrp-groups"
     primary_key = "group_id"
     prune = False
+
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "group_id": int,
