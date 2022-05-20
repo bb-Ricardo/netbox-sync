@@ -12,6 +12,7 @@ from ipaddress import ip_network, IPv4Network, IPv6Network
 
 from module.common.misc import grab, do_error_exit
 from module.common.logging import get_logger
+from module.netbox.manufacturer_mapping import sanitize_manufacturer_name
 
 log = get_logger()
 
@@ -535,6 +536,9 @@ class NetBoxObject:
             if defined_value_type == NBVLANList:
                 value = self.compile_vlans(value)
 
+            if defined_value_type == NBManufacturer:
+                value = self.sanitize_manufacturer_name(value)
+
             if defined_value_type == NBCustomField:
                 if not isinstance(value, dict):
                     log.error(f"Invalid data type for '{key}' (must be 'dict'), got: '{value}'")
@@ -967,6 +971,50 @@ class NetBoxObject:
             new_vlan_list.append(new_vlan_object)
 
         return new_vlan_list
+
+    def sanitize_manufacturer_name(self, manufacturer_data):
+        """
+        Sanitize the manufacturer name to use a generic one for different representations
+
+        Parameters
+        ----------
+        manufacturer_data: dict, NBManufacturer
+            manufacturer data or object
+
+        Returns
+        -------
+        NBManufacturer
+        """
+
+        if manufacturer_data is None:
+            return
+
+        sanitized_name = None
+        if isinstance(manufacturer_data, dict):
+            sanitized_name = sanitize_manufacturer_name(manufacturer_data.get("name"))
+
+        elif isinstance(manufacturer_data, NBManufacturer):
+            sanitized_name = sanitize_manufacturer_name(manufacturer_data.get_display_name())
+
+        if sanitized_name is None:
+            return manufacturer_data
+
+        manufacturer_object = self.inventory.get_by_data(NBManufacturer, {
+            "slug": self.format_slug(sanitized_name)
+        })
+        if manufacturer_object is None:
+            manufacturer_object = self.inventory.add_update_object(NBManufacturer, {
+                "name": sanitized_name
+            })
+        else:
+            manufacturer_object.update({
+                "name": sanitized_name
+            })
+
+        if manufacturer_object.source is None:
+            manufacturer_object.source = self.source
+
+        return manufacturer_object
 
     def unset_attribute(self, attribute_name=None):
         """
