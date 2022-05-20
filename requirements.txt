@@ -4,4 +4,4 @@ wheel
 requests==2.27.1
 pyvmomi==7.0.3
 aiodns==2.0.0
-setuptools==60.10.0
+setuptools>=62.00.0
