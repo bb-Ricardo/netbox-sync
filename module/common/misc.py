@@ -118,7 +118,7 @@ def do_error_exit(log_text):
         the text to log as error
     """
 
-    print(log_text, file=sys.stderr)
+    print(f"ERROR: {log_text}", file=sys.stderr)
     exit(1)
 
 
