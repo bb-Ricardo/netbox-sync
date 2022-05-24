@@ -40,6 +40,9 @@ class NetBoxHandler:
         "port": None,
         "disable_tls": False,
         "validate_tls_certs": True,
+        "proxy": None,
+        "client_cert": None,
+        "client_cert_key": None,
         "prune_enabled": False,
         "prune_delay_in_days": 30,
         "default_netbox_result_limit": 200,
@@ -178,6 +181,13 @@ class NetBoxHandler:
                 log.error(f"Config option '{setting}' in 'netbox' must be an integer.")
                 validation_failed = True
 
+        proxy = config_settings.get("proxy")
+        if proxy is not None:
+            if "://" not in proxy or (not proxy.startswith("http") and not proxy.startswith("socks5")):
+                log.error(f"Config option 'proxy' in 'netbox' must contain the schema "
+                          f"http, https, socks5 or socks5h")
+                validation_failed = True
+
         if validation_failed is True:
             log.error("Config validation failed. Exit!")
             exit(1)
@@ -203,6 +213,20 @@ class NetBoxHandler:
         session = requests.Session()
         session.headers.update(header)
 
+        # adds proxy to the session
+        if self.proxy is not None:
+            session.proxies.update({
+                "http": self.proxy,
+                "https": self.proxy
+            })
+
+        # adds client cert to session
+        if self.client_cert is not None:
+            if self.client_cert_key is not None:
+                session.cert = (self.client_cert, self.client_cert_key)
+            else:
+                session.cert = self.client_cert
+
         log.debug("Created new requests Session for NetBox.")
 
         return session
@@ -222,7 +246,7 @@ class NetBoxHandler:
                 timeout=self.timeout,
                 verify=self.validate_tls_certs)
         except Exception as e:
-            do_error_exit(str(e))
+            do_error_exit(f"NetBox connection: {e}")
 
         result = str(response.headers.get("API-Version"))
 

@@ -18,7 +18,7 @@ from urllib.parse import unquote
 
 import urllib3
 import requests
-from pyVim.connect import SmartConnect, Disconnect
+from pyVim import connect
 from pyVmomi import vim
 from pyVmomi.VmomiSupport import VmomiJSONEncoder
 
@@ -97,6 +97,8 @@ class VMWareHandler(SourceBase):
         "username": None,
         "password": None,
         "validate_tls_certs": False,
+        "proxy_host": None,
+        "proxy_port": None,
         "cluster_exclude_filter": None,
         "cluster_include_filter": None,
         "host_exclude_filter": None,
@@ -325,25 +327,49 @@ class VMWareHandler(SourceBase):
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
 
-        try:
-            instance = SmartConnect(
-                host=self.host_fqdn,
-                port=self.port,
+        connection_params = dict(
+            host=self.host_fqdn,
+            port=self.port,
+            sslContext=ssl_context
+        )
+
+        # uses connect.SmartStubAdapter
+        if self.proxy_host is not None and self.proxy_port is not None:
+            connection_params.update(
+                httpProxyHost=self.proxy_host,
+                httpProxyPort=int(self.proxy_port),
+            )
+
+        # uses connect.SmartConnect
+        else:
+            connection_params.update(
                 user=self.username,
                 pwd=self.password,
-                sslContext=ssl_context
             )
-            atexit.register(Disconnect, instance)
+
+        def_exception_text = f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}."
+
+        try:
+            if self.proxy_host is not None and self.proxy_port is not None:
+                smart_stub = connect.SmartStubAdapter(**connection_params)
+                instance = vim.ServiceInstance('ServiceInstance', smart_stub)
+                content = instance.RetrieveContent()
+                content.sessionManager.Login(self.username, self.password, None)
+            else:
+
+                instance = connect.SmartConnect(**connection_params)
+
+            atexit.register(connect.Disconnect, instance)
             self.session = instance.RetrieveContent()
 
-        except (gaierror, OSError) as e:
-            log.error(
-                f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}. "
-                f"Reason: {e}"
-            )
-            return False
         except vim.fault.InvalidLogin as e:
-            log.error(f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}. {e.msg}")
+            log.error(f"{def_exception_text} {e.msg}")
+            return False
+        except vim.fault.NoPermission as e:
+            log.error(f"{def_exception_text} User {self.username} does not have required permission. {e.msg}")
+            return False
+        except Exception as e:
+            log.error(f"{def_exception_text} Reason: {e}")
             return False
 
         log.info(f"Successfully connected to vCenter SDK '{self.host_fqdn}'")
@@ -382,6 +408,13 @@ class VMWareHandler(SourceBase):
         # disable TLS insecure warnings if user explicitly switched off validation
         if bool(self.validate_tls_certs) is False:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # adds proxy to the session
+        if self.proxy_host is not None and self.proxy_port is not None:
+            session.proxies.update({
+                "http": f"http://{self.proxy_host}:{self.proxy_port}",
+                "https": f"http://{self.proxy_host}:{self.proxy_port}",
+            })
 
         try:
             self.tag_session = create_vsphere_client(
