@@ -13,13 +13,15 @@ import pprint
 import re
 import ssl
 from ipaddress import ip_address, ip_network, ip_interface
-from socket import gaierror
 from urllib.parse import unquote
 
 import urllib3
 import requests
+# noinspection PyUnresolvedReferences
 from pyVim import connect
+# noinspection PyUnresolvedReferences
 from pyVmomi import vim
+# noinspection PyUnresolvedReferences
 from pyVmomi.VmomiSupport import VmomiJSONEncoder
 
 from module.sources.common.source_base import SourceBase
@@ -27,7 +29,6 @@ from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.object_classes import (
-    NetBoxObject,
     NetBoxInterfaceType,
     NBTag,
     NBManufacturer,
@@ -148,6 +149,8 @@ class VMWareHandler(SourceBase):
     source_tag = None
     source_type = "vmware"
 
+    recursion_level = 0
+
     # internal vars
     session = None
     tag_session = None
@@ -189,10 +192,10 @@ class VMWareHandler(SourceBase):
             "dpgroup": dict(),
             "dpgroup_ports": dict()
         }
-        self.permitted_clusters = dict()
         self.processed_host_names = dict()
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
+        self.object_cache = dict()
         self.parsing_vms_the_first_time = True
 
     def parse_config_settings(self, config_settings):
@@ -614,9 +617,9 @@ class VMWareHandler(SourceBase):
         site_name = self.get_object_relation(object_name, relation_name)
 
         if object_type == NBDevice and site_name is None:
-            site_name = self.permitted_clusters.get(cluster_name) or \
-                        self.get_site_name(NBCluster, object_name, cluster_name)
-            log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+            site_name = self.get_site_name(NBCluster, cluster_name)
+            if site_name is not None:
+                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
 
         # set default site name
         if site_name is None:
@@ -983,10 +986,23 @@ class VMWareHandler(SourceBase):
         resolved_list = list()
         for single_relation in grab(self, relation, fallback=list()):
             object_regex = single_relation.get("object_regex")
+            match_found = False
             if object_regex.match(name):
                 resolved_name = single_relation.get("assigned_name")
                 log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}.")
                 resolved_list.append(resolved_name)
+                match_found = True
+
+            # special cluster condition
+            if match_found is False and grab(f"{relation}".split("_"), "0") == "cluster":
+
+                stripped_name = "/".join(name.split("/")[1:])
+                if object_regex.match(stripped_name):
+
+                    resolved_name = single_relation.get("assigned_name")
+                    log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) "
+                               f"for {stripped_name}.")
+                    resolved_list.append(resolved_name)
 
         if grab(f"{relation}".split("_"), "1") == "tag":
             return resolved_list
@@ -1225,6 +1241,71 @@ class VMWareHandler(SourceBase):
 
         return
 
+    def get_parent_object_by_class(self, obj, object_class_to_find):
+
+        if obj is None or object_class_to_find is None:
+            return
+
+        if isinstance(obj, object_class_to_find):
+            self.recursion_level = 0
+            return obj
+
+        max_recursion = 20
+        while True:
+            if self.recursion_level >= max_recursion:
+                self.recursion_level = 0
+                return None
+
+            # noinspection PyBroadException
+            try:
+                parent = obj.parent
+            except Exception:
+                self.recursion_level = 0
+                return None
+
+            if isinstance(parent, object_class_to_find):
+                self.recursion_level = 0
+                return parent
+
+            self.recursion_level += 1
+            return self.get_parent_object_by_class(parent, object_class_to_find)
+
+    def add_object_to_cache(self, vm_object, netbox_object):
+
+        if None in [vm_object, netbox_object]:
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = vm_object.__class__.__name__
+            # noinspection PyProtectedMember
+            vm_object_id = vm_object._GetMoId()
+        except Exception:
+            return
+
+        if self.object_cache.get(vm_class_name) is None:
+            self.object_cache[vm_class_name] = dict()
+
+        self.object_cache[vm_class_name][vm_object_id] = netbox_object
+
+    def get_object_from_cache(self, vm_object):
+
+        if vm_object is None:
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = vm_object.__class__.__name__
+            # noinspection PyProtectedMember
+            vm_object_id = vm_object._GetMoId()
+        except Exception:
+            return
+
+        if self.object_cache.get(vm_class_name) is None:
+            return
+
+        return self.object_cache[vm_class_name].get(vm_object_id)
+
     def add_datacenter(self, obj):
         """
         Add a vCenter datacenter as a NBClusterGroup to NetBox
@@ -1235,7 +1316,6 @@ class VMWareHandler(SourceBase):
             datacenter object
 
         """
-
         name = get_string_or_none(grab(obj, "name"))
 
         if name is None:
@@ -1243,14 +1323,13 @@ class VMWareHandler(SourceBase):
 
         log.debug(f"Parsing vCenter datacenter: {name}")
 
-        self.inventory.add_update_object(NBClusterGroup, data={"name": name}, source=self)
+        self.add_object_to_cache(obj,
+                                 self.inventory.add_update_object(NBClusterGroup, data={"name": name}, source=self))
 
     def add_cluster(self, obj):
         """
         Add a vCenter cluster as a NBCluster to NetBox. Cluster name is checked against
-        cluster_include_filter and cluster_exclude_filter config setting. Also adds
-        cluster and site_name to "self.permitted_clusters" so hosts and VMs can be
-        checked if they are part of a permitted cluster.
+        cluster_include_filter and cluster_exclude_filter config setting.
 
         Parameters
         ----------
@@ -1259,37 +1338,40 @@ class VMWareHandler(SourceBase):
         """
 
         name = get_string_or_none(grab(obj, "name"))
-        group = get_string_or_none(grab(obj, "parent.parent.name"))
+        group = self.get_object_from_cache(self.get_parent_object_by_class(obj, vim.Datacenter))
 
         if name is None or group is None:
             return
 
-        log.debug(f"Parsing vCenter cluster: {name}")
+        group_name = grab(group, "data.name")
+        full_cluster_name = f"{group_name}/{name}"
 
-        if self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
+        log.debug(f"Parsing vCenter cluster: {full_cluster_name}")
+
+        # check for full name and then for cluster name only
+        if self.passes_filter(full_cluster_name, self.cluster_include_filter, self.cluster_exclude_filter) is False \
+                and self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
             return
 
-        site_name = self.get_site_name(NBCluster, name)
+        site_name = self.get_site_name(NBCluster, full_cluster_name)
 
         data = {
             "name": name,
             "type": {"name": "VMware ESXi"},
-            "group": {"name": group},
+            "group": group,
             "site": {"name": site_name}
         }
 
-        tenant_name = self.get_object_relation(name, "cluster_tenant_relation")
+        tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:
             data["tenant"] = {"name": tenant_name}
 
-        cluster_tags = self.get_object_relation(name, "cluster_tag_relation")
+        cluster_tags = self.get_object_relation(full_cluster_name, "cluster_tag_relation")
         cluster_tags.extend(self.get_object_tags(obj))
         if len(cluster_tags) > 0:
             data["tags"] = cluster_tags
 
-        self.inventory.add_update_object(NBCluster, data=data, source=self)
-
-        self.permitted_clusters[name] = site_name
+        self.add_object_to_cache(obj, self.inventory.add_update_object(NBCluster, data=data, source=self))
 
     def add_virtual_switch(self, obj):
         """
@@ -1407,16 +1489,20 @@ class VMWareHandler(SourceBase):
         #
 
         # manage site and cluster
-        cluster_name = get_string_or_none(grab(obj, "parent.name"))
+        cluster_object = self.get_parent_object_by_class(obj, vim.ClusterComputeResource)
+        cluster_name = get_string_or_none(grab(cluster_object, "name"))
 
-        if cluster_name is None:
+        if cluster_object is None:
             log.error(f"Requesting cluster for host '{name}' failed. Skipping.")
             return
+
+        # get cluster object
+        nb_cluster_object = self.get_object_from_cache(cluster_object)
 
         if log.level == DEBUG3:
             try:
                 log.info("Cluster data")
-                dump(grab(obj, "parent"))
+                dump(cluster_object)
             except Exception as e:
                 log.error(e)
 
@@ -1430,12 +1516,14 @@ class VMWareHandler(SourceBase):
             log.debug2(f"Host name and cluster name are equal '{cluster_name}'. "
                        f"Assuming this host is a 'standalone' host.")
 
-        elif self.permitted_clusters.get(cluster_name) is None:
+        elif nb_cluster_object is None:
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
             return
 
         # get a site for this host
-        site_name = self.get_site_name(NBDevice, name, cluster_name)
+        group = self.get_object_from_cache(self.get_parent_object_by_class(obj, vim.Datacenter))
+        group_name = grab(group, "data.name")
+        site_name = self.get_site_name(NBDevice, name, f"{group_name}/{cluster_name}")
 
         if name in self.processed_host_names.get(site_name, list()):
             log.warning(f"Host '{name}' for site '{site_name}' already parsed. "
@@ -1454,18 +1542,15 @@ class VMWareHandler(SourceBase):
 
         # add host as single cluster to cluster list
         if cluster_name == name:
-            self.permitted_clusters[cluster_name] = site_name
             # add cluster to NetBox
             cluster_data = {
                 "name": cluster_name,
-                "type": {
-                    "name": "VMware ESXi"
-                },
-                "site": {
-                    "name": site_name
-                }
+                "type": {"name": "VMware ESXi"},
+                "group": group,
+                "site": {"name": site_name}
             }
-            self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
+            nb_cluster_object = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
+            self.add_object_to_cache(cluster_object, nb_cluster_object)
 
         #
         # Collecting data
@@ -1539,7 +1624,7 @@ class VMWareHandler(SourceBase):
                 }
             },
             "site": {"name": site_name},
-            "cluster": {"name": cluster_name},
+            "cluster": nb_cluster_object,
             "status": status
         }
 
@@ -1939,33 +2024,41 @@ class VMWareHandler(SourceBase):
         # add to processed VMs
         self.processed_vm_uuid.append(vm_uuid)
 
-        parent_name = get_string_or_none(grab(obj, "runtime.host.name"))
-        cluster_name = get_string_or_none(grab(obj, "runtime.host.parent.name"))
+        parent_host = self.get_parent_object_by_class(grab(obj, "runtime.host"), vim.HostSystem)
+        cluster = self.get_parent_object_by_class(parent_host, vim.ClusterComputeResource)
+        group = self.get_parent_object_by_class(cluster, vim.Datacenter)
+
+        if None in [parent_host, cluster, group]:
+            log.error(f"Requesting host or cluster for Virtual Machine '{name}' failed. Skipping.")
+            return
+
+        parent_name = grab(parent_host, "name")
+        cluster_name = grab(cluster, "name")
+        cluster_full_name = f"{group.name}/{cluster_name}"
+
+        nb_cluster_object = self.get_object_from_cache(cluster)
 
         # honor strip_host_domain_name
         if cluster_name is not None and self.strip_host_domain_name is True and \
                 parent_name.split(".")[0] == cluster_name.split(".")[0]:
             cluster_name = cluster_name.split(".")[0]
+            cluster_full_name = f"{group.name}/{cluster_name}"
 
         # check VM cluster
-        if cluster_name is None:
-            log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
-            return
-
-        elif self.permitted_clusters.get(cluster_name) is None:
+        if nb_cluster_object is None:
             log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
             return
 
-        if name in self.processed_vm_names.get(cluster_name, list()):
-            log.warning(f"Virtual machine '{name}' for cluster '{cluster_name}' already parsed. "
+        if name in self.processed_vm_names.get(cluster_full_name, list()):
+            log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
                         "Make sure to use unique VM names. Skipping")
             return
 
-        # add host to processed list
-        if self.processed_vm_names.get(cluster_name) is None:
-            self.processed_vm_names[cluster_name] = list()
+        # add vm to processed list
+        if self.processed_vm_names.get(cluster_full_name) is None:
+            self.processed_vm_names[cluster_full_name] = list()
 
-        self.processed_vm_names[cluster_name].append(name)
+        self.processed_vm_names[cluster_full_name].append(name)
 
         # filter VMs by name
         if self.passes_filter(name, self.vm_include_filter, self.vm_exclude_filter) is False:
@@ -1976,9 +2069,9 @@ class VMWareHandler(SourceBase):
         #
 
         # check if cluster is a Standalone ESXi
-        site_name = self.permitted_clusters.get(cluster_name)
+        site_name = nb_cluster_object.get_site_name()
         if site_name is None:
-            site_name = self.get_site_name(NBCluster, cluster_name)
+            site_name = self.get_site_name(NBCluster, cluster_full_name)
 
         # first check against vm_platform_relation
         platform = get_string_or_none(grab(obj, "config.guestFullName"))
@@ -2008,7 +2101,7 @@ class VMWareHandler(SourceBase):
 
         vm_data = {
             "name": name,
-            "cluster": {"name": cluster_name},
+            "cluster": nb_cluster_object,
             "status": status,
             "memory": grab(obj, "config.hardware.memoryMB"),
             "vcpus": grab(obj, "config.hardware.numCPU"),
