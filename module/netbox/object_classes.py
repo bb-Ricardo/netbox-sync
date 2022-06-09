@@ -613,8 +613,12 @@ class NetBoxObject:
 
                 continue
 
+            if isinstance(current_value, NetBoxObject) and isinstance(new_value, NetBoxObject):
+                if current_value is new_value:
+                    continue
+
             # just check again if values might match now
-            if current_value_str == new_value_str:
+            elif current_value_str == new_value_str:
                 continue
 
             # skip update if just the letter case changed for the primary key
@@ -668,17 +672,21 @@ class NetBoxObject:
 
             secondary_key_value = this_data_set.get(secondary_key)
             org_secondary_key_value = str(secondary_key_value)
+            read_from_netbox = False
 
             if isinstance(secondary_key_value, NetBoxObject):
+                read_from_netbox = True if secondary_key_value.nb_id != 0 else False
                 secondary_key_value = secondary_key_value.get_display_name()
 
-            if isinstance(secondary_key_value, dict):
+            elif isinstance(secondary_key_value, dict):
+                read_from_netbox = True if secondary_key_value.get("id", 0) != 0 else False
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
 
-            if secondary_key_value is None:
-                log.error(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
-                          f"got: {org_secondary_key_value}")
-                log.error("This could cause serious errors and lead to wrongly assigned object relations!!!")
+            if secondary_key_value is None and read_from_netbox is False:
+                print(this_data_set)
+                log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
+                            f"got: {org_secondary_key_value}")
+                log.warning("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
             my_name = f"{my_name} ({secondary_key_value})"
 
@@ -1056,6 +1064,24 @@ class NetBoxObject:
 
         return self.nb_id
 
+    def get_site_name(self, data=None):
+
+        if NBSite not in self.data_model.values():
+            return
+
+        this_data_set = data
+        if this_data_set is None:
+            this_data_set = self.data
+
+        this_site = this_data_set.get("site")
+        if this_site is not None:
+
+            if isinstance(this_site, NetBoxObject):
+                return this_site.get_display_name()
+
+            if isinstance(this_site, dict):
+                return this_site.get("name")
+
 
 class NBObjectList(list):
     """
@@ -1248,20 +1274,14 @@ class NBVLAN(NetBoxObject):
         my_name = super().get_display_name(data=data, including_second_key=including_second_key)
 
         this_data_set = data
-        if data is None:
+        if this_data_set is None:
             this_data_set = self.data
 
         # we use "site" as secondary key, otherwise fall back to "name"
         this_site = this_data_set.get("site")
         if this_site is not None:
             vlan_id = this_data_set.get(self.primary_key)
-
-            site_name = None
-            if isinstance(this_site, NetBoxObject):
-                site_name = this_site.get_display_name()
-
-            if isinstance(this_site, dict):
-                site_name = this_site.get("name")
+            site_name = self.get_site_name(this_data_set)
 
             if site_name is not None:
                 my_name = f"{vlan_id} ({site_name})"
@@ -1436,6 +1456,7 @@ class NBCluster(NetBoxObject):
     name = "cluster"
     api_path = "virtualization/clusters"
     primary_key = "name"
+    secondary_key = "group"
     prune = False
 
     def __init__(self, *args, **kwargs):
