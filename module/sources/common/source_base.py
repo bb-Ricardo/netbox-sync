@@ -422,6 +422,10 @@ class SourceBase:
                 "assigned_object_id": interface_object,
             }
 
+            # grab tenant from device/vm if prefix didn't provide a tenant
+            if possible_ip_tenant is None:
+                possible_ip_tenant = grab(device_object, "data.tenant")
+
             if not isinstance(this_ip_object, NBIPAddress):
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
