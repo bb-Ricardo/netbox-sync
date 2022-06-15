@@ -277,6 +277,9 @@ class SourceBase:
         if len(tagged_vlans) > 0:
             del (interface_data["tagged_vlans"])
 
+        # get device tenant
+        device_tenant = grab(device_object, "data.tenant")
+
         # add object to interface
         interface_data[interface_class.secondary_key] = device_object
 
@@ -424,7 +427,7 @@ class SourceBase:
 
             # grab tenant from device/vm if prefix didn't provide a tenant
             if possible_ip_tenant is None:
-                possible_ip_tenant = grab(device_object, "data.tenant")
+                possible_ip_tenant = device_tenant
 
             if not isinstance(this_ip_object, NBIPAddress):
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
@@ -490,6 +493,12 @@ class SourceBase:
                            f"untagged interface VLAN.")
 
             if matching_untagged_vlan is not None:
+
+                # add device tenant to VLAN if VLAN tenant is undefined
+                if matching_untagged_vlan is not None and \
+                        grab(matching_untagged_vlan, "data.tenant") is None and device_tenant is not None:
+                    matching_untagged_vlan.update(data={"tenant": device_tenant})
+
                 vlan_interface_data["untagged_vlan"] = matching_untagged_vlan
                 if grab(interface_object, "data.mode") is None:
                     vlan_interface_data["mode"] = "access"
@@ -503,6 +512,11 @@ class SourceBase:
                            f"tagged interface VLAN.")
             else:
                 matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
+
+            # add device tenant to VLAN if VLAN tenant is undefined
+            if matching_tagged_vlan is not None and \
+                    grab(matching_tagged_vlan, "data.tenant") is None and device_tenant is not None:
+                matching_tagged_vlan.update(data={"tenant": device_tenant})
 
             compiled_tagged_vlans.append(matching_tagged_vlan)
 
