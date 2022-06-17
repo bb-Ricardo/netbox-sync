@@ -176,7 +176,7 @@ async def reverse_lookup(resolver, ip):
     if response is not None and response.name is not None:
 
         # validate record to check if this is a valid host name
-        if all([bool(c.lower() in valid_hostname_characters) for c in response.name]):
+        if all([bool(str(c).lower() in valid_hostname_characters) for c in response.name]):
             resolved_name = response.name.lower()
             log.debug2(f"PTR record for {ip}: {resolved_name}")
 
