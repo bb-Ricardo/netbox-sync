@@ -1108,6 +1108,7 @@ class NBCustomField(NetBoxObject):
         "dcim.interface",
         "dcim.inventoryitem",
         "dcim.powerport",
+        "virtualization.clustergroup",
         "virtualization.vminterface",
         "virtualization.virtualmachine"
     ]
@@ -1429,7 +1430,8 @@ class NBClusterGroup(NetBoxObject):
             "name": 50,
             "slug": 50,
             "description": 200,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
 

@@ -1067,7 +1067,7 @@ class CheckRedfish(SourceBase):
                 "dcim.powerport"
             ],
             "type": "text",
-            "description": "Item Firmware"
+            "description": "Item firmware version"
         })
 
         # add inventory item type
@@ -1094,7 +1094,7 @@ class CheckRedfish(SourceBase):
             "label": "Speed",
             "content_types": ["dcim.inventoryitem"],
             "type": "text",
-            "description": "Describes the size of the inventory item if applicable"
+            "description": "Describes the speed of the inventory item if applicable"
         })
 
         # add health status
