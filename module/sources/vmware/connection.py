@@ -133,7 +133,8 @@ class VMWareHandler(SourceBase):
         "sync_parent_tags": False,
         "sync_custom_attributes": False,
         "host_custom_object_attributes": None,
-        "vm_custom_object_attributes": None
+        "vm_custom_object_attributes": None,
+        "set_source_name_as_cluster_group": False
     }
 
     deprecated_settings = {}
@@ -1316,15 +1317,34 @@ class VMWareHandler(SourceBase):
             datacenter object
 
         """
-        name = get_string_or_none(grab(obj, "name"))
+        if self.set_source_name_as_cluster_group is True:
+            name = self.name
+        else:
+            name = get_string_or_none(grab(obj, "name"))
 
         if name is None:
             return
 
         log.debug(f"Parsing vCenter datacenter: {name}")
 
+        object_data = {"name": name}
+
+        if self.set_source_name_as_cluster_group is True:
+            label = "Datacenter Name"
+            custom_field = self.add_update_custom_field({
+                "name": f"vcsa_{label}",
+                "label": label,
+                "content_types": ["virtualization.clustergroup"],
+                "type": "text",
+                "description": f"vCenter '{self.name}' synced custom attribute '{label}'"
+            })
+
+            object_data["custom_fields"] = {
+                grab(custom_field, "data.name"): get_string_or_none(grab(obj, "name"))
+            }
+
         self.add_object_to_cache(obj,
-                                 self.inventory.add_update_object(NBClusterGroup, data={"name": name}, source=self))
+                                 self.inventory.add_update_object(NBClusterGroup, data=object_data, source=self))
 
     def add_cluster(self, obj):
         """
@@ -1338,7 +1358,10 @@ class VMWareHandler(SourceBase):
         """
 
         name = get_string_or_none(grab(obj, "name"))
-        group = self.get_object_from_cache(self.get_parent_object_by_class(obj, vim.Datacenter))
+        if self.set_source_name_as_cluster_group is True:
+            group = self.inventory.get_by_data(NBClusterGroup, data={"name": self.name})
+        else:
+            group = self.get_object_from_cache(self.get_parent_object_by_class(obj, vim.Datacenter))
 
         if name is None or group is None:
             return
@@ -1521,7 +1544,10 @@ class VMWareHandler(SourceBase):
             return
 
         # get a site for this host
-        group = self.get_object_from_cache(self.get_parent_object_by_class(obj, vim.Datacenter))
+        if self.set_source_name_as_cluster_group is True:
+            group = self.inventory.get_by_data(NBClusterGroup, data={"name": self.name})
+        else:
+            group = self.get_object_from_cache(self.get_parent_object_by_class(obj, vim.Datacenter))
         group_name = grab(group, "data.name")
         site_name = self.get_site_name(NBDevice, name, f"{group_name}/{cluster_name}")
 
@@ -2026,7 +2052,10 @@ class VMWareHandler(SourceBase):
 
         parent_host = self.get_parent_object_by_class(grab(obj, "runtime.host"), vim.HostSystem)
         cluster = self.get_parent_object_by_class(parent_host, vim.ClusterComputeResource)
-        group = self.get_parent_object_by_class(cluster, vim.Datacenter)
+        if self.set_source_name_as_cluster_group is True:
+            group = self.inventory.get_by_data(NBClusterGroup, data={"name": self.name})
+        else:
+            group = self.get_parent_object_by_class(cluster, vim.Datacenter)
 
         if None in [parent_host, cluster, group]:
             log.error(f"Requesting host or cluster for Virtual Machine '{name}' failed. Skipping.")
