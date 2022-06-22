@@ -827,13 +827,13 @@ class CheckRedfish(SourceBase):
             # collect ip addresses
             nic_ips[port_name] = list()
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv4_address, self.permitted_subnets, port_name) is False:
+                if ip_valid_to_add_to_netbox(ipv4_address, self.permitted_subnets, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv4_address)
 
             for ipv6_address in grab(nic_port, "ipv6_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv6_address, self.permitted_subnets, port_name) is False:
+                if ip_valid_to_add_to_netbox(ipv6_address, self.permitted_subnets, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv6_address)
