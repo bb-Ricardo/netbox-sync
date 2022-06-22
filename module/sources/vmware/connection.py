@@ -134,7 +134,8 @@ class VMWareHandler(SourceBase):
         "sync_custom_attributes": False,
         "host_custom_object_attributes": None,
         "vm_custom_object_attributes": None,
-        "set_source_name_as_cluster_group": False
+        "set_source_name_as_cluster_group": False,
+        "sync_vm_dummy_interfaces": False
     }
 
     deprecated_settings = {}
@@ -2182,6 +2183,9 @@ class VMWareHandler(SourceBase):
         nic_data = dict()
         nic_ips = dict()
 
+        # track MAC addresses in order add dummy guest interfaces
+        processed_interface_macs = list()
+
         # get VM interfaces
         for vm_device in hardware_devices:
 
@@ -2206,6 +2210,8 @@ class VMWareHandler(SourceBase):
             int_network_vlan_id_ranges = None
             int_network_name = None
             int_network_private = False
+
+            processed_interface_macs.append(int_mac)
 
             # get info from local vSwitches
             if isinstance(device_backing, vim.vm.device.VirtualEthernetCard.NetworkBackingInfo):
@@ -2353,6 +2359,45 @@ class VMWareHandler(SourceBase):
                         vm_nic_data["tagged_vlans"] = tagged_vlan_list
 
             nic_data[int_full_name] = vm_nic_data
+
+        # find dummy guest NIC interfaces
+        if self.sync_vm_dummy_interfaces is True:
+            for guest_nic in grab(obj, "guest.net", fallback=list()):
+
+                # get matching guest NIC MAC
+                guest_nic_mac = normalize_mac_address(grab(guest_nic, "macAddress"))
+
+                # skip interfaces of MAC addresses for already known interfaces
+                if guest_nic_mac is None or guest_nic_mac in processed_interface_macs:
+                    continue
+
+                processed_interface_macs.append(guest_nic_mac)
+
+                int_full_name = "vNIC Dummy-{}".format("".join(guest_nic_mac.split(":")[-2:]))
+
+                log.debug2(f"Parsing dummy network device: {guest_nic_mac}")
+
+                if nic_ips.get(int_full_name) is None:
+                    nic_ips[int_full_name] = list()
+
+                # grab all valid interface IP addresses
+                for int_ip in grab(guest_nic, "ipConfig.ipAddress", fallback=list()):
+
+                    int_ip_address = f"{int_ip.ipAddress}/{int_ip.prefixLength}"
+
+                    if ip_valid_to_add_to_netbox(int_ip_address, self.permitted_subnets, int_full_name) is False:
+                        continue
+
+                    nic_ips[int_full_name].append(int_ip_address)
+
+                vm_nic_data = {
+                    "name": int_full_name,
+                    "virtual_machine": None,
+                    "mac_address": guest_nic_mac,
+                    "enabled": grab(guest_nic, "connected", fallback=False),
+                }
+
+                nic_data[int_full_name] = vm_nic_data
 
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
