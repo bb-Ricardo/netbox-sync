@@ -227,14 +227,27 @@ class VMWareHandler(SourceBase):
                 [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
 
             permitted_subnets = list()
-            for permitted_subnet in config_settings["permitted_subnets"]:
+            excluded_subnets = list()
+            # add "invisible" config option
+            self.settings["excluded_subnets"] = None
+
+            for subnet in config_settings["permitted_subnets"]:
+                excluded = False
+                if subnet[0] == "!":
+                    excluded = True
+                    subnet = subnet[1:].strip()
+
                 try:
-                    permitted_subnets.append(ip_network(permitted_subnet))
+                    if excluded is True:
+                        excluded_subnets.append(ip_network(subnet))
+                    else:
+                        permitted_subnets.append(ip_network(subnet))
                 except Exception as e:
                     log.error(f"Problem parsing permitted subnet: {e}")
                     validation_failed = True
 
             config_settings["permitted_subnets"] = permitted_subnets
+            config_settings["excluded_subnets"] = excluded_subnets
 
         # check include and exclude filter expressions
         for setting in [x for x in config_settings.keys() if "filter" in x]:
@@ -1959,7 +1972,7 @@ class VMWareHandler(SourceBase):
 
             int_v4 = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
 
-            if ip_valid_to_add_to_netbox(int_v4, self.permitted_subnets, vnic_name) is True:
+            if ip_valid_to_add_to_netbox(int_v4, self.permitted_subnets, self.excluded_subnets, vnic_name) is True:
                 vnic_ips[vnic_name].append(int_v4)
 
                 if vnic_is_primary is True and host_primary_ip4 is None:
@@ -1969,7 +1982,7 @@ class VMWareHandler(SourceBase):
 
                 int_v6 = "{}/{}".format(grab(ipv6_entry, "ipAddress"), grab(ipv6_entry, "prefixLength"))
 
-                if ip_valid_to_add_to_netbox(int_v6, self.permitted_subnets, vnic_name) is True:
+                if ip_valid_to_add_to_netbox(int_v6, self.permitted_subnets, self.excluded_subnets, vnic_name) is True:
                     vnic_ips[vnic_name].append(int_v6)
 
                     # set first valid IPv6 address as primary IPv6
@@ -2297,7 +2310,8 @@ class VMWareHandler(SourceBase):
 
                     int_ip_address = f"{int_ip.ipAddress}/{int_ip.prefixLength}"
 
-                    if ip_valid_to_add_to_netbox(int_ip_address, self.permitted_subnets, int_full_name) is False:
+                    if ip_valid_to_add_to_netbox(int_ip_address, self.permitted_subnets,
+                                                 self.excluded_subnets, int_full_name) is False:
                         continue
 
                     nic_ips[int_full_name].append(int_ip_address)
@@ -2385,7 +2399,8 @@ class VMWareHandler(SourceBase):
 
                     int_ip_address = f"{int_ip.ipAddress}/{int_ip.prefixLength}"
 
-                    if ip_valid_to_add_to_netbox(int_ip_address, self.permitted_subnets, int_full_name) is False:
+                    if ip_valid_to_add_to_netbox(int_ip_address, self.permitted_subnets,
+                                                 self.excluded_subnets, int_full_name) is False:
                         continue
 
                     nic_ips[int_full_name].append(int_ip_address)

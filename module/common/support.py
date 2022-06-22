@@ -45,7 +45,7 @@ def normalize_mac_address(mac_address=None):
     return mac_address
 
 
-def ip_valid_to_add_to_netbox(ip, permitted_subnets, interface_name=None):
+def ip_valid_to_add_to_netbox(ip, permitted_subnets, excluded_subnets=None, interface_name=None):
     """
     performs a couple of checks to see if an IP address is valid and allowed
     to be added to NetBox
@@ -59,8 +59,10 @@ def ip_valid_to_add_to_netbox(ip, permitted_subnets, interface_name=None):
     ----------
     ip: str
         IP address to validate
-    permitted_subnets:
+    permitted_subnets: list
         list of permitted subnets where each subnet/prefix is an instance of IP4Network or IP6Network
+    excluded_subnets: list
+        list of excluded subnets where each subnet/prefix is an instance of IP4Network or IP6Network
     interface_name: str
         name of the interface this IP shall be added. Important for meaningful log messages
 
@@ -75,6 +77,9 @@ def ip_valid_to_add_to_netbox(ip, permitted_subnets, interface_name=None):
 
     if permitted_subnets is None:
         return False
+
+    if excluded_subnets is None:
+        excluded_subnets = list()
 
     ip_text = f"'{ip}'"
     if interface_name is not None:
@@ -102,6 +107,11 @@ def ip_valid_to_add_to_netbox(ip, permitted_subnets, interface_name=None):
     for permitted_subnet in permitted_subnets:
         if ip_a in permitted_subnet:
             ip_permitted = True
+            break
+
+    for excluded_subnet in excluded_subnets:
+        if ip_a in excluded_subnet:
+            ip_permitted = False
             break
 
     if ip_permitted is False:
