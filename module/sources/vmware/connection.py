@@ -2414,6 +2414,10 @@ class VMWareHandler(SourceBase):
                     "enabled": grab(guest_nic, "connected", fallback=False),
                 }
 
+                if len(nic_ips.get(int_full_name, list())) == 0:
+                    log.debug(f"Dummy network interface '{int_full_name}' has no IP addresses assigned. Skipping")
+                    continue
+
                 nic_data[int_full_name] = vm_nic_data
 
         # add VM to inventory
