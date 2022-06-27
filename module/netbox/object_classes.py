@@ -1046,6 +1046,15 @@ class NetBoxObject:
             log.error(f"Found undefined data model key '{attribute_name}' for object '{self.__class__.__name__}'")
             return
 
+        data_type = self.data_model.get(attribute_name)
+        current_value = self.data.get(attribute_name)
+
+        if (data_type in [NBTagList, NBVLANList] or isinstance(data_type, (list, dict))) and len(current_value) == 0:
+            return
+
+        if current_value is None:
+            return
+
         # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
         log.info(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
         self.unset_items.append(attribute_name)
