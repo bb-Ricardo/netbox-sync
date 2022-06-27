@@ -135,7 +135,8 @@ class VMWareHandler(SourceBase):
         "host_custom_object_attributes": None,
         "vm_custom_object_attributes": None,
         "set_source_name_as_cluster_group": False,
-        "sync_vm_dummy_interfaces": False
+        "sync_vm_dummy_interfaces": False,
+        "disable_vlan_sync": False
     }
 
     deprecated_settings = {}
@@ -1205,7 +1206,8 @@ class VMWareHandler(SourceBase):
 
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
-                                                                       int_data, nic_ips.get(int_name, list()))
+                                                                       int_data, nic_ips.get(int_name, list()),
+                                                                       self.disable_vlan_sync)
 
             # add all interface IPs
             for ip_object in ip_address_objects:

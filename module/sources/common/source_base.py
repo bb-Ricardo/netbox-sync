@@ -214,7 +214,8 @@ class SourceBase:
 
         return current_longest_matching_prefix
 
-    def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None):
+    def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None,
+                             disable_vlan_sync=False):
         """
         Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
         Validates/enriches data in following order:
@@ -237,6 +238,8 @@ class SourceBase:
             dictionary with interface attributes to add to this interface
         interface_ips: list
             list of ip addresses which are assigned to this interface
+        disable_vlan_sync: bool
+            if True, VLAN information will be removed from interface before creating/updating interface
 
         Returns
         -------
@@ -277,6 +280,11 @@ class SourceBase:
         if len(tagged_vlans) > 0:
             del (interface_data["tagged_vlans"])
 
+        # delete information about any vlans if sync is disable.
+        if disable_vlan_sync is True:
+            untagged_vlan = None
+            tagged_vlans = list()
+
         # get device tenant
         device_tenant = grab(device_object, "data.tenant")
 
@@ -288,6 +296,11 @@ class SourceBase:
             interface_object = self.inventory.add_object(interface_class, data=interface_data, source=self)
         else:
             interface_object.update(data=interface_data, source=self)
+
+        # delete information about any vlans if sync is disable.
+        if disable_vlan_sync is True:
+            interface_object.unset_attribute("untagged_vlan")
+            interface_object.unset_attribute("tagged_vlans")
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
