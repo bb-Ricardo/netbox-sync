@@ -136,7 +136,8 @@ class VMWareHandler(SourceBase):
         "vm_custom_object_attributes": None,
         "set_source_name_as_cluster_group": False,
         "sync_vm_dummy_interfaces": False,
-        "disable_vlan_sync": False
+        "disable_vlan_sync": False,
+        "host_management_interface_match": "management, mgmt"
     }
 
     deprecated_settings = {}
@@ -319,6 +320,14 @@ class VMWareHandler(SourceBase):
                     validation_failed = True
 
             config_settings["custom_dns_servers"] = tested_custom_dns_servers
+
+        if len(config_settings.get("host_management_interface_match") or "") > 0:
+            host_management_interface_match = config_settings.get("host_management_interface_match")
+        else:
+            host_management_interface_match = self.settings.get("host_management_interface_match")
+
+        config_settings["host_management_interface_match"] = \
+            [x.strip() for x in host_management_interface_match.split(",")]
 
         if validation_failed is True:
             log.error("Config validation failed. Exit!")
@@ -1963,9 +1972,11 @@ class VMWareHandler(SourceBase):
 
             # check if interface has the default route or is described as management interface
             vnic_is_primary = False
-            if "management" in vnic_description.lower() or \
-               "mgmt" in vnic_description.lower() or \
-               grab(vnic, "spec.ipRouteSpec") is not None:
+            for mgnt_match in self.host_management_interface_match:
+                if mgnt_match in vnic_description.lower():
+                    vnic_is_primary = True
+
+            if grab(vnic, "spec.ipRouteSpec") is not None:
 
                 vnic_is_primary = True
 
