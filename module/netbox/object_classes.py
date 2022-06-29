@@ -666,9 +666,13 @@ class NetBoxObject:
 
         secondary_key = getattr(self, "secondary_key", None)
         enforce_secondary_key = getattr(self, "enforce_secondary_key", False)
+        include_secondary_key_if_present = getattr(self, "include_secondary_key_if_present", False)
 
-        if my_name is not None and secondary_key is not None and \
-                (enforce_secondary_key is True or including_second_key is True):
+        if secondary_key is None:
+            return my_name
+
+        if my_name is not None and True in \
+                [enforce_secondary_key, including_second_key, include_secondary_key_if_present]:
 
             secondary_key_value = this_data_set.get(secondary_key)
             org_secondary_key_value = str(secondary_key_value)
@@ -682,8 +686,7 @@ class NetBoxObject:
                 read_from_netbox = True if secondary_key_value.get("id", 0) != 0 else False
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
 
-            if secondary_key_value is None and read_from_netbox is False:
-                print(this_data_set)
+            if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False:
                 log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
                             f"got: {org_secondary_key_value}")
                 log.warning("This could cause serious errors and lead to wrongly assigned object relations!!!")
@@ -1469,6 +1472,7 @@ class NBCluster(NetBoxObject):
     primary_key = "name"
     secondary_key = "group"
     prune = False
+    include_secondary_key_if_present = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
