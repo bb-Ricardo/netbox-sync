@@ -4,6 +4,9 @@
 # Except those related to git
 !.git*
 
+# publi.sh
+!.publi.sh
+
 # python cache
 __pycache__
 
