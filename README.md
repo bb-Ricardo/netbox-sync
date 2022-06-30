@@ -32,9 +32,12 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 ### Software
 * python >= 3.6
 * packaging
-* requests==2.24.0
-* pyvmomi==6.7.3
+* urllib3==1.26.9
+* wheel
+* requests==2.27.1
+* pyvmomi==7.0.3
 * aiodns==2.0.0
+* setuptools>=62.00.0
 
 ### Environment
 * NetBox >= 2.9
@@ -155,7 +158,7 @@ It is recommended to set log level to `DEBUG2` this way the program should tell 
 Also use the dry run option `-n` at the beginning to avoid changes directly in NetBox.
 
 ## Setup
-Copy the [settings-example.ini](settings-example.ini) sample settings file to `settings.ini`.
+Copy the [settings-example.ini](https://github.com/bb-Ricardo/netbox-sync/blob/main/settings-example.ini) sample settings file to `settings.ini`.
 All options are described in the example file.
 
 ## Cron job
@@ -186,8 +189,8 @@ Program will exit if all retries failed!
 
 ## Supported sources
 Check out the documentations for the different sources
-* [vmware](docs/source_vmware.md)
-* [check_redfish](docs/source_check_redfish.md)
+* [vmware](https://github.com/bb-Ricardo/netbox-sync/blob/main/docs/source_vmware.md)
+* [check_redfish](https://github.com/bb-Ricardo/netbox-sync/blob/main/docs/source_check_redfish.md)
 
 If you have multiple vCenter instances or check_redfish folders just add another source with the same type
 in the **same** file.
@@ -231,6 +234,6 @@ source tag but will not be deleted. Theses are "shared" objects might be used
 by different NetBox objects
 
 # License
->You can check out the full license [here](LICENSE.txt)
+>You can check out the full license [here](https://github.com/bb-Ricardo/netbox-sync/blob/main/LICENSE.txt)
 
 This project is licensed under the terms of the **MIT** license.
