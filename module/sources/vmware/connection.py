@@ -112,14 +112,17 @@ class VMWareHandler(SourceBase):
         "cluster_site_relation": None,
         "cluster_tag_relation": None,
         "cluster_tenant_relation": None,
+        "cluster_tag_source": None,
         "host_role_relation": None,
         "host_site_relation": None,
         "host_tag_relation": None,
         "host_tenant_relation": None,
+        "host_tag_source": None,
         "vm_platform_relation": None,
         "vm_role_relation": None,
         "vm_tag_relation": None,
         "vm_tenant_relation": None,
+        "vm_tag_source": None,
         "dns_name_lookup": False,
         "custom_dns_servers": None,
         "set_primary_ip": "when-undefined",
@@ -129,8 +132,6 @@ class VMWareHandler(SourceBase):
         "skip_srm_placeholder_vms": False,
         "strip_host_domain_name": False,
         "strip_vm_domain_name": False,
-        "sync_tags": False,
-        "sync_parent_tags": False,
         "sync_custom_attributes": False,
         "host_custom_object_attributes": None,
         "vm_custom_object_attributes": None,
@@ -144,7 +145,9 @@ class VMWareHandler(SourceBase):
 
     removed_settings = {
         "netbox_host_device_role": "host_role_relation",
-        "netbox_vm_device_role": "vm_role_relation"
+        "netbox_vm_device_role": "vm_role_relation",
+        "sync_tags": "host_tag_source', 'vm_tag_source' or 'cluster_tag_source",
+        "sync_parent_tags": "host_tag_source', 'vm_tag_source' or 'cluster_tag_source"
     }
 
     init_successful = False
@@ -305,6 +308,19 @@ class VMWareHandler(SourceBase):
 
             config_settings[custom_object_option] = quoted_split(config_settings.get(custom_object_option))
 
+        for tag_source in [x for x in self.settings.keys() if "tag_source" in x]:
+
+            config_settings[tag_source] = quoted_split(config_settings.get(tag_source))
+
+            valid_tag_sources = [
+                "object", "parent_folder_1", "parent_folder_2", "cluster", "datacenter"
+            ]
+            for tag_source_option in config_settings[tag_source]:
+                if tag_source_option not in valid_tag_sources:
+                    log.error(f"Tag source '{tag_source_option}' for '{tag_source}' option invalid.")
+                    validation_failed = True
+                    continue
+
         if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
 
             custom_dns_servers = \
@@ -416,16 +432,17 @@ class VMWareHandler(SourceBase):
         if self.tag_session is not None:
             return True
 
-        if bool(self.sync_tags) is False and bool(self.sync_parent_tags) is False:
+        if len(self.cluster_tag_source) + len(self.host_tag_source) + len(self.vm_tag_source) == 0:
             return False
 
         log.debug(f"Starting vCenter API connection to '{self.host_fqdn}'")
 
-        if bool(self.sync_tags) is True or bool(self.sync_parent_tags) is True:
+        if len(self.cluster_tag_source) > 0 or len(self.host_tag_source) > 0 or len(self.vm_tag_source) > 0:
 
             if vsphere_automation_sdk_available is False:
-                self.__setattr__("sync_tags", False)
-                self.__setattr__("sync_parent_tags", False)
+                self.__setattr__("cluster_tag_source", list())
+                self.__setattr__("host_tag_source", list())
+                self.__setattr__("vm_tag_source", list())
                 log.warning(f"Unable to import Python 'vsphere-automation-sdk'. Tag syncing will be disabled.")
                 return False
 
@@ -452,8 +469,9 @@ class VMWareHandler(SourceBase):
                 session=session)
 
         except Exception as e:
-            self.__setattr__("sync_tags", False)
-            self.__setattr__("sync_parent_tags", False)
+            self.__setattr__("cluster_tag_source", list())
+            self.__setattr__("host_tag_source", list())
+            self.__setattr__("vm_tag_source", list())
             log.warning(f"Unable to connect to vCenter API instance '{self.host_fqdn}' on port {self.port}: {e}")
             log.warning("Tag syncing will be disabled.")
             return False
@@ -811,7 +829,7 @@ class VMWareHandler(SourceBase):
                            f"based on the primary IPv6 '{primary_ip6}'")
                 return device
 
-    def get_object_tags(self, obj, parent=False):
+    def get_vmware_object_tags(self, obj):
         """
         Get tags from vCenter for submitted object.
 
@@ -819,9 +837,6 @@ class VMWareHandler(SourceBase):
         ----------
         obj
             pyvmomi object to retrieve tags for
-        parent: bool
-            True if request is performed for a parent object otherwise False
-            Needed for own recursion
 
         Returns
         -------
@@ -833,7 +848,7 @@ class VMWareHandler(SourceBase):
 
         tag_list = list()
         if vsphere_automation_sdk_available is True:
-            if bool(self.sync_tags) is True:
+            if len(self.cluster_tag_source) + len(self.host_tag_source) + len(self.vm_tag_source) > 0:
                 # noinspection PyBroadException
                 try:
                     object_tag_ids = self.tag_session.tagging.TagAssociation.list_attached_tags(
@@ -857,8 +872,61 @@ class VMWareHandler(SourceBase):
                         "description": tag_description
                     }))
 
-            if bool(self.sync_parent_tags) is True and parent is False:
-                tag_list.extend(self.get_object_tags(obj.parent, parent=True))
+        return tag_list
+
+    def collect_object_tags(self, obj):
+        """
+        collect tags from object based on the config settings
+
+        Parameters
+        ----------
+        obj
+            pyvmomi object to retrieve tags for
+
+        Returns
+        -------
+        tag_list: list
+            list of NBTag objets retrieved from vCenter for this object
+        """
+
+        if obj is None:
+            return
+
+        tag_list = list()
+
+        if isinstance(obj, vim.ClusterComputeResource):
+            tag_source = self.cluster_tag_source
+        elif isinstance(obj, vim.HostSystem):
+            tag_source = self.host_tag_source
+        elif isinstance(obj, vim.VirtualMachine):
+            tag_source = self.vm_tag_source
+        else:
+            raise ValueError(f"Tags for '{grab(obj, '_wsdlName')}' are not supported")
+
+        if len(tag_source) == 0 or vsphere_automation_sdk_available is False:
+            return tag_list
+
+        log.debug2(f"Collecting tags for {obj.name}")
+
+        if "object" in tag_source:
+            tag_list.extend(self.get_vmware_object_tags(obj))
+        if "parent_folder_1" in tag_source or "parent_folder_2" in tag_source:
+            parent_folder_1 = self.get_parent_object_by_class(obj, vim.Folder)
+            if parent_folder_1 is not None:
+                if "parent_folder_1" in tag_source:
+                    tag_list.extend(self.get_vmware_object_tags(parent_folder_1))
+                if "parent_folder_2" in tag_source:
+                    parent_folder_2 = self.get_parent_object_by_class(obj, vim.Folder)
+                    if parent_folder_2 is not None:
+                        tag_list.extend(self.get_vmware_object_tags(parent_folder_2))
+        if not isinstance(obj, vim.ClusterComputeResource) and "cluster" in tag_source:
+            cluster = self.get_parent_object_by_class(obj, vim.ClusterComputeResource)
+            if cluster is not None:
+                tag_list.extend(self.get_vmware_object_tags(cluster))
+        if "datacenter" in tag_source:
+            datacenter = self.get_parent_object_by_class(obj, vim.Datacenter)
+            if datacenter is not None:
+                tag_list.extend(self.get_vmware_object_tags(datacenter))
 
         return tag_list
 
@@ -1415,7 +1483,7 @@ class VMWareHandler(SourceBase):
             data["tenant"] = {"name": tenant_name}
 
         cluster_tags = self.get_object_relation(full_cluster_name, "cluster_tag_relation")
-        cluster_tags.extend(self.get_object_tags(obj))
+        cluster_tags.extend(self.collect_object_tags(obj))
         if len(cluster_tags) > 0:
             data["tags"] = cluster_tags
 
@@ -1663,7 +1731,7 @@ class VMWareHandler(SourceBase):
         host_tags = self.get_object_relation(name, "host_tag_relation")
 
         # get vCenter tags
-        host_tags.extend(self.get_object_tags(obj))
+        host_tags.extend(self.collect_object_tags(obj))
 
         # prepare host data model
         host_data = {
@@ -2153,7 +2221,7 @@ class VMWareHandler(SourceBase):
         vm_tags = self.get_object_relation(name, "vm_tag_relation")
 
         # get vCenter tags
-        vm_tags.extend(self.get_object_tags(obj))
+        vm_tags.extend(self.collect_object_tags(obj))
 
         vm_data = {
             "name": name,
