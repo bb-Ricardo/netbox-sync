@@ -318,6 +318,9 @@ class NetBoxInventory:
                                     grab(device_vm_object, "data.status") is not None and \
                                     "active" not in str(grab(device_vm_object, "data.status")):
 
+                                if netbox_handler.orphaned_tag in this_object.get_tags():
+                                    this_object.remove_tags(netbox_handler.orphaned_tag)
+
                                 log.debug2(f"{device_vm_object.name} '{device_vm_object.get_display_name()}' has IP "
                                            f"'{this_object.get_display_name()}' assigned but is in status "
                                            f"{grab(device_vm_object, 'data.status')}. "
