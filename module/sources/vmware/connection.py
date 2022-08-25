@@ -1487,7 +1487,19 @@ class VMWareHandler(SourceBase):
         if len(cluster_tags) > 0:
             data["tags"] = cluster_tags
 
-        self.add_object_to_cache(obj, self.inventory.add_update_object(NBCluster, data=data, source=self))
+        # try to find cluster including cluster group
+        cluster_object = self.inventory.get_by_data(NBCluster, data=data)
+
+        # if this fails try without cluster group
+        if cluster_object is None:
+            cluster_object = self.inventory.get_by_data(NBCluster, data={x: y for x, y in data.items() if x != "group"})
+
+        if cluster_object is not None:
+            cluster_object.update(data=data, source=self)
+        else:
+            cluster_object = self.inventory.add_update_object(NBCluster, data=data, source=self)
+
+        self.add_object_to_cache(obj, cluster_object)
 
     def add_virtual_switch(self, obj):
         """
