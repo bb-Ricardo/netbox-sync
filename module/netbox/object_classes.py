@@ -569,7 +569,8 @@ class NetBoxObject:
         # if data model contains a slug we need to handle it
         if "slug" in self.data_model.keys() and \
                 parsed_data.get("slug") is None and \
-                parsed_data.get(self.primary_key) is not None:
+                parsed_data.get(self.primary_key) is not None and \
+                self.data.get("slug") in [None, ""]:
 
             parsed_data["slug"] = self.format_slug(text=parsed_data.get(self.primary_key),
                                                    max_len=self.data_model.get("slug"))
