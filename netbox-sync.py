@@ -25,8 +25,8 @@ from module.netbox.object_classes import *
 from module.sources import instantiate_sources
 
 
-__version__ = "1.3.0-beta1"
-__version_date__ = "2022-08-24"
+__version__ = "1.3.0-beta2"
+__version_date__ = "2022-08-25"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
 __description__ = "NetBox Sync"
 __license__ = "MIT"
