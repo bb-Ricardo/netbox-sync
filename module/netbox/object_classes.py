@@ -1211,8 +1211,8 @@ class NBTenant(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 30,
-            "slug": 50,
+            "name": 100,
+            "slug": 100,
             "comments": str,
             "description": 200,
             "tags": NBTagList
@@ -1228,8 +1228,8 @@ class NBSite(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 50,
-            "slug": 50,
+            "name": 100,
+            "slug": 100,
             "comments": str,
             "tenant": NBTenant,
             "tags": NBTagList
@@ -1245,7 +1245,7 @@ class NBVRF(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 50,
+            "name": 100,
             "description": 200,
             "tenant": NBTenant,
             "tags": NBTagList
@@ -1372,8 +1372,8 @@ class NBManufacturer(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 50,
-            "slug": 50,
+            "name": 100,
+            "slug": 100,
             "description": 200,
             "tags": NBTagList
         }
@@ -1388,10 +1388,9 @@ class NBDeviceType(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "model": 50,
-            "slug": 50,
+            "model": 100,
+            "slug": 100,
             "part_number": 50,
-            "description": 200,
             "manufacturer": NBManufacturer,
             "tags": NBTagList
         }
@@ -1423,8 +1422,8 @@ class NBClusterType(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 50,
-            "slug": 50,
+            "name": 100,
+            "slug": 100,
             "description": 200,
             "tags": NBTagList
         }
@@ -1439,8 +1438,8 @@ class NBClusterGroup(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 50,
-            "slug": 50,
+            "name": 100,
+            "slug": 100,
             "description": 200,
             "tags": NBTagList,
             "custom_fields": NBCustomField
@@ -1456,8 +1455,8 @@ class NBDeviceRole(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
-            "name": 50,
-            "slug": 50,
+            "name": 100,
+            "slug": 100,
             "color": 6,
             "description": 200,
             "vm_role": bool,
