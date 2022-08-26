@@ -1466,7 +1466,7 @@ class VMWareHandler(SourceBase):
 
         # check for full name and then for cluster name only
         if self.passes_filter(full_cluster_name, self.cluster_include_filter, self.cluster_exclude_filter) is False \
-                and self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
+                or self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
             return
 
         site_name = self.get_site_name(NBCluster, full_cluster_name)
