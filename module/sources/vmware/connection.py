@@ -1082,7 +1082,7 @@ class VMWareHandler(SourceBase):
             match_found = False
             if object_regex.match(name):
                 resolved_name = single_relation.get("assigned_name")
-                log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}.")
+                log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}")
                 resolved_list.append(resolved_name)
                 match_found = True
 
@@ -1094,7 +1094,7 @@ class VMWareHandler(SourceBase):
 
                     resolved_name = single_relation.get("assigned_name")
                     log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) "
-                               f"for {stripped_name}.")
+                               f"for {stripped_name}")
                     resolved_list.append(resolved_name)
 
         if grab(f"{relation}".split("_"), "1") == "tag":
@@ -1488,7 +1488,9 @@ class VMWareHandler(SourceBase):
             data["tags"] = cluster_tags
 
         # try to find cluster including cluster group
+        log.debug2("Trying to find a matching existing cluster")
         cluster_object = None
+        fallback_cluster_object = None
         for cluster_candidate in self.inventory.get_all_items(NBCluster):
             if grab(cluster_candidate, "data.name") != name:
                 continue
@@ -1496,21 +1498,32 @@ class VMWareHandler(SourceBase):
             # try to find a cluster with matching site
             if cluster_candidate.get_site_name() == site_name:
                 cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
                 break
 
             if grab(cluster_candidate, "data.group") is not None and \
                     grab(cluster_candidate, "data.group.data.name") == group_name:
                 cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'cluster group' are matching")
                 break
 
             if grab(cluster_candidate, "data.tenant") is not None and \
                     tenant_name is not None and \
                     grab(cluster_candidate, "data.tenant.data.name") == tenant_name:
                 cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'tenant' are matching")
                 break
 
-            cluster_object = cluster_candidate
-            break
+            # if only the name matches and there are multiple cluster with the same name we choose the first
+            # cluster returned from netbox. This needs to be done to not ignore possible matches in one of
+            # the next iterations
+            if fallback_cluster_object is None:
+                fallback_cluster_object = cluster_candidate
+
+        if cluster_object is None and fallback_cluster_object is not None:
+            log.debug2(f"Found an existing cluster where 'name' "
+                       f"matches (NetBox id: {fallback_cluster_object.get_nb_reference()})")
+            cluster_object = fallback_cluster_object
 
         if cluster_object is not None:
             cluster_object.update(data=data, source=self)
