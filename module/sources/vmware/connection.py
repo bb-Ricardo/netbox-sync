@@ -1488,11 +1488,29 @@ class VMWareHandler(SourceBase):
             data["tags"] = cluster_tags
 
         # try to find cluster including cluster group
-        cluster_object = self.inventory.get_by_data(NBCluster, data=data)
+        cluster_object = None
+        for cluster_candidate in self.inventory.get_all_items(NBCluster):
+            if grab(cluster_candidate, "data.name") != name:
+                continue
 
-        # if this fails try without cluster group
-        if cluster_object is None:
-            cluster_object = self.inventory.get_by_data(NBCluster, data={x: y for x, y in data.items() if x != "group"})
+            # try to find a cluster with matching site
+            if cluster_candidate.get_site_name() == site_name:
+                cluster_object = cluster_candidate
+                break
+
+            if grab(cluster_candidate, "data.group") is not None and \
+                    grab(cluster_candidate, "data.group.data.name") == group_name:
+                cluster_object = cluster_candidate
+                break
+
+            if grab(cluster_candidate, "data.tenant") is not None and \
+                    tenant_name is not None and \
+                    grab(cluster_candidate, "data.tenant.data.name") == tenant_name:
+                cluster_object = cluster_candidate
+                break
+
+            cluster_object = cluster_candidate
+            break
 
         if cluster_object is not None:
             cluster_object.update(data=data, source=self)
