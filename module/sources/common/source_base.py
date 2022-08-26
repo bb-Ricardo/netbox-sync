@@ -215,7 +215,7 @@ class SourceBase:
         return current_longest_matching_prefix
 
     def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None,
-                             disable_vlan_sync=False):
+                             disable_vlan_sync=False, ip_tenant_inheritance_order=None):
         """
         Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
         Validates/enriches data in following order:
@@ -240,6 +240,8 @@ class SourceBase:
             list of ip addresses which are assigned to this interface
         disable_vlan_sync: bool
             if True, VLAN information will be removed from interface before creating/updating interface
+        ip_tenant_inheritance_order: list
+            list of order in which the IP tenant should be assigned, possible values: device, prefix, disabled
 
         Returns
         -------
@@ -321,7 +323,7 @@ class SourceBase:
             log.debug2(f"Trying to find prefix for IP: {ip_object}")
 
             possible_ip_vrf = None
-            possible_ip_tenant = None
+            prefix_tenant = None
 
             # test for site prefixes first
             matching_site_name = site_name
@@ -349,7 +351,7 @@ class SourceBase:
                                 f"does not match network prefix length '{this_prefix}'!")
 
                 possible_ip_vrf = grab(matching_ip_prefix, "data.vrf")
-                possible_ip_tenant = grab(matching_ip_prefix, "data.tenant")
+                prefix_tenant = grab(matching_ip_prefix, "data.tenant")
 
                 matching_ip_prefixes.append(matching_ip_prefix)
 
@@ -439,16 +441,26 @@ class SourceBase:
             }
 
             # grab tenant from device/vm if prefix didn't provide a tenant
-            if possible_ip_tenant is None:
-                possible_ip_tenant = device_tenant
+            ip_tenant = None
+            if isinstance(ip_tenant_inheritance_order, list) and "disabled" not in ip_tenant_inheritance_order:
+
+                ip_tenant_inheritance_order_copy = ip_tenant_inheritance_order.copy()
+                while len(ip_tenant_inheritance_order_copy) > 0:
+                    ip_tenant_source = ip_tenant_inheritance_order_copy.pop(0)
+                    if ip_tenant_source == "device" and device_tenant is not None:
+                        ip_tenant = device_tenant
+                        break
+                    if ip_tenant_source == "prefix" and prefix_tenant is not None:
+                        ip_tenant = prefix_tenant
+                        break
 
             if not isinstance(this_ip_object, NBIPAddress):
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                 if possible_ip_vrf is not None:
                     nic_ip_data["vrf"] = possible_ip_vrf
-                if possible_ip_tenant is not None:
-                    nic_ip_data["tenant"] = possible_ip_tenant
+                if ip_tenant is not None:
+                    nic_ip_data["tenant"] = ip_tenant
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
 
@@ -460,8 +472,8 @@ class SourceBase:
                 if grab(this_ip_object, "data.vrf") is None and possible_ip_vrf is not None:
                     nic_ip_data["vrf"] = possible_ip_vrf
 
-                if grab(this_ip_object, "data.tenant") is None and possible_ip_tenant is not None:
-                    nic_ip_data["tenant"] = possible_ip_tenant
+                if grab(this_ip_object, "data.tenant") is None and ip_tenant is not None:
+                    nic_ip_data["tenant"] = ip_tenant
 
                 this_ip_object.update(data=nic_ip_data, source=self)
 
