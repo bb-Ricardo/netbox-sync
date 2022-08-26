@@ -1470,9 +1470,9 @@ class NBCluster(NetBoxObject):
     name = "cluster"
     api_path = "virtualization/clusters"
     primary_key = "name"
-    secondary_key = "group"
+    secondary_key = "site"
     prune = False
-    include_secondary_key_if_present = True
+    #include_secondary_key_if_present = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
