@@ -519,11 +519,6 @@ class SourceBase:
 
             if matching_untagged_vlan is not None:
 
-                # add device tenant to VLAN if VLAN tenant is undefined
-                if matching_untagged_vlan is not None and \
-                        grab(matching_untagged_vlan, "data.tenant") is None and device_tenant is not None:
-                    matching_untagged_vlan.update(data={"tenant": device_tenant})
-
                 vlan_interface_data["untagged_vlan"] = matching_untagged_vlan
                 if grab(interface_object, "data.mode") is None:
                     vlan_interface_data["mode"] = "access"
@@ -537,11 +532,6 @@ class SourceBase:
                            f"tagged interface VLAN.")
             else:
                 matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
-
-            # add device tenant to VLAN if VLAN tenant is undefined
-            if matching_tagged_vlan is not None and \
-                    grab(matching_tagged_vlan, "data.tenant") is None and device_tenant is not None:
-                matching_tagged_vlan.update(data={"tenant": device_tenant})
 
             compiled_tagged_vlans.append(matching_tagged_vlan)
 
