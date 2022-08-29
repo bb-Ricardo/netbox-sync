@@ -24,6 +24,10 @@ class NetBoxInventory:
     source_tags_of_disabled_sources = list()
 
     def __init__(self):
+
+        # track NetBox API version and provided it for all sources
+        self.netbox_api_version = "0.0.0"
+
         for object_type in NetBoxObject.__subclasses__():
 
             self.base_structure[object_type.name] = list()

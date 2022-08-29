@@ -73,11 +73,11 @@ class NetBoxHandler:
     # set bogus default version
     version = "0.0.1"
 
-    def __init__(self, settings=None, inventory=None, nb_version=None):
+    def __init__(self, settings=None, inventory=None, nb_sync_version=None):
 
         self.settings = settings
         self.inventory = inventory
-        self.version = nb_version
+        self.version = nb_sync_version
 
         self.parse_config_settings(settings)
 
@@ -112,6 +112,8 @@ class NetBoxHandler:
         if version.parse(api_version) < version.parse(self.minimum_api_version):
             do_error_exit(f"NetBox API version '{api_version}' not supported. "
                           f"Minimum API version: {self.minimum_api_version}")
+
+        self.inventory.netbox_api_version = api_version
 
         self.setup_caching()
 
