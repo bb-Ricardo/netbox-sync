@@ -21,6 +21,7 @@ RUN chown -R netbox-sync:netbox-sync /app
 # once this is fixed, switch back to: pip3 install --upgrade pip setuptools
 RUN cd /app && \
     pip3 install --upgrade pip && \
+    pip3 install wheel && \
     pip3 install -r requirements.txt && \
     pip3 install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 

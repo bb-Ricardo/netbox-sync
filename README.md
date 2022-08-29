@@ -62,6 +62,7 @@ apt-get update && apt-get install python3-venv
 ```
 
 ## Clone repo and install dependencies
+* If you need to use python 3.6 then you would need `requirements_3.6.txt` to install requirements
 * download and setup of virtual environment
 ```shell
 cd /opt
@@ -69,6 +70,8 @@ git clone https://github.com/bb-Ricardo/netbox-sync.git
 cd netbox-sync
 python3 -m venv .venv
 . .venv/bin/activate
+pip3 install --upgrade pip || pip install --upgrade pip
+pip3 install wheel || pip install wheel
 pip3 install -r requirements.txt || pip install -r requirements.txt
 ```
 
