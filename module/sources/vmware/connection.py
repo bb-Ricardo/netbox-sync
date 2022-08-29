@@ -18,6 +18,8 @@ from urllib.parse import unquote
 import urllib3
 import requests
 # noinspection PyUnresolvedReferences
+from packaging import version
+# noinspection PyUnresolvedReferences
 from pyVim import connect
 # noinspection PyUnresolvedReferences
 from pyVmomi import vim
@@ -2289,6 +2291,11 @@ class VMWareHandler(SourceBase):
             "vcpus": grab(obj, "config.hardware.numCPU"),
             "disk": disk
         }
+
+        # Add adaption for change in NetBox 3.3.0 VM model
+        # issue: https://github.com/netbox-community/netbox/issues/10131#issuecomment-1225783758
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.3.0"):
+            vm_data["site"] = {"name": site_name}
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}

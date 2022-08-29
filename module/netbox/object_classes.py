@@ -1536,6 +1536,7 @@ class NBVM(NetBoxObject):
             "comments": str,
             "primary_ip4": NBIPAddress,
             "primary_ip6": NBIPAddress,
+            "site": NBSite,
             "tags": NBTagList,
             "tenant": NBTenant,
             "custom_fields": NBCustomField
