@@ -536,6 +536,10 @@ class VMWareHandler(SourceBase):
                 "view_type": vim.ClusterComputeResource,
                 "view_handler": self.add_cluster
             },
+            "single host cluster": {
+                "view_type": vim.ComputeResource,
+                "view_handler": self.add_cluster
+            },
             "network": {
                 "view_type": vim.dvs.DistributedVirtualPortgroup,
                 "view_handler": self.add_port_group
@@ -909,7 +913,7 @@ class VMWareHandler(SourceBase):
 
         tag_list = list()
 
-        if isinstance(obj, vim.ClusterComputeResource):
+        if isinstance(obj, (vim.ClusterComputeResource, vim.ComputeResource)):
             tag_source = self.cluster_tag_source
         elif isinstance(obj, vim.HostSystem):
             tag_source = self.host_tag_source
@@ -934,10 +938,13 @@ class VMWareHandler(SourceBase):
                     parent_folder_2 = self.get_parent_object_by_class(obj, vim.Folder)
                     if parent_folder_2 is not None:
                         tag_list.extend(self.get_vmware_object_tags(parent_folder_2))
-        if not isinstance(obj, vim.ClusterComputeResource) and "cluster" in tag_source:
+        if not isinstance(obj, (vim.ClusterComputeResource, vim.ComputeResource)) and "cluster" in tag_source:
             cluster = self.get_parent_object_by_class(obj, vim.ClusterComputeResource)
             if cluster is not None:
                 tag_list.extend(self.get_vmware_object_tags(cluster))
+            single_cluster = self.get_parent_object_by_class(obj, vim.ComputeResource)
+            if single_cluster is not None:
+                tag_list.extend(self.get_vmware_object_tags(single_cluster))
         if "datacenter" in tag_source:
             datacenter = self.get_parent_object_by_class(obj, vim.Datacenter)
             if datacenter is not None:
@@ -1476,6 +1483,11 @@ class VMWareHandler(SourceBase):
         if name is None or group is None:
             return
 
+        # if we're parsing a single host "cluster" and the hosts domain name should be stripped,
+        # then the ComputeResources domain name gets stripped as well
+        if isinstance(obj, vim.ComputeResource) and self.strip_host_domain_name is True:
+            name = name.split(".")[0]
+
         group_name = grab(group, "data.name")
         full_cluster_name = f"{group_name}/{name}"
 
@@ -1666,14 +1678,13 @@ class VMWareHandler(SourceBase):
 
         # manage site and cluster
         cluster_object = self.get_parent_object_by_class(obj, vim.ClusterComputeResource)
-        cluster_name = get_string_or_none(grab(cluster_object, "name"))
+
+        if cluster_object is None:
+            cluster_object = self.get_parent_object_by_class(obj, vim.ComputeResource)
 
         if cluster_object is None:
             log.error(f"Requesting cluster for host '{name}' failed. Skipping.")
             return
-
-        # get cluster object
-        nb_cluster_object = self.get_object_from_cache(cluster_object)
 
         if log.level == DEBUG3:
             try:
@@ -1682,19 +1693,14 @@ class VMWareHandler(SourceBase):
             except Exception as e:
                 log.error(e)
 
-        # handle standalone hosts
-        if cluster_name == name or (self.strip_host_domain_name is True and cluster_name.split(".")[0] == name):
+        # get cluster object
+        nb_cluster_object = self.get_object_from_cache(cluster_object)
 
-            # apply strip_domain_name to cluster as well if activated
-            if self.strip_host_domain_name is True:
-                cluster_name = cluster_name.split(".")[0]
-
-            log.debug2(f"Host name and cluster name are equal '{cluster_name}'. "
-                       f"Assuming this host is a 'standalone' host.")
-
-        elif nb_cluster_object is None:
+        if nb_cluster_object is None:
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
             return
+
+        cluster_name = get_string_or_none(grab(nb_cluster_object, "data.name"))
 
         # get a site for this host
         if self.set_source_name_as_cluster_group is True:
@@ -1718,18 +1724,6 @@ class VMWareHandler(SourceBase):
         # filter hosts by name
         if self.passes_filter(name, self.host_include_filter, self.host_exclude_filter) is False:
             return
-
-        # add host as single cluster to cluster list
-        if cluster_name == name:
-            # add cluster to NetBox
-            cluster_data = {
-                "name": cluster_name,
-                "type": {"name": "VMware ESXi"},
-                "group": group,
-                "site": {"name": site_name}
-            }
-            nb_cluster_object = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
-            self.add_object_to_cache(cluster_object, nb_cluster_object)
 
         #
         # Collecting data
@@ -2100,8 +2094,8 @@ class VMWareHandler(SourceBase):
 
             # check if interface has the default route or is described as management interface
             vnic_is_primary = False
-            for mgnt_match in self.host_management_interface_match:
-                if mgnt_match in vnic_description.lower():
+            for management_match in self.host_management_interface_match:
+                if management_match in vnic_description.lower():
                     vnic_is_primary = True
 
             if grab(vnic, "spec.ipRouteSpec") is not None:
@@ -2206,32 +2200,31 @@ class VMWareHandler(SourceBase):
         self.processed_vm_uuid.append(vm_uuid)
 
         parent_host = self.get_parent_object_by_class(grab(obj, "runtime.host"), vim.HostSystem)
-        cluster = self.get_parent_object_by_class(parent_host, vim.ClusterComputeResource)
+        cluster_object = self.get_parent_object_by_class(parent_host, vim.ClusterComputeResource)
+
+        # get single host 'cluster' if VM runs on one
+        if cluster_object is None:
+            cluster_object = self.get_parent_object_by_class(parent_host, vim.ComputeResource)
+
         if self.set_source_name_as_cluster_group is True:
             group = self.inventory.get_by_data(NBClusterGroup, data={"name": self.name})
         else:
-            group = self.get_parent_object_by_class(cluster, vim.Datacenter)
+            group = self.get_parent_object_by_class(cluster_object, vim.Datacenter)
 
-        if None in [parent_host, cluster, group]:
+        if None in [parent_host, cluster_object, group]:
             log.error(f"Requesting host or cluster for Virtual Machine '{name}' failed. Skipping.")
             return
 
-        parent_name = grab(parent_host, "name")
-        cluster_name = grab(cluster, "name")
-        cluster_full_name = f"{group.name}/{cluster_name}"
-
-        nb_cluster_object = self.get_object_from_cache(cluster)
-
-        # honor strip_host_domain_name
-        if cluster_name is not None and self.strip_host_domain_name is True and \
-                parent_name.split(".")[0] == cluster_name.split(".")[0]:
-            cluster_name = cluster_name.split(".")[0]
-            cluster_full_name = f"{group.name}/{cluster_name}"
+        nb_cluster_object = self.get_object_from_cache(cluster_object)
 
         # check VM cluster
         if nb_cluster_object is None:
             log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
             return
+
+        parent_name = grab(parent_host, "name")
+        cluster_name = grab(nb_cluster_object, "data.name")
+        cluster_full_name = f"{group.name}/{cluster_name}"
 
         if name in self.processed_vm_names.get(cluster_full_name, list()):
             log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
