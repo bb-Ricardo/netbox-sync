@@ -140,6 +140,7 @@ class VMWareHandler(SourceBase):
         "set_source_name_as_cluster_group": False,
         "sync_vm_dummy_interfaces": False,
         "disable_vlan_sync": False,
+        "track_vm_host": False,
         "host_management_interface_match": "management, mgmt",
         "ip_tenant_inheritance_order": "device, prefix"
     }
@@ -2289,6 +2290,13 @@ class VMWareHandler(SourceBase):
         # issue: https://github.com/netbox-community/netbox/issues/10131#issuecomment-1225783758
         if version.parse(self.inventory.netbox_api_version) >= version.parse("3.3.0"):
             vm_data["site"] = {"name": site_name}
+
+            if self.track_vm_host:
+                vm_data["device"] = {
+                    "name": parent_name,
+                    "cluster": nb_cluster_object,
+                    "site": {"name": site_name}
+                }
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}

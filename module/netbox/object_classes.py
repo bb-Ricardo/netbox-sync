@@ -1539,6 +1539,7 @@ class NBVM(NetBoxObject):
             "site": NBSite,
             "tags": NBTagList,
             "tenant": NBTenant,
+            "device": NBDevice,
             "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
