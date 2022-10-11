@@ -1759,4 +1759,19 @@ class NBPowerPort(NetBoxObject):
         }
         super().__init__(*args, **kwargs)
 
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        # take care of "maximum_draw" API limitation
+        maximum_draw = data.get("maximum_draw")
+        if maximum_draw is not None:
+            try:
+                maximum_draw = int(maximum_draw)
+            except ValueError:
+                data.pop("maximum_draw")
+
+            if maximum_draw < 1:
+                data.pop("maximum_draw")
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
 # EOF
