@@ -2170,7 +2170,7 @@ class VMWareHandler(SourceBase):
         #
 
         # get VM UUID
-        vm_uuid = grab(obj, "config.uuid")
+        vm_uuid = grab(obj, "config.instanceUuid")
 
         if vm_uuid is None or vm_uuid in self.processed_vm_uuid:
             return
