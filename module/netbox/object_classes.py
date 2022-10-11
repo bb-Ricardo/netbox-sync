@@ -1700,7 +1700,7 @@ class NBFHRPGroupItem(NetBoxObject):
         It is used to handle IP address object properly.
     """
     name = "FHRP group"
-    api_path = "/ipam/fhrp-groups"
+    api_path = "ipam/fhrp-groups"
     primary_key = "group_id"
     prune = False
 
