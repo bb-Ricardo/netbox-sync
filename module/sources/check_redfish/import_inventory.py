@@ -194,6 +194,14 @@ class CheckRedfish(SourceBase):
 
             # try to get device by supplied NetBox id
             inventory_id = grab(self.inventory_file_content, "meta.inventory_id")
+
+            # parse inventory id to int as all NetBox ids are type integer
+            try:
+                inventory_id = int(inventory_id)
+            except ValueError:
+                log.error(f"Value for meta.inventory_id '{inventory_id}' must be an integer."
+                          f"Cannot use inventory_id to match device in NetBox.")
+
             self.device_object = self.inventory.get_by_id(NBDevice, inventory_id)
 
             # try to find device by serial of first system in inventory
