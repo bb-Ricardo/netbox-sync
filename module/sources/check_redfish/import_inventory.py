@@ -155,14 +155,27 @@ class CheckRedfish(SourceBase):
                 [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
 
             permitted_subnets = list()
-            for permitted_subnet in config_settings["permitted_subnets"]:
+            excluded_subnets = list()
+            # add "invisible" config option
+            self.settings["excluded_subnets"] = None
+
+            for subnet in config_settings["permitted_subnets"]:
+                excluded = False
+                if subnet[0] == "!":
+                    excluded = True
+                    subnet = subnet[1:].strip()
+
                 try:
-                    permitted_subnets.append(ip_network(permitted_subnet))
+                    if excluded is True:
+                        excluded_subnets.append(ip_network(subnet))
+                    else:
+                        permitted_subnets.append(ip_network(subnet))
                 except Exception as e:
                     log.error(f"Problem parsing permitted subnet: {e}")
                     validation_failed = True
 
             config_settings["permitted_subnets"] = permitted_subnets
+            config_settings["excluded_subnets"] = excluded_subnets
 
         if validation_failed is True:
             log.error("Config validation failed. Exit!")
@@ -835,13 +848,15 @@ class CheckRedfish(SourceBase):
             # collect ip addresses
             nic_ips[port_name] = list()
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv4_address, self.permitted_subnets, interface_name=port_name) is False:
+                if ip_valid_to_add_to_netbox(ipv4_address, self.permitted_subnets,
+                                             excluded_subnets=self.excluded_subnets, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv4_address)
 
             for ipv6_address in grab(nic_port, "ipv6_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv6_address, self.permitted_subnets, interface_name=port_name) is False:
+                if ip_valid_to_add_to_netbox(ipv6_address, self.permitted_subnets,
+                                             excluded_subnets=self.excluded_subnets, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv6_address)
