@@ -49,6 +49,7 @@ class NetBoxHandler:
         "timeout": 30,
         "max_retry_attempts": 4,
         "use_caching": True,
+        "cache_directory_location": "cache",
         "ignore_unknown_source_object_pruning": False
     }
 
@@ -126,7 +127,7 @@ class NetBoxHandler:
         if self.use_caching is False:
             return
 
-        cache_folder_name = "cache"
+        cache_folder_name = self.cache_directory_location
 
         base_dir = os.sep.join(__file__.split(os.sep)[0:-3])
         if cache_folder_name[0] != os.sep:
