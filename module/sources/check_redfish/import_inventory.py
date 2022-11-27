@@ -340,7 +340,7 @@ class CheckRedfish(SourceBase):
 
         current_ps.sort(key=lambda x: grab(x, "data.name"))
 
-        ps_index = 0
+        ps_index = 1
         ps_items = list()
         for ps in grab(self.inventory_file_content, "inventory.power_supply", fallback=list()):
 
@@ -408,7 +408,17 @@ class CheckRedfish(SourceBase):
                 ps_data["custom_fields"] = {"firmware": firmware, "health": health_status}
 
             # add/update power supply data
-            ps_object = grab(current_ps, f"{ps_index}")
+            ps_object = None
+            for current_ps_item in current_ps:
+                current_ps_item_name = grab(current_ps_item, "data.name", fallback="")
+                if ps_name.lower() in current_ps_item_name.lower():
+                    ps_object = current_ps_item
+                    break
+
+                if current_ps_item_name.split(" ")[-1] == str(ps_index):
+                    ps_object = current_ps_item
+                    break
+
             if ps_object is None:
                 self.inventory.add_object(NBPowerPort, data=ps_data, source=self)
             else:
@@ -417,6 +427,7 @@ class CheckRedfish(SourceBase):
 
                 data_to_update = self.patch_data(ps_object, ps_data, self.overwrite_power_supply_attributes)
                 ps_object.update(data=data_to_update, source=self)
+                current_ps.remove(ps_object)
 
             ps_index += 1
 
