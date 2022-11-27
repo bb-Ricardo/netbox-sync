@@ -314,7 +314,7 @@ class NetBoxHandler:
 
         try:
             result = response.json()
-        except json.decoder.JSONDecodeError:
+        except (json.decoder.JSONDecodeError, requests.exceptions.JSONDecodeError):
             pass
 
         if response.status_code == 200:
