@@ -137,6 +137,14 @@ def main():
     # prune orphaned objects from NetBox
     nb_handler.prune_data()
 
+    # loop over sources and patch netbox data
+    for source in sources:
+        # closing all open connections
+        source.finish()
+
+    # closing NetBox connection
+    nb_handler.finish()
+
     # finish
     log.info("Completed NetBox Sync in %s" % get_relative_time(datetime.now() - start_time))
 

@@ -7,7 +7,6 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-import atexit
 import datetime
 import pprint
 import re
@@ -185,6 +184,7 @@ class VMWareHandler(SourceBase):
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
+        self._sdk_instance = None
         self.create_sdk_session()
 
         if self.session is None:
@@ -412,15 +412,14 @@ class VMWareHandler(SourceBase):
         try:
             if self.proxy_host is not None and self.proxy_port is not None:
                 smart_stub = connect.SmartStubAdapter(**connection_params)
-                instance = vim.ServiceInstance('ServiceInstance', smart_stub)
-                content = instance.RetrieveContent()
+                self._sdk_instance = vim.ServiceInstance('ServiceInstance', smart_stub)
+                content = self._sdk_instance.RetrieveContent()
                 content.sessionManager.Login(self.username, self.password, None)
             else:
 
-                instance = connect.SmartConnect(**connection_params)
+                self._sdk_instance = connect.SmartConnect(**connection_params)
 
-            atexit.register(connect.Disconnect, instance)
-            self.session = instance.RetrieveContent()
+            self.session = self._sdk_instance.RetrieveContent()
 
         except vim.fault.InvalidLogin as e:
             log.error(f"{def_exception_text} {e.msg}")
@@ -495,6 +494,21 @@ class VMWareHandler(SourceBase):
         log.info(f"Successfully connected to vCenter API '{self.host_fqdn}'")
 
         return True
+
+    def finish(self):
+
+        # closing tag session
+        if self._sdk_instance is not None:
+            try:
+                connect.Disconnect(self._sdk_instance)
+            except Exception as e:
+                log.error(f"unable to close vCenter SDK connection: {e}")
+
+        # closing SDK session
+        try:
+            del self.tag_session
+        except Exception as e:
+            log.error(f"unable to close vCenter API instance connection: {e}")
 
     def apply(self):
         """

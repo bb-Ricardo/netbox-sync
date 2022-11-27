@@ -234,6 +234,14 @@ class NetBoxHandler:
 
         return session
 
+    def finish(self):
+
+        # closing NetBox connection
+        try:
+            self.session.close()
+        except Exception as e:
+            log.error(f"unable to close NetBox connection: {e}")
+
     def get_api_version(self):
         """
         Perform a basic GET request to extract NetBox API version from header

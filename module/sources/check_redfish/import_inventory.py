@@ -211,8 +211,8 @@ class CheckRedfish(SourceBase):
             # parse inventory id to int as all NetBox ids are type integer
             try:
                 inventory_id = int(inventory_id)
-            except ValueError:
-                log.error(f"Value for meta.inventory_id '{inventory_id}' must be an integer."
+            except (ValueError, TypeError):
+                log.error(f"Value for meta.inventory_id '{inventory_id}' must be an integer. "
                           f"Cannot use inventory_id to match device in NetBox.")
 
             self.device_object = self.inventory.get_by_id(NBDevice, inventory_id)

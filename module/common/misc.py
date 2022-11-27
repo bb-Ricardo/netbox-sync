@@ -124,6 +124,7 @@ def do_error_exit(log_text):
 
 def get_relative_time(delta):
     """
+    https://stackoverflow.com/a/13756038
     return a human readable string of a datetime object delta
 
     Parameters
@@ -136,17 +137,20 @@ def get_relative_time(delta):
     str: formatted string of time delta
     """
 
-    parts = [float(x) for x in str(delta).split(":")]
-
-    hour, minute, second = "{:1.0f}:{:1.0f}:{:1.2f}".format(*parts).split(":")
+    seconds = int(delta.total_seconds())
     return_string = list()
 
-    if hour != "0":
-        return_string.append(f"{hour} hour%s" % plural(int(hour)))
-    if minute != "0":
-        return_string.append(f"{minute} minute%s" % plural(int(minute)))
+    periods = [
+        ('day', 60 * 60 * 24),
+        ('hour', 60 * 60),
+        ('minute', 60),
+        ('second', 1)
+    ]
 
-    return_string.append(f"{second} seconds")
+    for period_name, period_seconds in periods:
+        if seconds >= period_seconds:
+            period_value, seconds = divmod(seconds, period_seconds)
+            return_string.append(f"{period_value} {period_name}{plural(period_value)}")
 
     return ", ".join(return_string)
 
