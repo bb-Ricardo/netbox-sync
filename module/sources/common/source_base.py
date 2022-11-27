@@ -37,6 +37,10 @@ class SourceBase:
     inventory = None
     source_tag = None
 
+    # dummy function to implement a finish call for each source
+    def finish(self):
+        pass
+
     def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=None):
         """
         Try to match current object interfaces to discovered ones. This will be done
