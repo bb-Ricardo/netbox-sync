@@ -147,6 +147,8 @@ class CheckRedfish(SourceBase):
             validation_failed = True
 
         # check permitted ip subnets
+        permitted_subnets = list()
+        excluded_subnets = list()
         if config_settings.get("permitted_subnets") is None:
             log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
                      f"No IP addresses will be populated to NetBox!")
@@ -154,8 +156,6 @@ class CheckRedfish(SourceBase):
             config_settings["permitted_subnets"] = \
                 [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
 
-            permitted_subnets = list()
-            excluded_subnets = list()
             # add "invisible" config option
             self.settings["excluded_subnets"] = None
 
@@ -174,8 +174,8 @@ class CheckRedfish(SourceBase):
                     log.error(f"Problem parsing permitted subnet: {e}")
                     validation_failed = True
 
-            config_settings["permitted_subnets"] = permitted_subnets
-            config_settings["excluded_subnets"] = excluded_subnets
+        config_settings["permitted_subnets"] = permitted_subnets
+        config_settings["excluded_subnets"] = excluded_subnets
 
         if validation_failed is True:
             log.error("Config validation failed. Exit!")
