@@ -230,6 +230,7 @@ class VMWareHandler(SourceBase):
         # check permitted ip subnets
         permitted_subnets = list()
         excluded_subnets = list()
+        self.settings["excluded_subnets"] = excluded_subnets
         if config_settings.get("permitted_subnets") is None:
             log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
                      f"No IP addresses will be populated to NetBox!")
