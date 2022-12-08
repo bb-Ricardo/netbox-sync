@@ -350,7 +350,6 @@ class CheckRedfish(SourceBase):
                 continue
 
             ps_name = get_string_or_none(grab(ps, "name"))
-            input_voltage = get_string_or_none(grab(ps, "input_voltage"))
             ps_type = get_string_or_none(grab(ps, "type"))
             bay = get_string_or_none(grab(ps, "bay"))
             capacity_in_watt = grab(ps, "capacity_in_watt")
@@ -366,8 +365,6 @@ class CheckRedfish(SourceBase):
                 ps_name += f" {bay}"
 
             name_details = list()
-            if input_voltage is not None:
-                name_details.append(f"{input_voltage}V")
             if ps_type is not None:
                 name_details.append(f"{ps_type}")
 
@@ -417,7 +414,7 @@ class CheckRedfish(SourceBase):
                     ps_object = current_ps_item
                     break
 
-                if current_ps_item_name.split(" ")[-1] == str(ps_index):
+                if str(ps_index) in current_ps_item_name.split(" "):
                     ps_object = current_ps_item
                     break
 
