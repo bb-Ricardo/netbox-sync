@@ -1329,10 +1329,10 @@ class VMWareHandler(SourceBase):
             # add all interface IPs
             for ip_object in ip_address_objects:
 
-                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
-
                 if ip_object is None:
                     continue
+
+                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
 
                 # continue if address is not a primary IP
                 if ip_interface_object not in [primary_ipv4_object, primary_ipv6_object]:
