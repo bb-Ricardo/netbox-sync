@@ -617,12 +617,6 @@ class NetBoxHandler:
 
         for this_object in self.inventory.get_all_items(nb_object_sub_class):
 
-            # resolve dependencies
-            for dependency in this_object.get_dependencies():
-                if dependency not in self.resolved_dependencies:
-                    log.debug2("Resolving dependency: %s" % dependency.name)
-                    self.update_object(dependency)
-
             # unset data if requested
             if unset is True:
 
@@ -654,6 +648,12 @@ class NetBoxHandler:
                     log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {unset_data}")
 
                 continue
+
+            # resolve dependencies
+            for dependency in this_object.get_dependencies():
+                if dependency not in self.resolved_dependencies:
+                    log.debug2("Resolving dependency: %s" % dependency.name)
+                    self.update_object(dependency)
 
             data_to_patch = dict()
             unresolved_dependency_data = dict()

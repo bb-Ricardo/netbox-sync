@@ -1059,6 +1059,9 @@ class NetBoxObject:
         if current_value is None:
             return
 
+        if attribute_name in self.unset_items:
+            return
+
         # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
         log.info(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
         self.unset_items.append(attribute_name)
@@ -1648,8 +1651,20 @@ class NBIPAddress(NetBoxObject):
         object_type = data.get("assigned_object_type")
         assigned_object = data.get("assigned_object_id")
 
+        # used to track changes in object primary IP assignments
+        previous_ip_device_vm = None
+        is_primary_ipv4_of_previous_device = False
+        is_primary_ipv6_of_previous_device = False
+
         # we got an object data structure where we have to find the object
         if read_from_netbox is False and assigned_object is not None:
+
+            # get current device to make sure to unset primary ip before moving IP address
+            previous_ip_device_vm = self.get_device_vm()
+            if grab(previous_ip_device_vm, "data.primary_ip4") is self:
+                is_primary_ipv4_of_previous_device = True
+            if grab(previous_ip_device_vm, "data.primary_ip6") is self:
+                is_primary_ipv6_of_previous_device = True
 
             if not isinstance(assigned_object, NetBoxObject):
 
@@ -1665,6 +1680,17 @@ class NBIPAddress(NetBoxObject):
         # we need to tell NetBox which object type this is meant to be
         if "assigned_object_id" in self.updated_items:
             self.updated_items.append("assigned_object_type")
+
+        if assigned_object is None or previous_ip_device_vm is None:
+            return
+
+        if previous_ip_device_vm is self.get_device_vm():
+            return
+
+        if is_primary_ipv4_of_previous_device is True:
+            previous_ip_device_vm.unset_attribute("primary_ip4")
+        if is_primary_ipv6_of_previous_device is True:
+            previous_ip_device_vm.unset_attribute("primary_ip6")
 
     def get_interface(self):
         o_id = self.data.get("assigned_object_id")
