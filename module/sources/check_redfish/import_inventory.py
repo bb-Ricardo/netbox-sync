@@ -329,6 +329,12 @@ class CheckRedfish(SourceBase):
             device_data["serial"] = serial
         if name is not None and self.overwrite_host_name is True:
             device_data["name"] = name
+        if get_string_or_none(grab(system, "manufacturer")) == "Dell Inc.":
+            chassi = grab(self.inventory_file_content, "inventory.chassi.0")
+            if chassi and "sku" in chassi:
+                device_data["custom_fields"]["service_tag"] = chassi["sku"]
+            else:
+                log.warning(f"No chassi or sku data found for '{self.device_object.get_display_name()}' in inventory file.")
 
         self.device_object.update(data=device_data, source=self)
 
@@ -1141,6 +1147,17 @@ class CheckRedfish(SourceBase):
             ],
             "type": "text",
             "description": "Shows the currently discovered health status"
+        })
+
+        # add ServiceTag
+        self.add_update_custom_field({
+            "name": "service_tag",
+            "label": "Service Tag",
+            "content_types": [
+                "dcim.device"
+            ],
+            "type": "text",
+            "description": "Dell Service Tag"
         })
 
 # EOF
