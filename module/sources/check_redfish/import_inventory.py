@@ -311,12 +311,13 @@ class CheckRedfish(SourceBase):
 
         serial = get_string_or_none(grab(system, "serial"))
         name = get_string_or_none(grab(system, "host_name"))
+        manufacturer = get_string_or_none(grab(system, "manufacturer"))
 
         device_data = {
             "device_type": {
                 "model": get_string_or_none(grab(system, "model")),
                 "manufacturer": {
-                    "name": get_string_or_none(grab(system, "manufacturer"))
+                    "name": manufacturer
                 },
             },
             "status": status,
@@ -329,12 +330,25 @@ class CheckRedfish(SourceBase):
             device_data["serial"] = serial
         if name is not None and self.overwrite_host_name is True:
             device_data["name"] = name
-        if get_string_or_none(grab(system, "manufacturer")) == "Dell Inc.":
+        if "dell" in str(manufacturer).lower():
             chassi = grab(self.inventory_file_content, "inventory.chassi.0")
             if chassi and "sku" in chassi:
-                device_data["custom_fields"]["service_tag"] = chassi["sku"]
+
+                # add ServiceTag
+                self.add_update_custom_field({
+                    "name": "service_tag",
+                    "label": "Service Tag",
+                    "content_types": [
+                        "dcim.device"
+                    ],
+                    "type": "text",
+                    "description": "Dell Service Tag"
+                })
+
+                device_data["custom_fields"]["service_tag"] = chassi.get("sku")
             else:
-                log.warning(f"No chassi or sku data found for '{self.device_object.get_display_name()}' in inventory file.")
+                log.warning(f"No chassi or sku data found for "
+                            f"'{self.device_object.get_display_name()}' in inventory file.")
 
         self.device_object.update(data=device_data, source=self)
 
@@ -1147,17 +1161,6 @@ class CheckRedfish(SourceBase):
             ],
             "type": "text",
             "description": "Shows the currently discovered health status"
-        })
-
-        # add ServiceTag
-        self.add_update_custom_field({
-            "name": "service_tag",
-            "label": "Service Tag",
-            "content_types": [
-                "dcim.device"
-            ],
-            "type": "text",
-            "description": "Dell Service Tag"
         })
 
 # EOF
