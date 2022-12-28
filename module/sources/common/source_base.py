@@ -280,11 +280,11 @@ class SourceBase:
         # vlans get added later once we have the prefixes for the IP addresses
         untagged_vlan = interface_data.get("untagged_vlan")
         if untagged_vlan is not None:
-            del(interface_data["untagged_vlan"])
+            del interface_data["untagged_vlan"]
 
         tagged_vlans = interface_data.get("tagged_vlans") or list()
         if len(tagged_vlans) > 0:
-            del (interface_data["tagged_vlans"])
+            del interface_data["tagged_vlans"]
 
         # delete information about any vlans if sync is disable.
         if disable_vlan_sync is True:
@@ -390,10 +390,11 @@ class SourceBase:
                 if not ip_address_string.startswith(f"{ip_object.ip.compressed}/"):
                     continue
 
-                current_nic = grab(ip, "data.assigned_object_id")
+                current_ip_nic = ip.get_interface()
+                current_ip_device = ip.get_device_vm()
 
                 # is it our current ip interface?
-                if current_nic == interface_object:
+                if current_ip_nic == interface_object:
                     this_ip_object = ip
                     break
 
@@ -405,23 +406,28 @@ class SourceBase:
                     continue
 
                 # IP address is not assigned to any interface
-                if not isinstance(current_nic, (NBInterface, NBVMInterface)):
+                if not isinstance(current_ip_nic, (NBInterface, NBVMInterface)):
+                    this_ip_object = ip
+                    break
+
+                # IP address already belongs to the device but maybe to a different interface
+                if device_object is current_ip_device:
                     this_ip_object = ip
                     break
 
                 # get current IP interface status
-                current_nic_enabled = grab(current_nic, "data.enabled", fallback=True)
+                current_nic_enabled = grab(current_ip_nic, "data.enabled", fallback=True)
                 this_nic_enabled = grab(interface_object, "data.enabled", fallback=True)
 
                 if current_nic_enabled is True and this_nic_enabled is False:
-                    log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_object}'"
+                    log.debug(f"Current interface '{current_ip_nic.get_display_name()}' for IP '{ip_object}'"
                               f" is enabled and this one '{interface_object.get_display_name()}' is disabled. "
                               f"IP assignment skipped!")
                     skip_this_ip = True
                     break
 
                 if current_nic_enabled is False and this_nic_enabled is True:
-                    log.debug(f"Current interface '{current_nic.get_display_name()}' for IP '{ip_object}'"
+                    log.debug(f"Current interface '{current_ip_nic.get_display_name()}' for IP '{ip_object}'"
                               f" is disabled and this one '{interface_object.get_display_name()}' is enabled. "
                               f"IP will be assigned to this interface.")
 
@@ -429,7 +435,7 @@ class SourceBase:
 
                 if current_nic_enabled == this_nic_enabled:
                     state = "enabled" if this_nic_enabled is True else "disabled"
-                    log.warning(f"Current interface '{current_nic.get_display_name()}' for IP "
+                    log.warning(f"Current interface '{current_ip_nic.get_display_name()}' for IP "
                                 f"'{ip_object}' and this one '{interface_object.get_display_name()}' are "
                                 f"both {state}. "
                                 f"IP assignment skipped because it is unclear which one is the correct one!")
