@@ -139,6 +139,8 @@ class VMWareHandler(SourceBase):
         "set_source_name_as_cluster_group": False,
         "sync_vm_dummy_interfaces": False,
         "disable_vlan_sync": False,
+        "overwrite_device_interface_name": True,
+        "overwrite_vm_interface_name": True,
         "track_vm_host": False,
         "host_management_interface_match": "management, mgmt",
         "ip_tenant_inheritance_order": "device, prefix"
@@ -1951,7 +1953,6 @@ class VMWareHandler(SourceBase):
                     })
 
             pnic_data = {
-                "name": unquote(pnic_name),
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(pnic, "mac")),
                 "enabled": bool(grab(pnic, "linkSpeed")),
@@ -1959,6 +1960,8 @@ class VMWareHandler(SourceBase):
                 "type": NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type()
             }
 
+            if self.overwrite_device_interface_name is False:
+                pnic_data["name"] = unquote(pnic_name)
             if pnic_mtu is not None:
                 pnic_data["mtu"] = pnic_mtu
             if pnic_mode is not None:
@@ -2058,13 +2061,15 @@ class VMWareHandler(SourceBase):
 
             # add data
             vnic_data = {
-                "name": unquote(vnic_name),
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
                 "enabled": True,    # ESXi vmk interface is enabled by default
                 "mtu": grab(vnic, "spec.mtu"),
                 "type": "virtual"
             }
+
+            if self.overwrite_device_interface_name is False:
+                vnic_data["name"] = unquote(vnic_name)
 
             if vnic_mode is not None:
                 vnic_data["mode"] = vnic_mode
@@ -2493,13 +2498,14 @@ class VMWareHandler(SourceBase):
                         vm_primary_ip6 = int_ip_address
 
             vm_nic_data = {
-                "name": unquote(int_full_name),
                 "virtual_machine": None,
                 "mac_address": int_mac,
                 "description": unquote(int_description),
                 "enabled": int_connected,
             }
 
+            if self.overwrite_vm_interface_name is False:
+                vm_nic_data["name"] = unquote(int_full_name)
             if int_mtu is not None:
                 vm_nic_data["mtu"] = int_mtu
             if int_mode is not None:
