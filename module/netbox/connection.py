@@ -638,13 +638,7 @@ class NetBoxHandler:
                 returned_object_data = self.request(nb_object_sub_class, req_type="PATCH",
                                                     data=unset_data, nb_id=this_object.nb_id)
 
-                if returned_object_data is not None:
-
-                    this_object.update(data=returned_object_data, read_from_netbox=True)
-
-                    this_object.resolve_relations()
-
-                else:
+                if returned_object_data is None:
                     log.error(f"Request Failed for {nb_object_sub_class.name}. Used data: {unset_data}")
 
                 continue

@@ -210,6 +210,7 @@ class VMWareHandler(SourceBase):
         self.processed_vm_uuid = list()
         self.object_cache = dict()
         self.parsing_vms_the_first_time = True
+        self.objects_to_reevaluate = list()
 
     def parse_config_settings(self, config_settings):
         """
@@ -633,6 +634,15 @@ class VMWareHandler(SourceBase):
                 view_details.get("view_handler")(obj)
 
             container_view.Destroy()
+
+        for obj in self.objects_to_reevaluate:
+            log.info("Parsing objects which were marked to be reevaluated")
+            if isinstance(obj, vim.HostSystem):
+                self.add_host(obj)
+            elif isinstance(obj, vim.VirtualMachine):
+                self.add_virtual_machine(obj)
+            else:
+                log.error(f"Unable to handle reevaluation of {obj} (type: {type(obj)})")
 
         self.update_basic_data()
 
@@ -1151,7 +1161,7 @@ class VMWareHandler(SourceBase):
             return resolved_name
 
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
-                                   nic_ips=None, p_ipv4=None, p_ipv6=None):
+                                   nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None):
         """
         Add/update device/VM object in inventory based on gathered data.
 
@@ -1210,6 +1220,8 @@ class VMWareHandler(SourceBase):
             primary IPv4 as string including netmask/prefix
         p_ipv6: str
             primary IPv6 as string including netmask/prefix
+        vmware_object: (vim.HostSystem, vim.VirtualMachine)
+            vmware object to pass on to 'add_update_interface' method to setup reevaluation
 
         """
 
@@ -1321,12 +1333,15 @@ class VMWareHandler(SourceBase):
 
         for int_name, int_data in nic_data.items():
 
+            if object_type == NBDevice and self.overwrite_device_interface_name is False:
+                del int_data["name"]
+            if object_type == NBVM and self.overwrite_vm_interface_name is False:
+                del int_data["name"]
+
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
                                                                        int_data, nic_ips.get(int_name, list()),
-                                                                       disable_vlan_sync=self.disable_vlan_sync,
-                                                                       ip_tenant_inheritance_order=
-                                                                       self.ip_tenant_inheritance_order)
+                                                                       vmware_object=vmware_object)
 
             # add all interface IPs
             for ip_object in ip_address_objects:
@@ -1728,7 +1743,7 @@ class VMWareHandler(SourceBase):
         group_name = grab(group, "data.name")
         site_name = self.get_site_name(NBDevice, name, f"{group_name}/{cluster_name}")
 
-        if name in self.processed_host_names.get(site_name, list()):
+        if name in self.processed_host_names.get(site_name, list()) and obj not in self.objects_to_reevaluate:
             log.warning(f"Host '{name}' for site '{site_name}' already parsed. "
                         "Make sure to use unique host names. Skipping")
             return
@@ -1953,6 +1968,7 @@ class VMWareHandler(SourceBase):
                     })
 
             pnic_data = {
+                "name": unquote(pnic_name),
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(pnic, "mac")),
                 "enabled": bool(grab(pnic, "linkSpeed")),
@@ -1960,8 +1976,6 @@ class VMWareHandler(SourceBase):
                 "type": NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type()
             }
 
-            if self.overwrite_device_interface_name is False:
-                pnic_data["name"] = unquote(pnic_name)
             if pnic_mtu is not None:
                 pnic_data["mtu"] = pnic_mtu
             if pnic_mode is not None:
@@ -2061,15 +2075,13 @@ class VMWareHandler(SourceBase):
 
             # add data
             vnic_data = {
+                "name": unquote(vnic_name),
                 "device": None,     # will be set once we found the correct device
                 "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
                 "enabled": True,    # ESXi vmk interface is enabled by default
                 "mtu": grab(vnic, "spec.mtu"),
                 "type": "virtual"
             }
-
-            if self.overwrite_device_interface_name is False:
-                vnic_data["name"] = unquote(vnic_name)
 
             if vnic_mode is not None:
                 vnic_data["mode"] = vnic_mode
@@ -2150,7 +2162,7 @@ class VMWareHandler(SourceBase):
         # add host to inventory
         self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
                                         vnic_data=vnic_data_dict, nic_ips=vnic_ips,
-                                        p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6)
+                                        p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
 
         return
 
@@ -2193,7 +2205,7 @@ class VMWareHandler(SourceBase):
         # get VM UUID
         vm_uuid = grab(obj, "config.instanceUuid")
 
-        if vm_uuid is None or vm_uuid in self.processed_vm_uuid:
+        if vm_uuid is None or vm_uuid in self.processed_vm_uuid and obj not in self.objects_to_reevaluate:
             return
 
         log.debug(f"Parsing vCenter VM: {name}")
@@ -2247,7 +2259,7 @@ class VMWareHandler(SourceBase):
         cluster_name = grab(nb_cluster_object, "data.name")
         cluster_full_name = f"{group.name}/{cluster_name}"
 
-        if name in self.processed_vm_names.get(cluster_full_name, list()):
+        if name in self.processed_vm_names.get(cluster_full_name, list()) and obj not in self.objects_to_reevaluate:
             log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
                         "Make sure to use unique VM names. Skipping")
             return
@@ -2498,14 +2510,13 @@ class VMWareHandler(SourceBase):
                         vm_primary_ip6 = int_ip_address
 
             vm_nic_data = {
+                "name": unquote(int_full_name),
                 "virtual_machine": None,
                 "mac_address": int_mac,
                 "description": unquote(int_description),
                 "enabled": int_connected,
             }
 
-            if self.overwrite_vm_interface_name is False:
-                vm_nic_data["name"] = unquote(int_full_name)
             if int_mtu is not None:
                 vm_nic_data["mtu"] = int_mtu
             if int_mode is not None:
@@ -2588,7 +2599,8 @@ class VMWareHandler(SourceBase):
 
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
-                                        nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6)
+                                        nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6,
+                                        vmware_object=obj)
 
         return
 

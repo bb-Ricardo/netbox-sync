@@ -219,7 +219,7 @@ class SourceBase:
         return current_longest_matching_prefix
 
     def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None,
-                             disable_vlan_sync=False, ip_tenant_inheritance_order=None):
+                             vmware_object=None):
         """
         Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
         Validates/enriches data in following order:
@@ -242,10 +242,8 @@ class SourceBase:
             dictionary with interface attributes to add to this interface
         interface_ips: list
             list of ip addresses which are assigned to this interface
-        disable_vlan_sync: bool
-            if True, VLAN information will be removed from interface before creating/updating interface
-        ip_tenant_inheritance_order: list
-            list of order in which the IP tenant should be assigned, possible values: device, prefix, disabled
+        vmware_object: (vim.HostSystem, vim.VirtualMachine)
+            object to add to list of objects to reevaluate
 
         Returns
         -------
@@ -253,6 +251,14 @@ class SourceBase:
             tuple with interface object that was added/updated and a list of ip address objects which were
             added to this interface
         """
+
+        disable_vlan_sync = False
+        if hasattr(self, "disable_vlan_sync"):
+            disable_vlan_sync = self.disable_vlan_sync
+
+        ip_tenant_inheritance_order = None
+        if hasattr(self, "ip_tenant_inheritance_order"):
+            ip_tenant_inheritance_order = self.ip_tenant_inheritance_order
 
         if not isinstance(interface_data, dict):
             log.error(f"Attribute 'interface_data' must be a dict() got {type(interface_data)}.")
@@ -434,11 +440,23 @@ class SourceBase:
                     this_ip_object = ip
 
                 if current_nic_enabled == this_nic_enabled:
+
+                    this_log_handler = log.warning
                     state = "enabled" if this_nic_enabled is True else "disabled"
-                    log.warning(f"Current interface '{current_ip_nic.get_display_name()}' for IP "
-                                f"'{ip_object}' and this one '{interface_object.get_display_name()}' are "
-                                f"both {state}. "
-                                f"IP assignment skipped because it is unclear which one is the correct one!")
+                    log_msg = (f"Current interface '{current_ip_nic.get_display_name()}' for IP "
+                               f"'{ip_object}' and this one '{interface_object.get_display_name()}' are "
+                               f"both {state}.")
+
+                    if hasattr(self, "objects_to_reevaluate") and vmware_object is not None:
+                        if vmware_object not in self.objects_to_reevaluate:
+                            self.objects_to_reevaluate.append(vmware_object)
+                        this_log_handler = log.debug
+                        log_msg += f" The {device_object.name} will be checked later again to see if " \
+                                   f"current interface status or association has changed"
+                    else:
+                        log_msg += " IP assignment skipped because it is unclear which one is the correct one!"
+
+                    this_log_handler(log_msg)
                     skip_this_ip = True
                     break
 
@@ -488,6 +506,12 @@ class SourceBase:
                 this_ip_object.update(data=nic_ip_data, source=self)
 
             ip_address_objects.append(this_ip_object)
+
+        for current_ip in interface_object.get_ip_addresses():
+            if current_ip not in ip_address_objects:
+                log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
+                         f"therefore removed from this interface")
+                current_ip.remove_interface_association()
 
         matching_untagged_vlan = None
         matching_tagged_vlans = dict()
