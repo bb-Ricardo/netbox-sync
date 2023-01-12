@@ -1053,7 +1053,8 @@ class NetBoxObject:
         data_type = self.data_model.get(attribute_name)
         current_value = self.data.get(attribute_name)
 
-        if (data_type in [NBTagList, NBVLANList] or isinstance(data_type, (list, dict))) and len(current_value) == 0:
+        if (data_type in [NBTagList, NBVLANList] or isinstance(data_type, (list, dict))) and \
+                hasattr(current_value, '__len__') and len(current_value) == 0:
             return
 
         if current_value is None:
@@ -1065,6 +1066,7 @@ class NetBoxObject:
         # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
         log.info(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
         self.unset_items.append(attribute_name)
+        self.data["assigned_object_id"] = None
 
     def get_nb_reference(self):
         """
@@ -1571,6 +1573,15 @@ class NBVMInterface(NetBoxObject):
         }
         super().__init__(*args, **kwargs)
 
+    def get_ip_addresses(self):
+
+        result_list = list()
+        for ip_object in self.inventory.get_all_items(NBIPAddress):
+            if grab(ip_object, "data.assigned_object_id") == self:
+                result_list.append(ip_object)
+
+        return result_list
+
 
 class NBInterface(NetBoxObject):
     name = "interface"
@@ -1599,6 +1610,15 @@ class NBInterface(NetBoxObject):
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
+
+    def get_ip_addresses(self):
+
+        result_list = list()
+        for ip_object in self.inventory.get_all_items(NBIPAddress):
+            if grab(ip_object, "data.assigned_object_id") == self:
+                result_list.append(ip_object)
+
+        return result_list
 
 
 class NBIPAddress(NetBoxObject):
@@ -1718,6 +1738,21 @@ class NBIPAddress(NetBoxObject):
             return o_interface.data.get("device")
         elif isinstance(o_interface, NBVMInterface):
             return o_interface.data.get("virtual_machine")
+
+    def remove_interface_association(self):
+        o_id = self.data.get("assigned_object_id")
+        o_type = self.data.get("assigned_object_type")
+        o_device = self.get_device_vm()
+
+        if grab(o_device, "data.primary_ip4") is self:
+            o_device.unset_attribute("primary_ip4")
+        if grab(o_device, "data.primary_ip6") is self:
+            o_device.unset_attribute("primary_ip6")
+
+        if o_id is not None:
+            self.unset_attribute("assigned_object_id")
+        if o_type is not None:
+            self.unset_attribute("assigned_object_type")
 
 
 class NBFHRPGroupItem(NetBoxObject):
