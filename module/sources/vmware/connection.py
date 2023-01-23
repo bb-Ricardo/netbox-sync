@@ -211,6 +211,7 @@ class VMWareHandler(SourceBase):
         self.object_cache = dict()
         self.parsing_vms_the_first_time = True
         self.objects_to_reevaluate = list()
+        self.parsing_objects_to_reevaluate = False
 
     def parse_config_settings(self, config_settings):
         """
@@ -635,8 +636,11 @@ class VMWareHandler(SourceBase):
 
             container_view.Destroy()
 
+        self.parsing_objects_to_reevaluate = True
+        log.info("Parsing objects which were marked to be reevaluated")
+
         for obj in self.objects_to_reevaluate:
-            log.info("Parsing objects which were marked to be reevaluated")
+
             if isinstance(obj, vim.HostSystem):
                 self.add_host(obj)
             elif isinstance(obj, vim.VirtualMachine):
