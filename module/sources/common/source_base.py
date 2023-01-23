@@ -425,6 +425,10 @@ class SourceBase:
                 current_nic_enabled = grab(current_ip_nic, "data.enabled", fallback=True)
                 this_nic_enabled = grab(interface_object, "data.enabled", fallback=True)
 
+                # if device or VM is NOT active, set current nic status to disabled
+                if "active" not in str(grab(current_ip_device, "data.status")):
+                    current_nic_enabled = False
+
                 if current_nic_enabled is True and this_nic_enabled is False:
                     log.debug(f"Current interface '{current_ip_nic.get_display_name()}' for IP '{ip_object}'"
                               f" is enabled and this one '{interface_object.get_display_name()}' is disabled. "
@@ -447,7 +451,8 @@ class SourceBase:
                                f"'{ip_object}' and this one '{interface_object.get_display_name()}' are "
                                f"both {state}.")
 
-                    if hasattr(self, "objects_to_reevaluate") and vmware_object is not None:
+                    if hasattr(self, "objects_to_reevaluate") and vmware_object is not None and \
+                            getattr(self, "parsing_objects_to_reevaluate", True) is False:
                         if vmware_object not in self.objects_to_reevaluate:
                             self.objects_to_reevaluate.append(vmware_object)
                         this_log_handler = log.debug
