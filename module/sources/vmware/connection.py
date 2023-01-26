@@ -510,10 +510,11 @@ class VMWareHandler(SourceBase):
                 log.error(f"unable to close vCenter SDK connection: {e}")
 
         # closing SDK session
-        try:
-            del self.tag_session
-        except Exception as e:
-            log.error(f"unable to close vCenter API instance connection: {e}")
+        if self.tag_session is not None:
+            try:
+                del self.tag_session
+            except Exception as e:
+                log.error(f"unable to close vCenter API instance connection: {e}")
 
     def apply(self):
         """
