@@ -37,7 +37,15 @@ class SourceBase:
     inventory = None
     source_tag = None
 
-    # dummy function to implement a finish call for each source
+    @classmethod
+    def implements(cls, source_type):
+
+        if getattr(cls, "source_type", None) == source_type:
+            return True
+
+        return False
+
+    # stub function to implement a finish call for each source
     def finish(self):
         pass
 

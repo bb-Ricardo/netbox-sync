@@ -8,8 +8,8 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 # define all available sources here
-from .vmware.connection import VMWareHandler
-from .check_redfish.import_inventory import CheckRedfish
+from module.sources.vmware.connection import VMWareHandler
+from module.sources.check_redfish.import_inventory import CheckRedfish
 
 from module.common.configuration import get_config
 from module.common.logging import get_logger
@@ -56,7 +56,7 @@ def validate_source(source_class_object=None, state="pre"):
     # post initialization validation
     for attr, value_type in necessary_attributes.items():
 
-        value = getattr(source_class_object, attr)
+        value = getattr(source_class_object, attr, None)
 
         if not isinstance(value, value_type):
             raise ValueError(f"Value for attribute '{attr}' needs to be {value_type}")
@@ -112,11 +112,8 @@ def instantiate_sources(config_handler=None, inventory=None):
         source_class = None
         for possible_source_class in valid_sources:
             validate_source(possible_source_class)
-            source_class_type = getattr(possible_source_class, "source_type", None)
-            if source_class_type is None:
-                raise AttributeError("'%s' class attribute 'source_type' not defined." % source_class_type.__name__)
 
-            if source_class_type == source_type:
+            if possible_source_class.implements(source_type):
                 source_class = possible_source_class
                 break
 
@@ -140,6 +137,7 @@ def instantiate_sources(config_handler=None, inventory=None):
         # add to list of source handlers
         if source_handler.init_successful is True:
             sources.append(source_handler)
+            inventory.add_enabled_source_tag(source_handler.source_tag)
         elif getattr(source_handler, "enabled") is False:
             inventory.add_disabled_source_tag(source_handler.source_tag)
 
