@@ -22,6 +22,7 @@ class NetBoxInventory:
     base_structure = dict()
 
     source_tags_of_disabled_sources = list()
+    source_tags_of_enabled_sources = list()
 
     def __init__(self):
 
@@ -31,6 +32,19 @@ class NetBoxInventory:
         for object_type in NetBoxObject.__subclasses__():
 
             self.base_structure[object_type.name] = list()
+
+    def add_enabled_source_tag(self, source_tag=None):
+        """
+        adds $source_tag to list of enabled sources
+
+        Parameters
+        ----------
+        source_tag: str
+            source tag of disabled source
+
+        """
+        if source_tag is not None:
+            self.source_tags_of_enabled_sources.append(source_tag)
 
     def add_disabled_source_tag(self, source_tag=None):
         """
@@ -305,40 +319,40 @@ class NetBoxInventory:
                                    f"from a currently disabled source. Skipping orphaned tagging.")
                         continue
 
-                    if getattr(this_object, "prune", False) is True:
+                    if getattr(this_object, "prune", False) is False:
 
-                        # test for different conditions.
-                        if netbox_handler.primary_tag not in this_object.get_tags():
+                        # or just remove primary tag if pruning is disabled
+                        this_object.remove_tags(netbox_handler.primary_tag)
+                        this_object.remove_tags(netbox_handler.orphaned_tag)
+
+                        continue
+
+                    # test for different conditions.
+                    if netbox_handler.primary_tag not in this_object.get_tags():
+                        continue
+
+                    if bool(set(this_object.get_tags()).intersection(self.source_tags_of_enabled_sources)) is False \
+                            and netbox_handler.ignore_unknown_source_object_pruning is True:
+                        continue
+
+                    # don't mark IPs as orphaned if vm/device is only switched off
+                    if isinstance(this_object, NBIPAddress):
+                        device_vm_object = this_object.get_device_vm()
+
+                        if device_vm_object is not None and \
+                                grab(device_vm_object, "data.status") is not None and \
+                                "active" not in str(grab(device_vm_object, "data.status")):
+
+                            if netbox_handler.orphaned_tag in this_object.get_tags():
+                                this_object.remove_tags(netbox_handler.orphaned_tag)
+
+                            log.debug2(f"{device_vm_object.name} '{device_vm_object.get_display_name()}' has IP "
+                                       f"'{this_object.get_display_name()}' assigned but is in status "
+                                       f"{grab(device_vm_object, 'data.status')}. "
+                                       f"IP address will not marked as orphaned.")
                             continue
 
-                        if netbox_handler.ignore_unknown_source_object_pruning is True:
-                            continue
-
-                        # don't mark IPs as orphaned if vm/device is only switched off
-                        if isinstance(this_object, NBIPAddress):
-                            device_vm_object = this_object.get_device_vm()
-
-                            if device_vm_object is not None and \
-                                    grab(device_vm_object, "data.status") is not None and \
-                                    "active" not in str(grab(device_vm_object, "data.status")):
-
-                                if netbox_handler.orphaned_tag in this_object.get_tags():
-                                    this_object.remove_tags(netbox_handler.orphaned_tag)
-
-                                log.debug2(f"{device_vm_object.name} '{device_vm_object.get_display_name()}' has IP "
-                                           f"'{this_object.get_display_name()}' assigned but is in status "
-                                           f"{grab(device_vm_object, 'data.status')}. "
-                                           f"IP address will not marked as orphaned.")
-                                continue
-
-                        this_object.add_tags(netbox_handler.orphaned_tag)
-
-                    # or just remove primary tag if pruning is disabled
-                    else:
-                        if netbox_handler.primary_tag in this_object.get_tags():
-                            this_object.remove_tags(netbox_handler.primary_tag)
-                        if netbox_handler.orphaned_tag in this_object.get_tags():
-                            this_object.remove_tags(netbox_handler.orphaned_tag)
+                    this_object.add_tags(netbox_handler.orphaned_tag)
 
     def query_ptr_records_for_all_ips(self):
         """
