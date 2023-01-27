@@ -768,6 +768,8 @@ class NetBoxHandler:
 
         log.info("Pruning orphaned data in NetBox")
 
+        disabled_sources_tags = [x.source_tag for x in self.source_list if getattr(x, "enabled") is False]
+
         # update all items in NetBox accordingly
         today = datetime.now()
         for nb_object_sub_class in reversed(NetBoxObject.__subclasses__()):
@@ -780,7 +782,9 @@ class NetBoxHandler:
                 if this_object.source is not None:
                     continue
 
-                if self.orphaned_tag not in this_object.get_tags():
+                this_object_tags = this_object.get_tags()
+
+                if self.orphaned_tag not in this_object_tags:
                     continue
 
                 date_last_update = grab(this_object, "data.last_updated")
@@ -788,9 +792,7 @@ class NetBoxHandler:
                 if date_last_update is None:
                     continue
 
-                if bool(
-                        set(this_object.get_tags()).intersection(self.inventory.source_tags_of_disabled_sources)
-                       ) is True:
+                if bool(set(this_object_tags).intersection(disabled_sources_tags)) is True:
                     log.debug2(f"Object '{this_object.get_display_name()}' was added "
                                f"from a currently disabled source. Skipping pruning.")
                     continue
