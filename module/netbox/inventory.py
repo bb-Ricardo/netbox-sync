@@ -21,8 +21,7 @@ class NetBoxInventory:
 
     base_structure = dict()
 
-    source_tags_of_disabled_sources = list()
-    source_tags_of_enabled_sources = list()
+    source_list = list()
 
     def __init__(self):
 
@@ -33,31 +32,18 @@ class NetBoxInventory:
 
             self.base_structure[object_type.name] = list()
 
-    def add_enabled_source_tag(self, source_tag=None):
-        """
-        adds $source_tag to list of enabled sources
-
-        Parameters
-        ----------
-        source_tag: str
-            source tag of disabled source
-
-        """
-        if source_tag is not None:
-            self.source_tags_of_enabled_sources.append(source_tag)
-
-    def add_disabled_source_tag(self, source_tag=None):
+    def add_source(self, source_handler=None):
         """
         adds $source_tag to list of disabled sources
 
         Parameters
         ----------
-        source_tag: str
-            source tag of disabled source
+        source_handler: object
+            source handler object
 
         """
-        if source_tag is not None:
-            self.source_tags_of_disabled_sources.append(source_tag)
+        if source_handler is not None:
+            self.source_list.append(source_handler)
 
     def get_by_id(self, object_type, nb_id=None):
         """
@@ -299,40 +285,43 @@ class NetBoxInventory:
             the object instance of a NetBox handler to get the tag names from
         """
 
+        all_sources_tags = [x.source_tag for x in self.source_list]
+        disabled_sources_tags = [x.source_tag for x in self.source_list if getattr(x, "enabled") is False]
+
         for object_type in NetBoxObject.__subclasses__():
 
             for this_object in self.get_all_items(object_type):
+
+                this_object_tags = this_object.get_tags()
 
                 # if object was found in source
                 if this_object.source is not None:
                     this_object.add_tags([netbox_handler.primary_tag, this_object.source.source_tag])
 
                     # if object was orphaned remove tag again
-                    if netbox_handler.orphaned_tag in this_object.get_tags():
+                    if netbox_handler.orphaned_tag in this_object_tags:
                         this_object.remove_tags(netbox_handler.orphaned_tag)
 
                 # if object was tagged by this program in previous runs but is not present
                 # anymore then add the orphaned tag except it originated from a disabled source
                 else:
-                    if bool(set(this_object.get_tags()).intersection(self.source_tags_of_disabled_sources)) is True:
+
+                    if bool(set(this_object_tags).intersection(disabled_sources_tags)) is True:
                         log.debug2(f"Object '{this_object.get_display_name()}' was added "
                                    f"from a currently disabled source. Skipping orphaned tagging.")
                         continue
 
-                    if getattr(this_object, "prune", False) is False:
-
-                        # or just remove primary tag if pruning is disabled
-                        this_object.remove_tags(netbox_handler.primary_tag)
-                        this_object.remove_tags(netbox_handler.orphaned_tag)
-
-                        continue
-
                     # test for different conditions.
-                    if netbox_handler.primary_tag not in this_object.get_tags():
+                    if netbox_handler.primary_tag not in this_object_tags:
                         continue
 
-                    if bool(set(this_object.get_tags()).intersection(self.source_tags_of_enabled_sources)) is False \
+                    if bool(set(this_object_tags).intersection(all_sources_tags)) is False \
                             and netbox_handler.ignore_unknown_source_object_pruning is True:
+                        continue
+
+                    if getattr(this_object, "prune", False) is False:
+                        # or just remove primary tag if pruning is disabled
+                        this_object.remove_tags(netbox_handler.orphaned_tag)
                         continue
 
                     # don't mark IPs as orphaned if vm/device is only switched off
