@@ -25,8 +25,18 @@ from module.netbox.inventory import (
 )
 from module.common.logging import get_logger
 from module.common.misc import grab
+from module.config.config_option import ConfigOption
 
 log = get_logger()
+
+
+class SourceBaseConfig:
+    """
+    Common config options all sources share
+    """
+
+    name = ConfigOption("name", str, description="Name of this source")
+    enabled = ConfigOption("enabled", bool, description="Defines if this source is enabled or not", default_value=True)
 
 
 class SourceBase:

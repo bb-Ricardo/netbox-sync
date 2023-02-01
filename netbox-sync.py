@@ -15,7 +15,7 @@ Sync objects from various sources to NetBox
 
 from datetime import datetime
 
-from module.common.misc import grab, get_relative_time
+from module.common.misc import grab, get_relative_time, dump
 from module.common.cli_parser import parse_command_line
 from module.common.logging import setup_logging
 from module.common.configuration import get_config_file, open_config_file, get_config
@@ -23,7 +23,7 @@ from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
 from module.netbox.object_classes import *
 from module.sources import instantiate_sources
-
+from module.config.config_files import ConfigFiles
 
 __version__ = "1.3.0"
 __version_date__ = "2022-09-06"
@@ -48,6 +48,10 @@ def main():
                               default_config_file_path=default_config_file_path)
 
     # get config file path
+    x = ConfigFiles(args.config_file, default_config_file_path)
+    import pprint
+    pprint.pprint(x.data)
+    exit(0)
     config_file = get_config_file(args.config_file)
 
     # get config handler
