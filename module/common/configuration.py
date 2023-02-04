@@ -16,63 +16,6 @@ from module.common.logging import get_logger
 log = get_logger()
 
 
-def get_config_file(config_file):
-    """
-    get absolute path to provided config file string
-
-    Parameters
-    ----------
-    config_file: str
-        config file path
-
-    Returns
-    -------
-    str: absolute path to config file
-    """
-
-    if config_file is None or config_file == "":
-        do_error_exit("ERROR: Config file not defined.")
-
-    base_dir = os.sep.join(__file__.split(os.sep)[0:-3])
-    if config_file[0] != os.sep:
-        config_file = f"{base_dir}{os.sep}{config_file}"
-
-    return os.path.realpath(config_file)
-
-
-def open_config_file(config_file):
-    """
-    Open config file with a ConfigParser and return handler. Bail out of opening or parsing fails
-
-    Parameters
-    ----------
-    config_file: str
-        absolute path of config file to open
-
-    Returns
-    -------
-    ConfigParser: handler with supplied config file
-    """
-
-    if config_file is None or config_file == "":
-        do_error_exit("ERROR: Config file not defined.")
-
-    # setup config parser and read config
-    config_handler = configparser.ConfigParser(strict=True, allow_no_value=True,
-                                               empty_lines_in_values=False, interpolation=None)
-
-    # noinspection PyBroadException
-    try:
-        config_handler.read_file(open(config_file))
-    except configparser.Error as e:
-        do_error_exit(f"ERROR: Problem while config file parsing: {e}")
-    # noinspection PyBroadException
-    except Exception:
-        do_error_exit(f"ERROR: Unable to open file '{config_file}'")
-
-    return config_handler
-
-
 def get_config(config_handler=None, section=None, valid_settings=None, deprecated_settings=None, removed_settings=None):
     """
     read config items from a defined section

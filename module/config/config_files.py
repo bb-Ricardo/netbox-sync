@@ -20,10 +20,13 @@ from module.common.misc import do_error_exit
 log = get_logger()
 
 
-class ConfigFiles:
+class ConfigFilesParser:
+    """
+    parses a given list of config files
+    """
 
     names = list()
-    data = dict()
+    content = dict()
     config_file_errors = False
 
     def __init__(self, config_file_list: List, default_config_file: str = None):
@@ -111,20 +114,20 @@ class ConfigFiles:
                     self.config_file_errors = True
                     continue
 
-                if self.data.get(section) is None:
-                    self.data[section] = list()
+                if self.content.get(section) is None:
+                    self.content[section] = list()
 
                 for source in section_data:
 
                     current_data = None
-                    for current_sources in self.data.get(section):
+                    for current_sources in self.content.get(section):
                         # find source by name
                         if current_sources.get("name") == source.get("name"):
                             current_data = current_sources
                             break
 
                     if current_data is None:
-                        self.data[section].append(source)
+                        self.content[section].append(source)
                     else:
                         for key, value in source.items():
                             current_data[key] = value
@@ -135,10 +138,10 @@ class ConfigFiles:
                     self.config_file_errors = True
                     continue
 
-                if self.data.get(section) is None:
-                    self.data[section] = dict()
+                if self.content.get(section) is None:
+                    self.content[section] = dict()
                 for key, value in section_data.items():
-                    self.data[section][key] = value
+                    self.content[section][key] = value
 
     @staticmethod
     def get_config_file_path(config_file: str) -> str:

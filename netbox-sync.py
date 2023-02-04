@@ -15,15 +15,17 @@ Sync objects from various sources to NetBox
 
 from datetime import datetime
 
-from module.common.misc import grab, get_relative_time, dump
+from module.common.misc import grab, get_relative_time
 from module.common.cli_parser import parse_command_line
 from module.common.logging import setup_logging
-from module.common.configuration import get_config_file, open_config_file, get_config
+from module.common.configuration import get_config
 from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
 from module.netbox.object_classes import *
 from module.sources import instantiate_sources
-from module.config.config_files import ConfigFiles
+from module.config.config_files import ConfigFilesParser
+from module.common.config import CommonConfig
+from module.netbox.config import NetBoxConfig
 
 __version__ = "1.3.0"
 __version_date__ = "2022-09-06"
@@ -48,43 +50,44 @@ def main():
                               default_config_file_path=default_config_file_path)
 
     # get config file path
-    x = ConfigFiles(args.config_file, default_config_file_path)
-    import pprint
-    pprint.pprint(x.data)
-    exit(0)
-    config_file = get_config_file(args.config_file)
+    config_file_handler = ConfigFilesParser(args.config_file, default_config_file_path)
 
-    # get config handler
-    config_handler = open_config_file(config_file)
+    import pprint
+    pprint.pprint(config_file_handler.content)
+    common_config = CommonConfig(config_file_handler).parse()
 
     # get logging configuration
 
     # set log level
-    log_level = default_log_level
-    # config overwrites default
-    log_level = config_handler.get("common", "log_level", fallback=log_level)
+    log_level = common_config.log_level
     # cli option overwrites config file
     log_level = grab(args, "log_level", fallback=log_level)
 
     log_file = None
-    if bool(config_handler.getboolean("common", "log_to_file", fallback=False)) is True:
-        log_file = config_handler.get("common", "log_file", fallback=None)
+    if common_config.log_to_file is True:
+        log_file = common_config.log_file
 
     # setup logging
     log = setup_logging(log_level, log_file)
 
     # now we are ready to go
     log.info(f"Starting {__description__} v{__version__} ({__version_date__})")
-    log.debug(f"Using config file: {config_file}")
+    for config_file in config_file_handler.names:
+        log.debug(f"Using config file: {config_file}")
+
+    # just to print config options to log/console
+    CommonConfig(config_file_handler).parse()
 
     # initialize an empty inventory which will be used to hold and reference all objects
     inventory = NetBoxInventory()
 
     # get config for NetBox handler
-    netbox_settings = get_config(config_handler, section="netbox", valid_settings=NetBoxHandler.settings)
+    netbox_settings = NetBoxConfig(config_file_handler).parse()
+    exit(0)
 
     # establish NetBox connection
     nb_handler = NetBoxHandler(settings=netbox_settings, inventory=inventory, nb_sync_version=__version__)
+
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
