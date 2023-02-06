@@ -26,9 +26,11 @@ from pyVmomi import vim
 from pyVmomi.VmomiSupport import VmomiJSONEncoder
 
 from module.sources.common.source_base import SourceBase
+from module.sources.vmware.config import VMWareConfig
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
+from module.netbox.inventory import NetBoxInventory
 from module.netbox.object_classes import (
     NetBoxInterfaceType,
     NBTag,
@@ -169,20 +171,24 @@ class VMWareHandler(SourceBase):
 
     site_name = None
 
-    def __init__(self, name=None, settings=None, inventory=None):
+    def __init__(self, name=None):
 
         if name is None:
             raise ValueError(f"Invalid value for attribute 'name': '{name}'.")
 
-        self.inventory = inventory
+        self.inventory = NetBoxInventory()
         self.name = name
 
-        self.parse_config_settings(settings)
+        # parse settings
+        settings_handler = VMWareConfig()
+        settings_handler.source_name = self.name
+        self.settings = settings_handler.parse()
+        #self.parse_config_settings(settings)
 
         self.source_tag = f"Source: {name}"
         self.site_name = f"vCenter: {name}"
 
-        if self.enabled is False:
+        if self.settings.enabled is False:
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
@@ -385,41 +391,41 @@ class VMWareHandler(SourceBase):
         if self.session is not None:
             return True
 
-        log.debug(f"Starting vCenter SDK connection to '{self.host_fqdn}'")
+        log.debug(f"Starting vCenter SDK connection to '{self.settings.host_fqdn}'")
 
         ssl_context = ssl.create_default_context()
-        if bool(self.validate_tls_certs) is False:
+        if self.settings.validate_tls_certs is False:
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
 
         connection_params = dict(
-            host=self.host_fqdn,
-            port=self.port,
+            host=self.settings.host_fqdn,
+            port=self.settings.port,
             sslContext=ssl_context
         )
 
         # uses connect.SmartStubAdapter
-        if self.proxy_host is not None and self.proxy_port is not None:
+        if self.settings.proxy_host is not None and self.settings.proxy_port is not None:
             connection_params.update(
-                httpProxyHost=self.proxy_host,
-                httpProxyPort=int(self.proxy_port),
+                httpProxyHost=self.settings.proxy_host,
+                httpProxyPort=self.settings.proxy_port,
             )
 
         # uses connect.SmartConnect
         else:
             connection_params.update(
-                user=self.username,
-                pwd=self.password,
+                user=self.settings.username,
+                pwd=self.settings.password,
             )
 
-        def_exception_text = f"Unable to connect to vCenter instance '{self.host_fqdn}' on port {self.port}."
+        def_exception_text = f"Unable to connect to vCenter instance '{self.settings.host_fqdn}' on port {self.settings.port}."
 
         try:
-            if self.proxy_host is not None and self.proxy_port is not None:
+            if self.settings.proxy_host is not None and self.settings.proxy_port is not None:
                 smart_stub = connect.SmartStubAdapter(**connection_params)
                 self._sdk_instance = vim.ServiceInstance('ServiceInstance', smart_stub)
                 content = self._sdk_instance.RetrieveContent()
-                content.sessionManager.Login(self.username, self.password, None)
+                content.sessionManager.Login(self.settings.username, self.settings.password, None)
             else:
 
                 self._sdk_instance = connect.SmartConnect(**connection_params)
@@ -430,13 +436,13 @@ class VMWareHandler(SourceBase):
             log.error(f"{def_exception_text} {e.msg}")
             return False
         except vim.fault.NoPermission as e:
-            log.error(f"{def_exception_text} User {self.username} does not have required permission. {e.msg}")
+            log.error(f"{def_exception_text} User {self.settings.username} does not have required permission. {e.msg}")
             return False
         except Exception as e:
             log.error(f"{def_exception_text} Reason: {e}")
             return False
 
-        log.info(f"Successfully connected to vCenter SDK '{self.host_fqdn}'")
+        log.info(f"Successfully connected to vCenter SDK '{self.settings.host_fqdn}'")
 
         return True
 
@@ -452,12 +458,12 @@ class VMWareHandler(SourceBase):
         if self.tag_session is not None:
             return True
 
-        if len(self.cluster_tag_source) + len(self.host_tag_source) + len(self.vm_tag_source) == 0:
+        if len(self.settings.cluster_tag_source) + len(self.settings.host_tag_source) + len(self.settings.vm_tag_source) == 0:
             return False
 
-        log.debug(f"Starting vCenter API connection to '{self.host_fqdn}'")
+        log.debug(f"Starting vCenter API connection to '{self.settings.host_fqdn}'")
 
-        if len(self.cluster_tag_source) > 0 or len(self.host_tag_source) > 0 or len(self.vm_tag_source) > 0:
+        if len(self.settings.cluster_tag_source) > 0 or len(self.settings.host_tag_source) > 0 or len(self.settings.vm_tag_source) > 0:
 
             if vsphere_automation_sdk_available is False:
                 self.__setattr__("cluster_tag_source", list())
@@ -468,35 +474,35 @@ class VMWareHandler(SourceBase):
 
         # create a requests session to enable/disable TLS verification
         session = requests.session()
-        session.verify = bool(self.validate_tls_certs)
+        session.verify = self.settings.validate_tls_certs
 
         # disable TLS insecure warnings if user explicitly switched off validation
-        if bool(self.validate_tls_certs) is False:
+        if self.settings.validate_tls_certs is False:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         # adds proxy to the session
-        if self.proxy_host is not None and self.proxy_port is not None:
+        if self.settings.proxy_host is not None and self.settings.proxy_port is not None:
             session.proxies.update({
-                "http": f"http://{self.proxy_host}:{self.proxy_port}",
-                "https": f"http://{self.proxy_host}:{self.proxy_port}",
+                "http": f"http://{self.settings.proxy_host}:{self.settings.proxy_port}",
+                "https": f"http://{self.settings.proxy_host}:{self.settings.proxy_port}",
             })
 
         try:
             self.tag_session = create_vsphere_client(
-                server=f"{self.host_fqdn}:{self.port}",
-                username=self.username,
-                password=self.password,
+                server=f"{self.settings.host_fqdn}:{self.settings.port}",
+                username=self.settings.username,
+                password=self.settings.password,
                 session=session)
 
         except Exception as e:
             self.__setattr__("cluster_tag_source", list())
             self.__setattr__("host_tag_source", list())
             self.__setattr__("vm_tag_source", list())
-            log.warning(f"Unable to connect to vCenter API instance '{self.host_fqdn}' on port {self.port}: {e}")
+            log.warning(f"Unable to connect to vCenter API instance '{self.settings.host_fqdn}' on port {self.settings.port}: {e}")
             log.warning("Tag syncing will be disabled.")
             return False
 
-        log.info(f"Successfully connected to vCenter API '{self.host_fqdn}'")
+        log.info(f"Successfully connected to vCenter API '{self.settings.host_fqdn}'")
 
         return True
 

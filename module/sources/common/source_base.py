@@ -25,18 +25,24 @@ from module.netbox.inventory import (
 )
 from module.common.logging import get_logger
 from module.common.misc import grab
-from module.config.config_option import ConfigOption
+from module.config.option import ConfigOption
 
 log = get_logger()
 
+config_option_enabled = \
+    ConfigOption("enabled",
+                 bool,
+                 description="Defines if this source is enabled or not",
+                 default_value=True)
 
-class SourceBaseConfig:
-    """
-    Common config options all sources share
-    """
-
-    name = ConfigOption("name", str, description="Name of this source")
-    enabled = ConfigOption("enabled", bool, description="Defines if this source is enabled or not", default_value=True)
+config_option_permitted_subnets = \
+    ConfigOption("permitted_subnets",
+                 str,
+                 description="""IP networks eligible to be synced to NetBox. If an IP address is not part of
+                 this networks then it WON'T be synced to NetBox. To excluded small blocks from bigger IP blocks
+                 a leading '!' has to be added
+                 """,
+                 config_example="10.0.0.0/8, !10.23.42.0/24")
 
 
 class SourceBase:
@@ -706,7 +712,7 @@ class SourceBase:
 
         return return_data
 
-    def add_update_custom_field(self, data):
+    def add_update_custom_field(self, data) -> NBCustomField:
         """
         Adds/updates a NBCustomField object with data.
         Update will only update the 'content_types' attribute.

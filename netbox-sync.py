@@ -21,7 +21,7 @@ from module.common.logging import setup_logging
 from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
 from module.sources import instantiate_sources
-from module.config.config_parser import ConfigParser
+from module.config.parser import ConfigParser
 from module.common.config import CommonConfig
 
 __version__ = "1.3.0"
@@ -46,6 +46,9 @@ def main():
     config_parse_handler = ConfigParser()
     config_parse_handler.add_config_file_list(args.config_files)
     config_parse_handler.read_config()
+
+    # import pprint
+    # pprint.pprint(config_parse_handler.content)
 
     # read common config
     common_config = CommonConfig().parse(do_log=False)
@@ -75,8 +78,7 @@ def main():
     inventory = NetBoxInventory()
 
     # establish NetBox connection
-    nb_handler = NetBoxHandler(nb_sync_version=__version__)
-    exit(0)
+    #nb_handler = NetBoxHandler(nb_sync_version=__version__)
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
@@ -91,7 +93,8 @@ def main():
 
     # instantiate source handlers and get attributes
     log.info("Initializing sources")
-    sources = instantiate_sources(inventory)
+    sources = instantiate_sources()
+    exit(0)
 
     # all sources are unavailable
     if len(sources) == 0:

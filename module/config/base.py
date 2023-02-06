@@ -9,8 +9,8 @@
 
 from module.common.misc import grab
 from module.common.logging import get_logger
-from module.config.config_parser import ConfigParser
-from module.config.config_option import ConfigOption
+from module.config.parser import ConfigParser
+from module.config.option import ConfigOption
 
 log = get_logger()
 
@@ -24,6 +24,7 @@ class ConfigBase:
     _parsing_failed = False
 
     options = list()
+    config_content = dict()
 
     def __init__(self):
 
@@ -37,28 +38,50 @@ class ConfigBase:
 
     def parse(self, do_log: bool = True):
 
+        def _log(handler, message):
+            if do_log is True:
+                handler(message)
+
+        def get_value(key: str = None):
+
+            separator = "|"
+            path = [self.section_name]
+            source_name = getattr(self, "source_name", None)
+            if source_name is not None:
+                path.append(source_name)
+            if key is not None:
+                path.append(key)
+
+            return grab(self.config_content, separator.join(path), separator=separator)
+
         if self.section_name is None:
             raise KeyError(f"Class '{self.__class__.__name__}' is missing 'section_name' attribute")
+
+        config_option_location = self.section_name
+        if hasattr(self, "source_name"):
+            config_option_location += f".{self.source_name}"
+
+        options = dict()
 
         for config_object in self.options:
 
             if not isinstance(config_object, ConfigOption):
                 continue
 
-            config_value = grab(self.config_content, f"{self.section_name}.{config_object.key}")
+            config_value = get_value(config_object.key)
 
             alt_key_used = False
             if config_value is None and config_object.alt_key is not None:
                 alt_key_used = True
-                config_value = grab(self.config_content, f"{self.section_name}.{config_object.alt_key}")
+                config_value = get_value(config_object.alt_key)
 
             # check for deprecated settings
-            if config_object.deprecated is True:
-                log_text = f"Setting '{config_object.key}' is deprecated and will be removed soon."
+            if config_value is not None and config_object.deprecated is True:
+                log_text = f"Setting '{config_object.key}' in '{config_option_location}' is deprecated " \
+                           "and will be removed soon."
                 if len(config_object.deprecation_message) > 0:
                     log_text += " " + config_object.deprecation_message
-                if do_log:
-                    log.warning(log_text)
+                _log(log.warning, log_text)
 
             # check for removed settings
             if config_value is not None and config_object.removed is True:
@@ -66,37 +89,37 @@ class ConfigBase:
                 if alt_key_used is True:
                     object_key = config_object.alt_key
                 log_text = f"Setting '{object_key}' has been removed " \
-                           f"but is still defined in config section '{self.section_name}'."
+                           f"but is still defined in config section '{config_option_location}'."
                 if len(config_object.deprecation_message) > 0:
                     log_text += " " + config_object.deprecation_message
-                if do_log:
-                    log.warning(log_text)
+                _log(log.warning, log_text)
+                continue
+
+            if config_object.removed is True:
                 continue
 
             # set value
             config_object.set_value(config_value)
 
-        options = dict()
-        for config_object in self.options:
-            if isinstance(config_object, ConfigOption) and config_object.removed is False:
-                if do_log:
-                    log.debug(f"Config: {self.section_name}.{config_object.key} = {config_object.sensitive_value}")
+            _log(log.debug, f"Config: {config_option_location}.{config_object.key} = {config_object.sensitive_value}")
 
-                if config_object.mandatory is True and config_object.value is None:
-                    self._parsing_failed = True
-                    if do_log:
-                        log.error(f"Config option '{config_object.key}' in "
-                                  f"'{self.section_name}' can't be empty/undefined")
+            if config_object.mandatory is True and config_object.value is None:
+                self._parsing_failed = True
+                _log(log.error, f"Config option '{config_object.key}' in "
+                                f"'{config_option_location}' can't be empty/undefined")
 
-                if config_object.parsing_failed is True:
-                    self._parsing_failed = True
+            if config_object.parsing_failed is True:
+                self._parsing_failed = True
 
-                options[config_object.key] = config_object.value
+            options[config_object.key] = config_object.value
 
-        for option_key in grab(self.config_content, self.section_name, fallback=dict()).keys():
+        config_options = get_value() or dict()
+        if not isinstance(config_options, dict):
+            config_options = dict()
+
+        for option_key in config_options.keys():
             if option_key not in options:
-                if do_log:
-                    log.warning(f"Found unknown config option '{option_key}' for '{self.section_name}' config")
+                _log(log.warning, f"Found unknown config option '{option_key}' for '{config_option_location}' config")
 
         # validate parsed config
         self.validate_options()

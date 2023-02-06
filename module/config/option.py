@@ -75,7 +75,7 @@ class ConfigOption:
     @property
     def sensitive_value(self):
 
-        if self.sensitive is True:
+        if self.sensitive is True and self._value is not None:
             return self._value[0:3] + "***"
 
         return self._value
@@ -129,7 +129,7 @@ class ConfigOption:
         return description as a string wrapped at 'width'
 
         SPECIAL: if self._description starts with a blank character,
-                 the description will be dedented and NO line wrapping will be applied.
+                 the description will be strip of indentation and NO line wrapping will be applied.
 
         Parameters
         ----------

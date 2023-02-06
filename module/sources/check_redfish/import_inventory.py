@@ -15,9 +15,11 @@ import json
 from packaging import version
 
 from module.sources.common.source_base import SourceBase
+from module.sources.check_redfish.config import CheckRedfishConfig
 from module.common.logging import get_logger
 from module.common.misc import grab, get_string_or_none
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
+from module.netbox.inventory import NetBoxInventory
 from module.netbox.object_classes import (
     NetBoxInterfaceType,
     NBTag,
@@ -74,40 +76,30 @@ class CheckRedfish(SourceBase):
         NBCustomField
     ]
 
-    settings = {
-        "enabled": True,
-        "inventory_file_path": None,
-        "permitted_subnets": None,
-        "overwrite_host_name": False,
-        "overwrite_power_supply_name": False,
-        "overwrite_power_supply_attributes": True,
-        "overwrite_interface_name": False,
-        "overwrite_interface_attributes": True,
-    }
+    source_type = "check_redfish"
 
     init_successful = False
-    inventory = None
     name = None
-    source_tag = None
-    source_type = "check_redfish"
-    enabled = False
-    inventory_file_path = None
+    settings = None
     device_object = None
     inventory_file_content = None
 
-    def __init__(self, name=None, settings=None, inventory=None):
+    def __init__(self, name=None):
 
         if name is None:
             raise ValueError(f"Invalid value for attribute 'name': '{name}'.")
 
-        self.inventory = inventory
+        self.inventory = NetBoxInventory()
         self.name = name
 
-        self.parse_config_settings(settings)
+        # parse settings
+        settings_handler = CheckRedfishConfig()
+        settings_handler.source_name = self.name
+        self.settings = settings_handler.parse()
 
         self.source_tag = f"Source: {name}"
 
-        if self.enabled is False:
+        if self.settings.enabled is False:
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
@@ -200,7 +192,7 @@ class CheckRedfish(SourceBase):
         # first add all custom fields we need for this source
         self.add_necessary_base_objects()
 
-        for filename in glob.glob(f"{self.inventory_file_path}/*.json"):
+        for filename in glob.glob(f"{self.settings.inventory_file_path}/*.json"):
 
             self.reset_inventory_state()
 
@@ -328,7 +320,7 @@ class CheckRedfish(SourceBase):
 
         if serial is not None:
             device_data["serial"] = serial
-        if name is not None and self.overwrite_host_name is True:
+        if name is not None and self.settings.overwrite_host_name is True:
             device_data["name"] = name
         if "dell" in str(manufacturer).lower():
             chassi = grab(self.inventory_file_content, "inventory.chassi.0")
@@ -441,10 +433,10 @@ class CheckRedfish(SourceBase):
             if ps_object is None:
                 self.inventory.add_object(NBPowerPort, data=ps_data, source=self)
             else:
-                if self.overwrite_power_supply_name is False:
+                if self.settings.overwrite_power_supply_name is False:
                     del(ps_data["name"])
 
-                data_to_update = self.patch_data(ps_object, ps_data, self.overwrite_power_supply_attributes)
+                data_to_update = self.patch_data(ps_object, ps_data, self.settings.overwrite_power_supply_attributes)
                 ps_object.update(data=data_to_update, source=self)
                 current_ps.remove(ps_object)
 
@@ -878,15 +870,17 @@ class CheckRedfish(SourceBase):
             # collect ip addresses
             nic_ips[port_name] = list()
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv4_address, self.permitted_subnets,
-                                             excluded_subnets=self.excluded_subnets, interface_name=port_name) is False:
+                if ip_valid_to_add_to_netbox(ipv4_address, self.settings.permitted_subnets,
+                                             excluded_subnets=self.settings.excluded_subnets,
+                                             interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv4_address)
 
             for ipv6_address in grab(nic_port, "ipv6_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv6_address, self.permitted_subnets,
-                                             excluded_subnets=self.excluded_subnets, interface_name=port_name) is False:
+                if ip_valid_to_add_to_netbox(ipv6_address, self.settings.permitted_subnets,
+                                             excluded_subnets=self.settings.excluded_subnets,
+                                             interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv6_address)
@@ -913,12 +907,12 @@ class CheckRedfish(SourceBase):
 
             # create or update interface with data
             if nic_object is not None:
-                if self.overwrite_interface_name is False and port_data.get("name") is not None:
+                if self.settings.overwrite_interface_name is False and port_data.get("name") is not None:
                     del(port_data["name"])
 
                 this_link_type = port_data.get("type")
                 mgmt_only = port_data.get("mgmt_only")
-                data_to_update = self.patch_data(nic_object, port_data, self.overwrite_interface_attributes)
+                data_to_update = self.patch_data(nic_object, port_data, self.settings.overwrite_interface_attributes)
 
                 # always overwrite nic type if discovered
                 if port_data.get("type") != "other":

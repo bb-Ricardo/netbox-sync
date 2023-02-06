@@ -8,8 +8,8 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 
-from module.config.config_option import ConfigOption
-from module.config.config_base import ConfigBase
+from module.config.option import ConfigOption
+from module.config.base import ConfigBase
 from module.config import common_config_section_name
 
 

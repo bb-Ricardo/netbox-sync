@@ -313,6 +313,10 @@ class ConfigParser:
                 continue
 
             for key, value in env_var_list.items():
+                # skip var which contains the name
+                if key.upper().endswith("NAME"):
+                    continue
+
                 if key.startswith(source_prefix):
                     source_env_config[key.replace(f"{source_prefix}_", "", 1).lower()] = value
                     del env_var_names[key]
