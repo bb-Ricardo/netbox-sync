@@ -10,6 +10,9 @@
 from module.config.config_option import ConfigOption
 from module.config.config_base import ConfigBase
 from module.config import netbox_config_section_name
+from module.common.logging import get_logger
+
+log = get_logger()
 
 
 class NetBoxConfig(ConfigBase):
@@ -98,7 +101,8 @@ class NetBoxConfig(ConfigBase):
                      int,
                      description="""The maximum number of objects returned in a single request.
                      If a NetBox instance is very quick responding the value should be raised
-                     """),
+                     """,
+                     default_value=200),
 
         ConfigOption("timeout",
                      int,
@@ -126,3 +130,14 @@ class NetBoxConfig(ConfigBase):
                      description="The location of the directory where the cache files should be stored",
                      default_value="cache")
     ]
+
+    def validate_options(self):
+
+        for option in self.options:
+
+            if option.key == "proxy" and option.value is not None:
+                if "://" not in option.value or \
+                        (not option.value.startswith("http") and not option.value.startswith("socks5")):
+                    log.error(f"Config option 'proxy' in '{NetBoxConfig.section_name}' must contain the schema "
+                              f"http, https, socks5 or socks5h")
+                    self._parsing_failed = True

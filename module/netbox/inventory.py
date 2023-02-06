@@ -248,13 +248,13 @@ class NetBoxInventory:
 
         return self.base_structure.get(object_type.name, list())
 
-    def get_all_interfaces(self, this_object):
+    def get_all_interfaces(self, this_object: (NBVM, NBDevice)):
         """
         Return all interfaces items for a NBVM, NBDevice object
 
         Parameters
         ----------
-        this_object: (NBVM, NBDevice)
+        this_object: NBVM, NBDevice
             object instance to return interfaces for
 
         Returns

@@ -35,26 +35,6 @@ class NetBoxHandler:
     # minimum API version necessary
     minimum_api_version = "2.9"
 
-    # permitted settings and defaults
-    settings = {
-        "api_token": None,
-        "host_fqdn": None,
-        "port": None,
-        "disable_tls": False,
-        "validate_tls_certs": True,
-        "proxy": None,
-        "client_cert": None,
-        "client_cert_key": None,
-        "prune_enabled": False,
-        "prune_delay_in_days": 30,
-        "default_netbox_result_limit": 200,
-        "timeout": 30,
-        "max_retry_attempts": 4,
-        "use_caching": True,
-        "cache_directory_location": "cache",
-        "ignore_unknown_source_object_pruning": False
-    }
-
     # This tag gets added to all objects create/updated/inherited by this program
     primary_tag = "NetBox-synced"
 
@@ -67,22 +47,17 @@ class NetBoxHandler:
     # this is only used to speed up testing, NEVER SET TO True IN PRODUCTION
     testing_cache = False
 
-    # pointer to inventory object
-    inventory = None
-
     # keep track of already resolved dependencies
     resolved_dependencies = set()
 
     # set bogus default version
     version = "0.0.1"
 
-    def __init__(self, settings=None, nb_sync_version=None):
+    def __init__(self, nb_sync_version=None):
 
         self.settings = NetBoxConfig().parse()
         self.inventory = NetBoxInventory()
         self.version = nb_sync_version
-
-        self.parse_config_settings(settings)
 
         # flood the console
         if log.level == DEBUG3:
@@ -91,18 +66,18 @@ class NetBoxHandler:
             HTTPConnection.debuglevel = 1
 
         proto = "https"
-        if bool(self.disable_tls) is True:
+        if bool(self.settings.disable_tls) is True:
             proto = "http"
 
         # disable TLS insecure warnings if user explicitly switched off validation
-        if bool(self.validate_tls_certs) is False:
+        if bool(self.settings.validate_tls_certs) is False:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         port = ""
-        if self.port is not None:
-            port = f":{self.port}"
+        if self.settings.port is not None:
+            port = f":{self.settings.port}"
 
-        self.url = f"{proto}://{self.host_fqdn}{port}/api/"
+        self.url = f"{proto}://{self.settings.host_fqdn}{port}/api/"
 
         self.session = self.create_session()
 
@@ -126,10 +101,10 @@ class NetBoxHandler:
         If a condition fails, caching is switched of.
         """
 
-        if self.use_caching is False:
+        if self.settings.use_caching is False:
             return
 
-        cache_folder_name = self.cache_directory_location
+        cache_folder_name = self.settings.cache_directory_location
 
         base_dir = os.sep.join(__file__.split(os.sep)[0:-3])
         if cache_folder_name[0] != os.sep:
@@ -140,7 +115,7 @@ class NetBoxHandler:
         # check if directory is a file
         if os.path.isfile(self.cache_directory):
             log.warning(f"The cache directory ({self.cache_directory}) seems to be file.")
-            self.use_caching = False
+            self.settings.use_caching = False
 
         # check if directory exists
         if not os.path.exists(self.cache_directory):
@@ -149,58 +124,22 @@ class NetBoxHandler:
                 os.makedirs(self.cache_directory, 0o700)
             except OSError:
                 log.warning(f"Unable to create cache directory: {self.cache_directory}")
-                self.use_caching = False
+                self.settings.use_caching = False
             except Exception as e:
                 log.warning(f"Unknown exception while creating cache directory {self.cache_directory}: {e}")
-                self.use_caching = False
+                self.settings.use_caching = False
 
         # check if directory is writable
         if not os.access(self.cache_directory, os.X_OK | os.W_OK):
             log.warning(f"Error writing to cache directory: {self.cache_directory}")
-            self.use_caching = False
+            self.settings.use_caching = False
 
-        if self.use_caching is False:
+        if self.settings.use_caching is False:
             log.warning("NetBox caching DISABLED")
         else:
             log.debug(f"Successfully configured cache directory: {self.cache_directory}")
 
-    def parse_config_settings(self, config_settings):
-        """
-        Validate parsed settings from config file
-
-        Parameters
-        ----------
-        config_settings: dict
-            dict of config settings
-
-        """
-
-        validation_failed = False
-        for setting in ["host_fqdn", "api_token"]:
-            if config_settings.get(setting) is None:
-                log.error(f"Config option '{setting}' in 'netbox' can't be empty/undefined")
-                validation_failed = True
-
-        for setting in ["prune_delay_in_days", "default_netbox_result_limit", "timeout", "max_retry_attempts"]:
-            if not isinstance(config_settings.get(setting), int):
-                log.error(f"Config option '{setting}' in 'netbox' must be an integer.")
-                validation_failed = True
-
-        proxy = config_settings.get("proxy")
-        if proxy is not None:
-            if "://" not in proxy or (not proxy.startswith("http") and not proxy.startswith("socks5")):
-                log.error(f"Config option 'proxy' in 'netbox' must contain the schema "
-                          f"http, https, socks5 or socks5h")
-                validation_failed = True
-
-        if validation_failed is True:
-            log.error("Config validation failed. Exit!")
-            exit(1)
-
-        for setting in self.settings.keys():
-            setattr(self, setting, config_settings.get(setting))
-
-    def create_session(self):
+    def create_session(self) -> requests.Session:
         """
         Create a new NetBox session using api_token
 
@@ -210,7 +149,7 @@ class NetBoxHandler:
         """
 
         header = {
-            "Authorization": f"Token {self.api_token}",
+            "Authorization": f"Token {self.settings.api_token}",
             "User-Agent": f"netbox-sync/{self.version}",
             "Content-Type": "application/json"
         }
@@ -219,18 +158,18 @@ class NetBoxHandler:
         session.headers.update(header)
 
         # adds proxy to the session
-        if self.proxy is not None:
+        if self.settings.proxy is not None:
             session.proxies.update({
-                "http": self.proxy,
-                "https": self.proxy
+                "http": self.settings.proxy,
+                "https": self.settings.proxy
             })
 
         # adds client cert to session
-        if self.client_cert is not None:
-            if self.client_cert_key is not None:
-                session.cert = (self.client_cert, self.client_cert_key)
+        if self.settings.client_cert is not None:
+            if self.settings.client_cert_key is not None:
+                session.cert = (self.settings.client_cert, self.settings.client_cert_key)
             else:
-                session.cert = self.client_cert
+                session.cert = self.settings.client_cert
 
         log.debug("Created new requests Session for NetBox.")
 
@@ -256,14 +195,14 @@ class NetBoxHandler:
         try:
             response = self.session.get(
                 self.url,
-                timeout=self.timeout,
-                verify=self.validate_tls_certs)
+                timeout=self.settings.timeout,
+                verify=self.settings.validate_tls_certs)
         except Exception as e:
             do_error_exit(f"NetBox connection: {e}")
 
         result = str(response.headers.get("API-Version"))
 
-        log.info(f"Successfully connected to NetBox '{self.host_fqdn}'")
+        log.info(f"Successfully connected to NetBox '{self.settings.host_fqdn}'")
         log.debug(f"Detected NetBox API version: {result}")
 
         return result
@@ -309,7 +248,7 @@ class NetBoxHandler:
                 params = dict()
 
             if "limit" not in params.keys():
-                params["limit"] = self.default_netbox_result_limit
+                params["limit"] = self.settings.default_netbox_result_limit
 
             # always exclude config context
             params["exclude"] = "config_context"
@@ -392,7 +331,7 @@ class NetBoxHandler:
         if log.level == DEBUG3:
             pprint.pprint(vars(this_request))
 
-        for _ in range(self.max_retry_attempts):
+        for _ in range(self.settings.max_retry_attempts):
 
             log_message = f"Sending {this_request.method} to '{this_request.url}'"
 
@@ -402,7 +341,9 @@ class NetBoxHandler:
                 log.debug2(log_message)
 
             try:
-                response = self.session.send(this_request, timeout=self.timeout, verify=self.validate_tls_certs)
+                response = self.session.send(this_request,
+                                             timeout=self.settings.timeout,
+                                             verify=self.settings.validate_tls_certs)
 
             except (ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
                 log.warning(f"Request failed, trying again: {log_message}")
@@ -410,7 +351,7 @@ class NetBoxHandler:
             else:
                 break
         else:
-            do_error_exit(f"Giving up after {self.max_retry_attempts} retries.")
+            do_error_exit(f"Giving up after {self.settings.max_retry_attempts} retries.")
 
         log.debug2("Received HTTP Status %s.", response.status_code)
 
@@ -459,7 +400,7 @@ class NetBoxHandler:
             latest_update = None
 
             # check if cache file is accessible
-            if self.use_caching is True:
+            if self.settings.use_caching is True:
                 cache_this_class = True
 
                 if os.path.exists(cache_file) and not os.access(cache_file, os.R_OK):
@@ -536,7 +477,7 @@ class NetBoxHandler:
 
             # read a full set from NetBox
             nb_objects = list()
-            if full_nb_data is not None:
+            if isinstance(full_nb_data, dict):
                 nb_objects = full_nb_data.get("results")
 
             elif self.testing_cache is True:
@@ -555,7 +496,7 @@ class NetBoxHandler:
 
                 nb_objects.extend(updated_nb_data.get("results"))
 
-            if self.use_caching is True:
+            if self.settings.use_caching is True:
                 try:
                     pickle.dump(nb_objects, open(cache_file, "wb"))
                     if cache_this_class is True:
@@ -580,10 +521,10 @@ class NetBoxHandler:
         log.debug("Checking/Adding NetBox Sync dependencies")
 
         prune_text = f"Pruning is enabled and Objects will be automatically " \
-                     f"removed after {self.prune_delay_in_days} days"
+                     f"removed after {self.settings.prune_delay_in_days} days"
 
-        if self.prune_enabled is False:
-            prune_text = f"Objects would be automatically removed after {self.prune_delay_in_days} days " \
+        if self.settings.prune_enabled is False:
+            prune_text = f"Objects would be automatically removed after {self.settings.prune_delay_in_days} days " \
                          f"but pruning is currently disabled."
 
         self.inventory.add_update_object(NBTag, data={
@@ -764,7 +705,7 @@ class NetBoxHandler:
         deleted from NetBox.
         """
 
-        if self.prune_enabled is False:
+        if self.settings.prune_enabled is False:
             log.debug("Pruning disabled. Skipping")
             return
 
@@ -819,7 +760,7 @@ class NetBoxHandler:
                 days_since_last_update = (today - last_updated).days
 
                 # it seems we need to delete this object
-                if last_updated is not None and days_since_last_update >= self.prune_delay_in_days:
+                if last_updated is not None and days_since_last_update >= self.settings.prune_delay_in_days:
 
                     log.info(f"{nb_object_sub_class.name.capitalize()} '{this_object.get_display_name()}' is orphaned "
                              f"for {days_since_last_update} days and will be deleted.")

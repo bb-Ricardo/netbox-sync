@@ -45,6 +45,7 @@ class ConfigOption:
         self.deprecation_message = deprecation_message
         self.removed = removed
         self.sensitive = sensitive
+        self.parsing_failed = False
 
         if self.config_example is None:
             self.config_example = self.default_value
@@ -89,6 +90,7 @@ class ConfigOption:
                 config_value = self.to_bool(value)
             except ValueError:
                 log.error(f"Unable to parse '{value}' for '{self.key}' as bool")
+                self.parsing_failed = True
                 return
 
         elif self.value_type == int:
@@ -96,6 +98,7 @@ class ConfigOption:
                 config_value = int(value)
             except ValueError:
                 log.error(f"Unable to parse '{value}' for '{self.key}' as int")
+                self.parsing_failed = True
                 return
         else:
             config_value = value

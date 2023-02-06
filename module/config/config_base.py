@@ -21,6 +21,7 @@ class ConfigBase:
     """
 
     section_name = None
+    _parsing_failed = False
 
     options = list()
 
@@ -29,6 +30,10 @@ class ConfigBase:
         config = ConfigParser()
         if config.parsing_finished is True:
             self.config_content = config.content
+
+    # stub function, needs to implemented in each config class
+    def validate_options(self):
+        pass
 
     def parse(self, do_log: bool = True):
 
@@ -76,12 +81,29 @@ class ConfigBase:
             if isinstance(config_object, ConfigOption) and config_object.removed is False:
                 if do_log:
                     log.debug(f"Config: {self.section_name}.{config_object.key} = {config_object.sensitive_value}")
+
+                if config_object.mandatory is True and config_object.value is None:
+                    self._parsing_failed = True
+                    if do_log:
+                        log.error(f"Config option '{config_object.key}' in "
+                                  f"'{self.section_name}' can't be empty/undefined")
+
+                if config_object.parsing_failed is True:
+                    self._parsing_failed = True
+
                 options[config_object.key] = config_object.value
 
         for option_key in grab(self.config_content, self.section_name, fallback=dict()).keys():
             if option_key not in options:
                 if do_log:
                     log.warning(f"Found unknown config option '{option_key}' for '{self.section_name}' config")
+
+        # validate parsed config
+        self.validate_options()
+
+        if self._parsing_failed is True:
+            log.error("Config validation failed. Exit!")
+            exit(1)
 
         return ConfigOptions(**options)
 

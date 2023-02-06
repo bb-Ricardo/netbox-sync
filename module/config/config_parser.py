@@ -39,7 +39,7 @@ class ConfigParser:
         it.init()
         return it
 
-    def init(self):
+    def init(self) -> None:
         pass
 
     def add_config_file(self, config_file_name: str) -> None:
@@ -66,12 +66,12 @@ class ConfigParser:
         if len(self.config_errors) > 0:
             do_error_exit("Unable to open/parse one or more config files")
 
-    def _add_error(self, message: str = ""):
+    def _add_error(self, message: str = "") -> None:
 
         if isinstance(message, str) and len(message) > 0:
             self.config_errors.append(message)
 
-    def _add_warning(self, message: str = ""):
+    def _add_warning(self, message: str = "") -> None:
 
         if isinstance(message, str) and len(message) > 0:
             self.config_warnings.append(message)
@@ -132,16 +132,18 @@ class ConfigParser:
             config_data = parser_method(config_file=config_file)
             self._add_config_data(config_data, config_file)
 
+        # parse common and netbox config from env
         for section in [common_config_section_name, netbox_config_section_name]:
             env_config_data = self._parse_section_env_vars(section)
             self._add_config_data(env_config_data)
 
+        # parse source data from env
         env_config_data = self._parse_source_env_vars()
         self._add_config_data(env_config_data)
 
         self.parsing_finished = True
 
-    def _add_config_data(self, config_data: dict, config_file: str = "", read_from_env: bool = False) -> None:
+    def _add_config_data(self, config_data: dict, config_file: str = "") -> None:
 
         if not isinstance(config_data, dict):
             self._add_error(f"Parsed config data from file '{config_file}' is not a directory")
@@ -149,7 +151,7 @@ class ConfigParser:
 
         for section, section_data in config_data.items():
 
-            if section == "source":
+            if section == source_config_section_name:
                 if not isinstance(section_data, dict):
                     self._add_error(f"Parsed config data from file '{config_file}' for '{section}' is not a dictionary")
                     continue
@@ -176,7 +178,7 @@ class ConfigParser:
                 if self.content.get(section) is None:
                     self.content[section] = dict()
                 for key, value in section_data.items():
-                    self.content[section][key] = value
+                    self.content[section][str(key)] = value
 
     @staticmethod
     def get_config_file_path(config_file: str) -> str:
@@ -218,7 +220,7 @@ class ConfigParser:
                                                    empty_lines_in_values=False, interpolation=None)
 
         return_data = {
-            "source": dict(dict())
+            source_config_section_name: dict(dict())
         }
 
         try:
@@ -232,8 +234,9 @@ class ConfigParser:
 
         for section in config_handler.sections():
             source_data = dict(config_handler.items(section))
-            if section.startswith("source/"):
-                return_data["source"][section.replace("source/", "")] = source_data
+            if section.startswith(f"{source_config_section_name}/"):
+                return_data[source_config_section_name][section.replace(f"{source_config_section_name}/", "")] = \
+                    source_data
             else:
                 return_data[section] = source_data
 
@@ -259,8 +262,8 @@ class ConfigParser:
                 self._add_error(f"Unable to open file '{config_file}': {e}")
                 return return_data
 
-        if isinstance(return_data.get("sources"), dict) and return_data.get("source") is None:
-            return_data["source"] = return_data.get("sources")
+        if isinstance(return_data.get("sources"), dict) and return_data.get(source_config_section_name) is None:
+            return_data[source_config_section_name] = return_data.get("sources")
             del return_data["sources"]
 
         return return_data
@@ -285,12 +288,12 @@ class ConfigParser:
         env_var_list = dict()
         env_var_names = dict()  # keep list of var names to point out possible config errors
         return_data = {
-            "source": dict(dict())
+            source_config_section_name: dict(dict())
         }
 
         # compile dict of relevant env vars and values
         for key, value in os.environ.items():
-            if key.upper().startswith(env_var_source_prefix):
+            if key.upper().startswith(f"{env_var_source_prefix}_"):
                 env_var_list[key.upper()] = value
                 env_var_names[key.upper()] = key
 
@@ -315,7 +318,7 @@ class ConfigParser:
                     del env_var_names[key]
 
             if len(source_env_config) > 0:
-                return_data["source"][source_name] = source_env_config
+                return_data[source_config_section_name][source_name] = source_env_config
 
         # point out possible env var config mistakes
         for _, key in env_var_names.items():
