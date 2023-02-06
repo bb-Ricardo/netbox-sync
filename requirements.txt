@@ -6,4 +6,3 @@ pyvmomi==7.0.3
 aiodns==3.0.0
 setuptools>=62.00.0
 pyyaml==6.0
-toml==0.10.2

@@ -9,6 +9,7 @@
 
 from module.config.config_option import ConfigOption
 from module.config.config_base import ConfigBase
+from module.config import netbox_config_section_name
 
 
 class NetBoxConfig(ConfigBase):
@@ -16,7 +17,7 @@ class NetBoxConfig(ConfigBase):
     Controls the parameters for logging
     """
 
-    section_name = "netbox"
+    section_name = netbox_config_section_name
 
     options = [
         ConfigOption("api_token",

@@ -14,7 +14,6 @@ from logging.handlers import RotatingFileHandler
 
 from module.common.misc import do_error_exit
 
-
 # define DEBUG2 and DEBUG3 log levels
 DEBUG2 = 6  # extended messages
 DEBUG3 = 3  # extra extended messages
@@ -78,11 +77,11 @@ def setup_logging(log_level=None, log_file=None):
     log_format = '%(asctime)s - %(levelname)s: %(message)s'
 
     if log_level is None or log_level == "":
-        do_error_exit("ERROR: log level undefined or empty. Check config please.")
+        do_error_exit("log level undefined or empty. Check config please.")
 
     # check set log level against self defined log level array
     if not log_level.upper() in valid_log_levels:
-        do_error_exit(f"ERROR: Invalid log level: {log_level}")
+        do_error_exit(f"Passed invalid log level: {log_level}")
 
     # check the provided log level
     if log_level == "DEBUG2":
@@ -122,7 +121,7 @@ def setup_logging(log_level=None, log_file=None):
                 backupCount=log_file_max_rotation
             )
         except Exception as e:
-            do_error_exit(f"ERROR: Problems setting up log file: {e}")
+            do_error_exit(f"Problems setting up log file: {e}")
 
         log_file_handler.setFormatter(log_format)
         logger.addHandler(log_file_handler)

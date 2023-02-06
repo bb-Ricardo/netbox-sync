@@ -16,17 +16,25 @@ log = get_logger()
 
 class NetBoxInventory:
     """
-    Class to manage a inventory of NetBoxObject objects
+    Singleton class to manage a inventory of NetBoxObject objects
     """
 
     base_structure = dict()
 
     source_list = list()
 
-    def __init__(self):
+    # track NetBox API version and provided it for all sources
+    netbox_api_version = "0.0.0"
 
-        # track NetBox API version and provided it for all sources
-        self.netbox_api_version = "0.0.0"
+    def __new__(cls):
+        it = cls.__dict__.get("__it__")
+        if it is not None:
+            return it
+        cls.__it__ = it = object.__new__(cls)
+        it.init()
+        return it
+
+    def init(self):
 
         for object_type in NetBoxObject.__subclasses__():
 

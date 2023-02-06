@@ -7,11 +7,9 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-import os
-
-from module.common.misc import do_error_exit, grab
+from module.common.misc import grab
 from module.common.logging import get_logger
-from module.config.config_files import ConfigFilesParser
+from module.config.config_parser import ConfigParser
 from module.config.config_option import ConfigOption
 
 log = get_logger()
@@ -22,22 +20,17 @@ class ConfigBase:
         Base class to parse config data
     """
 
-    env_var_prefix = "NBS"
     section_name = None
 
     options = list()
 
-    def __init__(self, config_file_handler: ConfigFilesParser):
+    def __init__(self):
 
-        if not isinstance(config_file_handler, ConfigFilesParser):
-            do_error_exit("config data is not a config parser object")
+        config = ConfigParser()
+        if config.parsing_finished is True:
+            self.config_content = config.content
 
-        self._parse_config_data(config_file_handler.content)
-
-    def _parse_config_data(self, config_data):
-        """
-            generic method to parse config data and also takes care of reading equivalent env var
-        """
+    def parse(self, do_log: bool = True):
 
         if self.section_name is None:
             raise KeyError(f"Class '{self.__class__.__name__}' is missing 'section_name' attribute")
@@ -47,19 +40,20 @@ class ConfigBase:
             if not isinstance(config_object, ConfigOption):
                 continue
 
-            config_value = grab(config_data, f"{self.section_name}.{config_object.key}")
+            config_value = grab(self.config_content, f"{self.section_name}.{config_object.key}")
 
             alt_key_used = False
             if config_value is None and config_object.alt_key is not None:
                 alt_key_used = True
-                config_value = grab(config_data, f"{self.section_name}.{config_object.alt_key}")
+                config_value = grab(self.config_content, f"{self.section_name}.{config_object.alt_key}")
 
             # check for deprecated settings
             if config_object.deprecated is True:
                 log_text = f"Setting '{config_object.key}' is deprecated and will be removed soon."
                 if len(config_object.deprecation_message) > 0:
                     log_text += " " + config_object.deprecation_message
-                log.warning(log_text)
+                if do_log:
+                    log.warning(log_text)
 
             # check for removed settings
             if config_value is not None and config_object.removed is True:
@@ -70,23 +64,24 @@ class ConfigBase:
                            f"but is still defined in config section '{self.section_name}'."
                 if len(config_object.deprecation_message) > 0:
                     log_text += " " + config_object.deprecation_message
-                log.warning(log_text)
+                if do_log:
+                    log.warning(log_text)
                 continue
-
-            # parse env
-            env_var_name = f"{self.env_var_prefix}_{self.section_name}_{config_object.key}".upper()
-            config_value = os.environ.get(env_var_name, config_value)
 
             # set value
             config_object.set_value(config_value)
 
-    def parse(self):
-
         options = dict()
         for config_object in self.options:
             if isinstance(config_object, ConfigOption) and config_object.removed is False:
-                log.debug(f"Config: {self.section_name}.{config_object.key} = {config_object.sensitive_value}")
+                if do_log:
+                    log.debug(f"Config: {self.section_name}.{config_object.key} = {config_object.sensitive_value}")
                 options[config_object.key] = config_object.value
+
+        for option_key in grab(self.config_content, self.section_name, fallback=dict()).keys():
+            if option_key not in options:
+                if do_log:
+                    log.warning(f"Found unknown config option '{option_key}' for '{self.section_name}' config")
 
         return ConfigOptions(**options)
 

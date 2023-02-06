@@ -21,6 +21,8 @@ from packaging import version
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, do_error_exit, plural
 from module.netbox.object_classes import *
+from module.netbox.inventory import NetBoxInventory
+from module.netbox.config import NetBoxConfig
 
 log = get_logger()
 
@@ -74,10 +76,10 @@ class NetBoxHandler:
     # set bogus default version
     version = "0.0.1"
 
-    def __init__(self, settings=None, inventory=None, nb_sync_version=None):
+    def __init__(self, settings=None, nb_sync_version=None):
 
-        self.settings = settings
-        self.inventory = inventory
+        self.settings = NetBoxConfig().parse()
+        self.inventory = NetBoxInventory()
         self.version = nb_sync_version
 
         self.parse_config_settings(settings)

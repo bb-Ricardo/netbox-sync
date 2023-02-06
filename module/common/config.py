@@ -10,6 +10,7 @@
 
 from module.config.config_option import ConfigOption
 from module.config.config_base import ConfigBase
+from module.config import common_config_section_name
 
 
 class CommonConfig(ConfigBase):
@@ -17,7 +18,7 @@ class CommonConfig(ConfigBase):
     Controls the parameters for logging
     """
 
-    section_name = "common"
+    section_name = common_config_section_name
 
     options = [
         ConfigOption("log_level",

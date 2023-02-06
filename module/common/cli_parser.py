@@ -12,9 +12,10 @@ import os
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 
 from module.common.logging import valid_log_levels
+from module.config import default_config_file_path
 
 
-def parse_command_line(version=None, self_description=None, version_date=None, url=None, default_config_file_path=None):
+def parse_command_line(version=None, self_description=None, version_date=None, url=None):
     """
     parse command line arguments, also add current version and version date to description
 
@@ -28,8 +29,6 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
         release date of this version
     url: str
         project url
-    default_config_file_path: str
-        path to default config file
 
     Returns
     -------
@@ -43,7 +42,7 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
         description=description,
         formatter_class=RawDescriptionHelpFormatter)
 
-    parser.add_argument("-c", "--config", default=[], dest="config_file", nargs='+',
+    parser.add_argument("-c", "--config", default=[], dest="config_files", nargs='+',
                         help=f"points to the config file to read config data from which is not installed "
                              f"under the default path '{default_config_file_path}'",
                         metavar=os.path.basename(default_config_file_path))
@@ -63,7 +62,7 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
 
     # fix supplied config file path
     fixed_config_files = list()
-    for config_file in args.config_file:
+    for config_file in args.config_files:
 
         if len(config_file) == 0:
             continue
@@ -72,7 +71,7 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
             config_file = os.path.realpath(os.getcwd() + os.sep + config_file)
         fixed_config_files.append(config_file)
 
-    args.config_file = fixed_config_files
+    args.config_files = fixed_config_files
 
     return args
 

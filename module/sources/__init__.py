@@ -11,7 +11,6 @@
 from module.sources.vmware.connection import VMWareHandler
 from module.sources.check_redfish.import_inventory import CheckRedfish
 
-from module.common.configuration import get_config
 from module.common.logging import get_logger
 from module.netbox.inventory import NetBoxInventory
 
