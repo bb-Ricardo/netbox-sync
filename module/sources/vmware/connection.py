@@ -31,6 +31,7 @@ from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
 from module.netbox.inventory import NetBoxInventory
+from module.sources.common.permitted_subnets import PermittedSubnets
 from module.netbox.object_classes import (
     NetBoxInterfaceType,
     NBTag,
@@ -95,14 +96,6 @@ class VMWareHandler(SourceBase):
     ]
 
     settings = {
-        "enabled": True,
-        "host_fqdn": None,
-        "port": 443,
-        "username": None,
-        "password": None,
-        "validate_tls_certs": False,
-        "proxy_host": None,
-        "proxy_port": None,
         "cluster_exclude_filter": None,
         "cluster_include_filter": None,
         "host_exclude_filter": None,

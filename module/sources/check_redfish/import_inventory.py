@@ -7,7 +7,6 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-from ipaddress import ip_network
 import os
 import glob
 import json
@@ -18,8 +17,9 @@ from module.sources.common.source_base import SourceBase
 from module.sources.check_redfish.config import CheckRedfishConfig
 from module.common.logging import get_logger
 from module.common.misc import grab, get_string_or_none
-from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
+from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
+from module.sources.common.permitted_subnets import PermittedSubnets
 from module.netbox.object_classes import (
     NetBoxInterfaceType,
     NBTag,
@@ -103,80 +103,14 @@ class CheckRedfish(SourceBase):
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
+        self.permitted_subnets = PermittedSubnets(self.settings.permitted_subnets)
+        if self.permitted_subnets.validation_failed is True:
+            log.error(f"Config parsing for source '{self.name}' failed.")
+            return
+
         self.init_successful = True
 
         self.interface_adapter_type_dict = dict()
-
-    def parse_config_settings(self, config_settings):
-        """
-        Validate parsed settings from config file
-
-        Parameters
-        ----------
-        config_settings: dict
-            dict of config settings
-
-        """
-
-        validation_failed = False
-
-        for setting in ["inventory_file_path"]:
-            if config_settings.get(setting) is None:
-                log.error(f"Config option '{setting}' in 'source/{self.name}' can't be empty/undefined")
-                validation_failed = True
-
-        inv_path = config_settings.get("inventory_file_path")
-        if not os.path.exists(inv_path):
-            log.error(f"Inventory file path '{inv_path}' not found.")
-            validation_failed = True
-
-        if os.path.isfile(inv_path):
-            log.error(f"Inventory file path '{inv_path}' needs to be a directory.")
-            validation_failed = True
-
-        if not os.access(inv_path, os.X_OK | os.R_OK):
-            log.error(f"Inventory file path '{inv_path}' not readable.")
-            validation_failed = True
-
-        # check permitted ip subnets
-        permitted_subnets = list()
-        excluded_subnets = list()
-        self.settings["excluded_subnets"] = excluded_subnets
-
-        if config_settings.get("permitted_subnets") is None:
-            log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
-                     f"No IP addresses will be populated to NetBox!")
-        else:
-            config_settings["permitted_subnets"] = \
-                [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
-
-            # add "invisible" config option
-            self.settings["excluded_subnets"] = None
-
-            for subnet in config_settings["permitted_subnets"]:
-                excluded = False
-                if subnet[0] == "!":
-                    excluded = True
-                    subnet = subnet[1:].strip()
-
-                try:
-                    if excluded is True:
-                        excluded_subnets.append(ip_network(subnet))
-                    else:
-                        permitted_subnets.append(ip_network(subnet))
-                except Exception as e:
-                    log.error(f"Problem parsing permitted subnet: {e}")
-                    validation_failed = True
-
-        config_settings["permitted_subnets"] = permitted_subnets
-        config_settings["excluded_subnets"] = excluded_subnets
-
-        if validation_failed is True:
-            log.error("Config validation failed. Exit!")
-            exit(1)
-
-        for setting in self.settings.keys():
-            setattr(self, setting, config_settings.get(setting))
 
     def apply(self):
         """
@@ -870,17 +804,13 @@ class CheckRedfish(SourceBase):
             # collect ip addresses
             nic_ips[port_name] = list()
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv4_address, self.settings.permitted_subnets,
-                                             excluded_subnets=self.settings.excluded_subnets,
-                                             interface_name=port_name) is False:
+                if self.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv4_address)
 
             for ipv6_address in grab(nic_port, "ipv6_addresses", fallback=list()):
-                if ip_valid_to_add_to_netbox(ipv6_address, self.settings.permitted_subnets,
-                                             excluded_subnets=self.settings.excluded_subnets,
-                                             interface_name=port_name) is False:
+                if self.permitted_subnets.permitted(ipv6_address, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv6_address)

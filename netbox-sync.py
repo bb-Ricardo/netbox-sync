@@ -78,7 +78,7 @@ def main():
     inventory = NetBoxInventory()
 
     # establish NetBox connection
-    #nb_handler = NetBoxHandler(nb_sync_version=__version__)
+    nb_handler = NetBoxHandler(nb_sync_version=__version__)
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
@@ -94,7 +94,6 @@ def main():
     # instantiate source handlers and get attributes
     log.info("Initializing sources")
     sources = instantiate_sources()
-    exit(0)
 
     # all sources are unavailable
     if len(sources) == 0:

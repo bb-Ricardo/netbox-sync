@@ -36,6 +36,9 @@ class ConfigBase:
     def validate_options(self):
         pass
 
+    def set_validation_failed(self):
+        self._parsing_failed = True
+
     def parse(self, do_log: bool = True):
 
         def _log(handler, message):
@@ -113,7 +116,8 @@ class ConfigBase:
 
             options[config_object.key] = config_object.value
 
-        config_options = get_value() or dict()
+        # check for unknown config options
+        config_options = get_value()
         if not isinstance(config_options, dict):
             config_options = dict()
 
