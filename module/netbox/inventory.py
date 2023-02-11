@@ -294,7 +294,8 @@ class NetBoxInventory:
         """
 
         all_sources_tags = [x.source_tag for x in self.source_list]
-        disabled_sources_tags = [x.source_tag for x in self.source_list if getattr(x, "enabled") is False]
+        disabled_sources_tags = \
+            [x.source_tag for x in self.source_list if grab(x, "settings.enabled", fallback=False) is False]
 
         for object_type in NetBoxObject.__subclasses__():
 

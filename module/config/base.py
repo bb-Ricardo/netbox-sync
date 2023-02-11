@@ -11,6 +11,7 @@ from module.common.misc import grab
 from module.common.logging import get_logger
 from module.config.parser import ConfigParser
 from module.config.option import ConfigOption
+from module.config.group import ConfigOptionGroup
 
 log = get_logger()
 
@@ -66,7 +67,15 @@ class ConfigBase:
 
         options = dict()
 
+        input_options = list()
         for config_object in self.options:
+
+            if isinstance(config_object, ConfigOption):
+                input_options.append(config_object)
+            elif isinstance(config_object, ConfigOptionGroup):
+                input_options.extend(config_object.options)
+
+        for config_object in input_options:
 
             if not isinstance(config_object, ConfigOption):
                 continue
@@ -122,7 +131,7 @@ class ConfigBase:
             config_options = dict()
 
         for option_key in config_options.keys():
-            if option_key not in options:
+            if option_key not in [x.key for x in input_options]:
                 _log(log.warning, f"Found unknown config option '{option_key}' for '{config_option_location}' config")
 
         # validate parsed config

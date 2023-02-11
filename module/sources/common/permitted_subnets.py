@@ -28,7 +28,7 @@ class PermittedSubnets:
 
         if config_string is None:
             log.info(f"Config option 'permitted_subnets' is undefined. No IP addresses will be populated to NetBox!")
-            self._validation_failed = True
+            return
 
         if not isinstance(config_string, str):
             raise ValueError("permitted subnets need to be of type string")

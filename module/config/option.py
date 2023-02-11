@@ -59,9 +59,6 @@ class ConfigOption:
         if not isinstance(self.deprecation_message, str):
             raise ValueError(f"value for 'deprecation_message' of '{self.key}' must be of type str")
 
-        if len(self._description) == 0:
-            raise ValueError(f"value for 'description' of '{self.key}' can't be empty")
-
         if self.config_example is not None and not isinstance(self.config_example, self.value_type):
             raise ValueError(f"value for 'config_example' of '{self.key}' must be of '{self.value_type}'")
 

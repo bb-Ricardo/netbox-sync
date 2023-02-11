@@ -95,61 +95,6 @@ class VMWareHandler(SourceBase):
         NBCustomField
     ]
 
-    settings = {
-        "cluster_exclude_filter": None,
-        "cluster_include_filter": None,
-        "host_exclude_filter": None,
-        "host_include_filter": None,
-        "vm_exclude_filter": None,
-        "vm_include_filter": None,
-        "permitted_subnets": None,
-        "collect_hardware_asset_tag": True,
-        "match_host_by_serial": True,
-        "cluster_site_relation": None,
-        "cluster_tag_relation": None,
-        "cluster_tenant_relation": None,
-        "cluster_tag_source": None,
-        "host_role_relation": None,
-        "host_site_relation": None,
-        "host_tag_relation": None,
-        "host_tenant_relation": None,
-        "host_tag_source": None,
-        "vm_platform_relation": None,
-        "vm_role_relation": None,
-        "vm_tag_relation": None,
-        "vm_tenant_relation": None,
-        "vm_tag_source": None,
-        "dns_name_lookup": False,
-        "custom_dns_servers": None,
-        "set_primary_ip": "when-undefined",
-        "skip_vm_comments": False,
-        "skip_vm_templates": True,
-        "skip_offline_vms": False,
-        "skip_srm_placeholder_vms": False,
-        "strip_host_domain_name": False,
-        "strip_vm_domain_name": False,
-        "sync_custom_attributes": False,
-        "host_custom_object_attributes": None,
-        "vm_custom_object_attributes": None,
-        "set_source_name_as_cluster_group": False,
-        "sync_vm_dummy_interfaces": False,
-        "disable_vlan_sync": False,
-        "overwrite_device_interface_name": True,
-        "overwrite_vm_interface_name": True,
-        "track_vm_host": False,
-        "host_management_interface_match": "management, mgmt",
-        "ip_tenant_inheritance_order": "device, prefix"
-    }
-
-    deprecated_settings = {}
-
-    removed_settings = {
-        "netbox_host_device_role": "host_role_relation",
-        "netbox_vm_device_role": "vm_role_relation",
-        "sync_tags": "host_tag_source', 'vm_tag_source' or 'cluster_tag_source",
-        "sync_parent_tags": "host_tag_source', 'vm_tag_source' or 'cluster_tag_source"
-    }
-
     init_successful = False
     inventory = None
     name = None
@@ -220,47 +165,9 @@ class VMWareHandler(SourceBase):
         ----------
         config_settings: dict
             dict of config settings
-
         """
 
         validation_failed = False
-
-        for setting in ["host_fqdn", "port", "username", "password"]:
-            if config_settings.get(setting) is None:
-                log.error(f"Config option '{setting}' in 'source/{self.name}' can't be empty/undefined")
-                validation_failed = True
-
-        # check permitted ip subnets
-        permitted_subnets = list()
-        excluded_subnets = list()
-        self.settings["excluded_subnets"] = excluded_subnets
-        if config_settings.get("permitted_subnets") is None:
-            log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
-                     f"No IP addresses will be populated to NetBox!")
-        else:
-            config_settings["permitted_subnets"] = \
-                [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
-
-            # add "invisible" config option
-            self.settings["excluded_subnets"] = None
-
-            for subnet in config_settings["permitted_subnets"]:
-                excluded = False
-                if subnet[0] == "!":
-                    excluded = True
-                    subnet = subnet[1:].strip()
-
-                try:
-                    if excluded is True:
-                        excluded_subnets.append(ip_network(subnet))
-                    else:
-                        permitted_subnets.append(ip_network(subnet))
-                except Exception as e:
-                    log.error(f"Problem parsing permitted subnet: {e}")
-                    validation_failed = True
-
-        config_settings["permitted_subnets"] = permitted_subnets
-        config_settings["excluded_subnets"] = excluded_subnets
 
         # check include and exclude filter expressions
         for setting in [x for x in config_settings.keys() if "filter" in x]:
