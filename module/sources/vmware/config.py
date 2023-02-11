@@ -7,11 +7,19 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
+import re
+from ipaddress import ip_address
+
+from module.common.misc import quoted_split
 from module.config import source_config_section_name
 from module.config.base import ConfigBase
 from module.config.option import ConfigOption
 from module.config.group import ConfigOptionGroup
 from module.sources.common.conifg import *
+from module.sources.common.permitted_subnets import PermittedSubnets
+from module.common.logging import get_logger
+
+log = get_logger()
 
 
 class VMWareConfig(ConfigBase):
@@ -58,7 +66,8 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="""Enforces TLS certificate validation.
                          If vCenter uses a valid TLS certificate then this option should be set
-                         to 'true' to ensure a secure connection."""),
+                         to 'true' to ensure a secure connection.""",
+                         default_value=False),
 
             ConfigOption("proxy_host",
                          str,
@@ -334,19 +343,142 @@ class VMWareConfig(ConfigBase):
                          removed=True),
             ConfigOption("sync_tags",
                          bool,
-                         deprecation_message="You need to switch to 'host_tag_source', 'vm_tag_source' or 'cluster_tag_source",
+                         deprecation_message="You need to switch to 'host_tag_source', 'vm_tag_source' or 'cluster_tag_source'",
                          removed=True),
             ConfigOption("sync_parent_tags",
                          bool,
-                         deprecation_message="You need to switch to 'host_tag_source', 'vm_tag_source' or 'cluster_tag_source",
+                         deprecation_message="You need to switch to 'host_tag_source', 'vm_tag_source' or 'cluster_tag_source'",
                          removed=True)
         ]
 
         super().__init__()
 
     def validate_options(self):
-        pass
 
-#        for option in self.options:
-#
-#            pass
+        valid_tag_sources = [
+            "object", "parent_folder_1", "parent_folder_2", "cluster", "datacenter"
+        ]
+
+        for option in self.options:
+
+            if option.value is None:
+                continue
+
+            if "filter" in option.key:
+
+                re_compiled = None
+                try:
+                    re_compiled = re.compile(option.value)
+                except Exception as e:
+                    log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                option.set_value(re_compiled)
+
+                continue
+
+            if "relation" in option.key:
+
+                relation_data = list()
+
+                relation_type = option.key.split("_")[1]
+
+                for relation in quoted_split(option.value):
+
+                    object_name = relation.split("=")[0].strip(' "')
+                    relation_name = relation.split("=")[1].strip(' "')
+
+                    if len(object_name) == 0 or len(relation_name) == 0:
+                        log.error(f"Config option '{relation}' malformed got '{object_name}' for "
+                                  f"object name and '{relation_name}' for {relation_type} name.")
+                        self.set_validation_failed()
+                        continue
+
+                    try:
+                        re_compiled = re.compile(object_name)
+                    except Exception as e:
+                        log.error(f"Problem parsing regular expression '{object_name}' for '{relation}': {e}")
+                        self.set_validation_failed()
+                        continue
+
+                    relation_data.append({
+                        "object_regex": re_compiled,
+                        "assigned_name": relation_name
+                    })
+
+                option.set_value(relation_data)
+
+                continue
+
+            if "custom_object_attributes" in option.key:
+
+                option.set_value(quoted_split(option.value))
+
+                continue
+
+            if "tag_source" in option.key:
+
+                option.set_value(quoted_split(option.value))
+
+                for tag_source_option in option.value:
+                    if tag_source_option not in valid_tag_sources:
+                        log.error(f"Tag source '{tag_source_option}' for '{option.key}' option invalid.")
+                        self.set_validation_failed()
+
+                continue
+
+            if option.key == "set_primary_ip":
+                if option.value not in ["always", "when-undefined", "never"]:
+                    log.error(f"Primary IP option '{option.key}' value '{option.value}' invalid.")
+                    self.set_validation_failed()
+
+            if option.key == "custom_dns_servers":
+
+                dns_name_lookup = self.get_option_by_name("dns_name_lookup")
+
+                if not isinstance(dns_name_lookup, ConfigOption) or dns_name_lookup.value is False:
+                    continue
+
+                custom_dns_servers = quoted_split(option.value)
+
+                tested_custom_dns_servers = list()
+                for custom_dns_server in custom_dns_servers:
+                    try:
+                        tested_custom_dns_servers.append(str(ip_address(custom_dns_server)))
+                    except ValueError:
+                        log.error(f"Config option 'custom_dns_servers' value '{custom_dns_server}' "
+                                  f"does not appear to be an IP address.")
+                        self.set_validation_failed()
+
+                option.set_value(tested_custom_dns_servers)
+
+                continue
+
+            if option.key == "host_management_interface_match":
+
+                option.set_value(quoted_split(option.value))
+
+                continue
+
+            if option.key == "ip_tenant_inheritance_order":
+
+                option.set_value(quoted_split(option.value))
+
+                for ip_tenant_inheritance in option.value:
+                    if ip_tenant_inheritance not in ["device", "prefix", "disabled"]:
+                        log.error(f"Config value '{ip_tenant_inheritance}' invalid for "
+                                  f"config option 'ip_tenant_inheritance_order'!")
+                        self.set_validation_failed()
+
+                if len(option.value) > 2:
+                    log.error("Config option 'ip_tenant_inheritance_order' can contain only 2 items max")
+                    self.set_validation_failed()
+
+        permitted_subnets_option = self.get_option_by_name("permitted_subnets")
+
+        if permitted_subnets_option is not None:
+            permitted_subnets = PermittedSubnets(permitted_subnets_option.value)
+            if permitted_subnets.validation_failed is True:
+                self.set_validation_failed()
+
+            permitted_subnets_option.set_value(permitted_subnets)

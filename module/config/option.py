@@ -98,6 +98,9 @@ class ConfigOption:
                 self.parsing_failed = True
                 return
         else:
+            if len(str(value)) == 0:
+                return
+
             config_value = value
 
         self._value = config_value

@@ -16,6 +16,21 @@ from module.config.group import ConfigOptionGroup
 log = get_logger()
 
 
+class ConfigOptions:
+
+    def __init__(self, **kwargs):
+        for name in kwargs:
+            setattr(self, name, kwargs[name])
+
+    def __eq__(self, other):
+        if not isinstance(other, ConfigOptions):
+            return NotImplemented
+        return vars(self) == vars(other)
+
+    def __contains__(self, key):
+        return key in self.__dict__
+
+
 class ConfigBase:
     """
         Base class to parse config data
@@ -39,6 +54,11 @@ class ConfigBase:
 
     def set_validation_failed(self):
         self._parsing_failed = True
+
+    def get_option_by_name(self, name: str) -> ConfigOption:
+        for option in self.options:
+            if option.key == name:
+                return option
 
     def parse(self, do_log: bool = True):
 
@@ -65,7 +85,7 @@ class ConfigBase:
         if hasattr(self, "source_name"):
             config_option_location += f".{self.source_name}"
 
-        options = dict()
+        options_returned = list()
 
         input_options = list()
         for config_object in self.options:
@@ -123,7 +143,9 @@ class ConfigBase:
             if config_object.parsing_failed is True:
                 self._parsing_failed = True
 
-            options[config_object.key] = config_object.value
+            options_returned.append(config_object)
+
+        self.options = options_returned
 
         # check for unknown config options
         config_options = get_value()
@@ -141,19 +163,4 @@ class ConfigBase:
             log.error("Config validation failed. Exit!")
             exit(1)
 
-        return ConfigOptions(**options)
-
-
-class ConfigOptions:
-
-    def __init__(self, **kwargs):
-        for name in kwargs:
-            setattr(self, name, kwargs[name])
-
-    def __eq__(self, other):
-        if not isinstance(other, ConfigOptions):
-            return NotImplemented
-        return vars(self) == vars(other)
-
-    def __contains__(self, key):
-        return key in self.__dict__
+        return ConfigOptions(**{x.key: x.value for x in self.options})

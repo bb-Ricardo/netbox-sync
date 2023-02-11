@@ -19,7 +19,6 @@ from module.common.logging import get_logger
 from module.common.misc import grab, get_string_or_none
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
-from module.sources.common.permitted_subnets import PermittedSubnets
 from module.netbox.object_classes import (
     NetBoxInterfaceType,
     NBTag,
@@ -78,9 +77,6 @@ class CheckRedfish(SourceBase):
 
     source_type = "check_redfish"
 
-    init_successful = False
-    name = None
-    settings = None
     device_object = None
     inventory_file_content = None
 
@@ -97,15 +93,10 @@ class CheckRedfish(SourceBase):
         settings_handler.source_name = self.name
         self.settings = settings_handler.parse()
 
-        self.source_tag = f"Source: {name}"
+        self.set_source_tag()
 
         if self.settings.enabled is False:
             log.info(f"Source '{name}' is currently disabled. Skipping")
-            return
-
-        self.permitted_subnets = PermittedSubnets(self.settings.permitted_subnets)
-        if self.permitted_subnets.validation_failed is True:
-            log.error(f"Config parsing for source '{self.name}' failed.")
             return
 
         self.init_successful = True
@@ -804,13 +795,13 @@ class CheckRedfish(SourceBase):
             # collect ip addresses
             nic_ips[port_name] = list()
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
-                if self.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:
+                if self.settings.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv4_address)
 
             for ipv6_address in grab(nic_port, "ipv6_addresses", fallback=list()):
-                if self.permitted_subnets.permitted(ipv6_address, interface_name=port_name) is False:
+                if self.settings.permitted_subnets.permitted(ipv6_address, interface_name=port_name) is False:
                     continue
 
                 nic_ips[port_name].append(ipv6_address)

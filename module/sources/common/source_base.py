@@ -36,6 +36,12 @@ class SourceBase:
 
     inventory = None
     source_tag = None
+    settings = None
+    init_successful = False
+    name = None
+
+    def set_source_tag(self):
+        self.source_tag = f"Source: {self.name}"
 
     @classmethod
     def implements(cls, source_type):

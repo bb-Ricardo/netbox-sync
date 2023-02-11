@@ -90,3 +90,12 @@ class CheckRedfishConfig(ConfigBase):
                 if not os.access(option.value, os.X_OK | os.R_OK):
                     log.error(f"Inventory file path '{option.value}' not readable.")
                     self.set_validation_failed()
+
+        permitted_subnets_option = self.get_option_by_name("permitted_subnets")
+
+        if permitted_subnets_option is not None:
+            permitted_subnets = PermittedSubnets(permitted_subnets_option.value)
+            if permitted_subnets.validation_failed is True:
+                self.set_validation_failed()
+
+            permitted_subnets_option.set_value(permitted_subnets)
