@@ -16,6 +16,8 @@ import yaml
 from module.common.logging import get_logger
 from module.common.misc import grab, do_error_exit
 from module.config import *
+from module.config.files import ConfigFile, ConfigFileINI, ConfigFileYAML
+
 
 log = get_logger()
 
@@ -112,24 +114,22 @@ class ConfigParser:
                 self.file_list.remove(f)
                 continue
 
-        config_file_type_parser_methods = {
-            "ini": self._parse_ini,
-            "yaml": self._parse_yaml,
-            "yml": self._parse_yaml
-        }
-
         for config_file in self.file_list:
 
-            suffix = config_file.lower().split(".")[-1]
+            config_file_type = ConfigFile.get_file_type(config_file)
 
-            parser_method = config_file_type_parser_methods.get(suffix)
-
-            if parser_method is None:
-                self._add_error(f"Unknown/Unsupported config file type '{suffix}' for {config_file}")
+            if config_file_type is None:
+                self._add_error(f"Unknown/Unsupported config file type "
+                                f"'{ConfigFile.get_suffix(config_file)}' for {config_file}")
                 continue
 
-            # noinspection PyArgumentList
-            config_data = parser_method(config_file=config_file)
+            if config_file_type == ConfigFileINI:
+                config_data = self._parse_ini(config_file)
+            elif config_file_type == ConfigFileYAML:
+                config_data = self._parse_yaml(config_file)
+            else:
+                continue
+
             self._add_config_data(config_data, config_file)
 
         # parse common and netbox config from env
@@ -146,7 +146,7 @@ class ConfigParser:
     def _add_config_data(self, config_data: dict, config_file: str = "") -> None:
 
         if not isinstance(config_data, dict):
-            self._add_error(f"Parsed config data from file '{config_file}' is not a directory")
+            self._add_error(f"Parsed config data from file '{config_file}' is not a dictionary")
             return
 
         for section, section_data in config_data.items():
@@ -171,8 +171,11 @@ class ConfigParser:
                             current_data[key] = value
             else:
 
+                if section_data is None:
+                    continue
+
                 if not isinstance(section_data, dict):
-                    self._add_error(f"Parsed config data from file '{config_file}' for '{section}' is not a directory")
+                    self._add_error(f"Parsed config data from file '{config_file}' for '{section}' is not a dictionary")
                     continue
 
                 if self.content.get(section) is None:

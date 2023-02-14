@@ -8,9 +8,10 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 from module.config.option import ConfigOption
+from module.config.formatter import DescriptionFormatterMixin
 
 
-class ConfigOptionGroup:
+class ConfigOptionGroup(DescriptionFormatterMixin):
 
     def __init__(self,
                  title: str = "",
@@ -19,7 +20,7 @@ class ConfigOptionGroup:
                  options: list = None):
 
         self.title = title
-        self.description = description
+        self._description = description
         self.config_example = config_example
         self.options = options
 

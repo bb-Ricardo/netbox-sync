@@ -26,6 +26,7 @@ class VMWareConfig(ConfigBase):
 
     section_name = source_config_section_name
     source_name = None
+    source_name_example = "my-vcenter-example"
 
     def __init__(self):
         self.options = [
@@ -40,19 +41,18 @@ class VMWareConfig(ConfigBase):
             ConfigOption("host_fqdn",
                          str,
                          description="host name / IP address of the vCenter",
-                         config_example="my-netbox.local",
+                         config_example="vcenter.example.com",
                          mandatory=True),
 
             ConfigOption("port",
                          int,
                          description="TCP port to connect to",
-                         default_value=443,
-                         mandatory=True),
+                         default_value=443),
 
             ConfigOption("username",
                          str,
                          description="username to use to log into vCenter",
-                         config_example="vcenter-admin",
+                         config_example="vcenter-readonly",
                          mandatory=True),
 
             ConfigOption("password",
@@ -89,11 +89,10 @@ class VMWareConfig(ConfigBase):
                               into NetBox. Include filters are checked first and exclude filters after.
                               An object name has to pass both filters to be synced to NetBox.
                               If a filter is unset it will be ignored. Filters are all treated as regex expressions!
-                              If more then one expression should match a '|' needs to be used
+                              If more then one expression should match, a '|' needs to be used
                               """,
-                              config_example="""
-                              (exclude all VMs with "replica" in their name and all VMs starting with "backup")
-                                vm_exclude_filter = .*replica.*|^backup.*""",
+                              config_example="""Example: (exclude all VMs with "replica" in their name 
+                              and all VMs starting with "backup"): vm_exclude_filter = .*replica.*|^backup.*""",
                               options=[
                                 ConfigOption("cluster_exclude_filter",
                                              str,
@@ -115,7 +114,7 @@ class VMWareConfig(ConfigBase):
                               options=[
                                 ConfigOption("cluster_site_relation",
                                              str,
-                                             description="""
+                                             description="""\
                                              This option defines which vCenter cluster is part of a NetBox site.
                                              This is done with a comma separated key = value list.
                                                key: defines the cluster name as regex
@@ -135,7 +134,7 @@ class VMWareConfig(ConfigBase):
                                              config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
                                 ConfigOption("cluster_tenant_relation",
                                              str,
-                                             description="""
+                                             description="""\
                                              This option defines which cluster/host/VM belongs to which tenant.
                                              This is done with a comma separated key = value list.
                                                key: defines a hosts/VM name as regex
@@ -148,7 +147,7 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("vm_tenant_relation", str, config_example="grafana.* = Infrastructure"),
                                 ConfigOption("vm_platform_relation",
                                              str,
-                                             description="""
+                                             description="""\
                                              This option defines custom platforms if the VMWare created platforms are not suitable.
                                              Pretty much a mapping of VMWare platform name to your own platform name.
                                              This is done with a comma separated key = value list.
@@ -157,7 +156,7 @@ class VMWareConfig(ConfigBase):
                                              config_example="centos-7.* = centos7, microsoft-windows-server-2016.* = Windows2016"),
                                 ConfigOption("host_role_relation",
                                              str,
-                                             description="""
+                                             description="""\
                                              Define the NetBox device role used for hosts and VMs. The default is
                                              set to "Server". This is done with a comma separated key = value list.
                                                key: defines a hosts/VM name as regex
@@ -167,7 +166,7 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("vm_role_relation", str, config_example=".* = Server"),
                                 ConfigOption("cluster_tag_relation",
                                              str,
-                                             description="""
+                                             description="""\
                                              Define NetBox tags which are assigned to a cluster, host or VM. This is
                                              done with a comma separated key = value list.
                                                key: defines a hosts/VM name as regex
@@ -199,20 +198,20 @@ class VMWareConfig(ConfigBase):
                          config_example="192.168.1.11, 192.168.1.12"),
             ConfigOption("set_primary_ip",
                          str,
-                         description="""
+                         description="""\
                          define how the primary IPs should be set
                          possible values:
 
-                             always:     will remove primary IP from the object where this address is
-                                         currently set as primary and moves it to new object
+                           always:     will remove primary IP from the object where this address is
+                                       currently set as primary and moves it to new object
 
-                             when-undefined:
-                                         only sets primary IP if undefined, will cause ERRORs if same IP is
-                                         assigned more then once to different hosts and IP is set as the
-                                         objects primary IP
+                           when-undefined:
+                                       only sets primary IP if undefined, will cause ERRORs if same IP is
+                                       assigned more then once to different hosts and IP is set as the
+                                       objects primary IP
 
-                             never:      don't set any primary IPs, will cause the same ERRORs
-                                         as "when-undefined"
+                           never:      don't set any primary IPs, will cause the same ERRORs
+                                       as "when-undefined"
                          """,
                          default_value="when-undefined"),
             ConfigOption("skip_vm_comments",
@@ -225,7 +224,7 @@ class VMWareConfig(ConfigBase):
                          default_value=True),
             ConfigOption("skip_offline_vms",
                          bool,
-                         description="""
+                         description="""\
                          Skip virtual machines which are reported as offline.
                          ATTENTION: this option will keep purging stopped VMs if activated!
                          """,
@@ -244,7 +243,7 @@ class VMWareConfig(ConfigBase):
                          description="strip domain part from VM name before syncing VM to NetBox",
                          default_value=False),
             ConfigOptionGroup(title="tag source",
-                              description="""
+                              description="""\
                               sync tags assigned to clusters, hosts and VMs in vCenter to NetBox
                               INFO: this requires the installation of the 'vsphere-automation-sdk',
                               see docs about installation possible values:
@@ -255,7 +254,7 @@ class VMWareConfig(ConfigBase):
                                 * datacenter : the datacenter this object is organized in
                               this is a comma separated list of options. example: vm_tag_source = object, cluster
                               """,
-                              config_example="vm_tag_source = object, cluster",
+                              config_example="Example: vm_tag_source = object, cluster",
                               options=[
                                 ConfigOption("cluster_tag_source", str),
                                 ConfigOption("host_tag_source", str),
@@ -267,7 +266,7 @@ class VMWareConfig(ConfigBase):
                          in vCenter to NetBox as custom fields""",
                          default_value=False),
             ConfigOptionGroup(title="custom object attributes",
-                              description="""
+                              description="""\
                               add arbitrary host/vm object attributes as custom fields to NetBox.
                               multiple attributes can be defined comma separated.
                               to get a list of available attributes use '-l DEBUG3' as cli param (CAREFUL: output might be long)
@@ -307,12 +306,12 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="""define if the name of the device interface discovered overwrites the
                          interface name in NetBox. The interface will only be matched by identical MAC address""",
-                         default_value=False),
+                         default_value=True),
             ConfigOption("overwrite_vm_interface_name",
                          bool,
                          description="""define if the name of the VM interface discovered overwrites the
                          interface name in NetBox. The interface will only be matched by identical MAC address""",
-                         default_value=False),
+                         default_value=True),
             ConfigOption("host_management_interface_match",
                          str,
                          description="""set a matching value for ESXi host management interface description
@@ -320,7 +319,7 @@ class VMWareConfig(ConfigBase):
                          default_value="management, mgmt"),
             ConfigOption("ip_tenant_inheritance_order",
                          str,
-                         description="""
+                         description="""\
                          define in which order the IP address tenant will be assigned if tenant is undefined.
                          possible values:
                            * device : host or VM tenant will be assigned to the IP address

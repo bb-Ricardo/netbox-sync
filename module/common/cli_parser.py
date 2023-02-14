@@ -13,22 +13,17 @@ from argparse import ArgumentParser, RawDescriptionHelpFormatter
 
 from module.common.logging import valid_log_levels
 from module.config import default_config_file_path
+from module import __version__, __version_date__, __url__
 
 
-def parse_command_line(version=None, self_description=None, version_date=None, url=None):
+def parse_command_line(self_description=None):
     """
     parse command line arguments, also add current version and version date to description
 
     Parameters
     ----------
-    version: str
-        version of this program
     self_description: str
         short self description of this program
-    version_date: str
-        release date of this version
-    url: str
-        project url
 
     Returns
     -------
@@ -36,7 +31,7 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
     """
 
     # define command line options
-    description = f"{self_description}\nVersion: {version} ({version_date})\nProject URL: {url}"
+    description = f"{self_description}\nVersion: {__version__} ({__version_date__})\nProject URL: {__url__}"
 
     parser = ArgumentParser(
         description=description,
@@ -47,7 +42,10 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
                              f"under the default path '{default_config_file_path}'",
                         metavar=os.path.basename(default_config_file_path))
 
-    parser.add_argument("-l", "--log_level", choices=valid_log_levels, dest="log_level",
+    parser.add_argument("-g", "--generate_config", action="store_true",
+                        help="generates default config file.")
+
+    parser.add_argument("-l", "--log_level", choices=valid_log_levels,
                         help="set log level (overrides config)")
 
     parser.add_argument("-n", "--dry_run", action="store_true",

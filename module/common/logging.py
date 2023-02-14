@@ -26,6 +26,9 @@ logging.addLevelName(DEBUG2, "DEBUG2")
 # add log level DEBUG3
 logging.addLevelName(DEBUG3, "DEBUG3")
 
+log_file_max_size_in_mb = 10
+log_file_max_rotation = 5
+
 
 def debug2(self, message, *args, **kws):
     if self.isEnabledFor(DEBUG2):
@@ -70,9 +73,6 @@ def setup_logging(log_level=None, log_file=None):
     -------
     log handler to use for logging
     """
-
-    log_file_max_size_in_mb = 10
-    log_file_max_rotation = 5
 
     log_format = '%(asctime)s - %(levelname)s: %(message)s'
 

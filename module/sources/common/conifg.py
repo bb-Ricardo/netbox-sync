@@ -21,5 +21,5 @@ config_option_permitted_subnets_definition = {
     this networks then it WON'T be synced to NetBox. To excluded small blocks from bigger IP blocks
     a leading '!' has to be added
     """,
-    "config_example": "10.0.0.0/8, !10.23.42.0/24"
+    "config_example": "172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16, fd00::/8, !10.23.42.0/24"
 }

@@ -8,14 +8,14 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 from typing import Any
-from textwrap import wrap, fill, indent, dedent
 
+from module.config.formatter import DescriptionFormatterMixin
 from module.common.logging import get_logger
 
 log = get_logger()
 
 
-class ConfigOption:
+class ConfigOption(DescriptionFormatterMixin):
     """
     handles all attributes of a single config option
     """
@@ -124,59 +124,3 @@ class ConfigOption:
 
         raise ValueError
 
-    def description(self, width: int = 80) -> str:
-        """
-        return description as a string wrapped at 'width'
-
-        SPECIAL: if self._description starts with a blank character,
-                 the description will be strip of indentation and NO line wrapping will be applied.
-
-        Parameters
-        ----------
-        width: int
-            max characters per line
-
-        Returns
-        -------
-        str: single string containing new line characters
-        """
-
-        if not isinstance(width, int):
-            raise ValueError("value for 'width' must be of type int")
-
-        if self._description.startswith(" "):
-            return dedent(self._description)
-        else:
-            return fill(" ".join(wrap(self._description)), width=width)
-
-    def config_description(self, prefix: str = "#", width: int = 80) -> str:
-        """
-        prefixes each description line with one or more 'prefix' characters
-        and a blank between prefix and description line text
-
-        Parameters
-        ----------
-        prefix: str
-            string to prefix each line with
-        width: int
-            max characters per line
-
-        Returns
-        -------
-        str: single string containing new line characters
-        """
-
-        if not isinstance(width, int):
-            raise ValueError("value for 'width' must be of type int")
-
-        if not isinstance(prefix, str):
-            raise ValueError("value for 'prefix' must be of type str")
-
-        prefix += " "
-
-        if width - len(prefix) < 3:
-            width = 3
-        else:
-            width = width - len(prefix)
-
-        return indent(self.description(width), prefix)

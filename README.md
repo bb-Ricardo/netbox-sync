@@ -38,6 +38,7 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * pyvmomi==7.0.3
 * aiodns==2.0.0
 * setuptools>=62.00.0
+* pyyaml==6.0
 
 ### Environment
 * NetBox >= 2.9
@@ -113,8 +114,8 @@ Run the containerized application in a kubernetes cluster
 
  ```shell
  docker build -t netbox-vsphere-sync .
- docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:v1.2.0
- docker image push your-registry.host/netbox-vsphere-sync:v1.2.0
+ docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:latest
+ docker image push your-registry.host/netbox-vsphere-sync:latest
 
  kubectl create secret generic netbox-vsphere-sync --from-file=settings.ini
  kubectl apply -f netbox-vsphere-sync-cronjob.yaml

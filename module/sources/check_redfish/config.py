@@ -23,6 +23,7 @@ class CheckRedfishConfig(ConfigBase):
 
     section_name = source_config_section_name
     source_name = None
+    source_name_example = "my-redfish-example"
 
     def __init__(self):
         self.options = [
@@ -37,6 +38,7 @@ class CheckRedfishConfig(ConfigBase):
             ConfigOption("inventory_file_path",
                          str,
                          description="define the full path where the check_redfish inventory json files are located",
+                         config_example="/full/path/to/inventory/files",
                          mandatory=True),
 
             ConfigOption(**config_option_permitted_subnets_definition),

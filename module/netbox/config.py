@@ -16,8 +16,7 @@ log = get_logger()
 
 
 class NetBoxConfig(ConfigBase):
-    """
-    Controls the parameters for logging
+    """Controls the connection parameters to your netBox instance
     """
 
     section_name = netbox_config_section_name

@@ -23,6 +23,7 @@ from module.common.misc import grab, do_error_exit, plural
 from module.netbox.object_classes import *
 from module.netbox.inventory import NetBoxInventory
 from module.netbox.config import NetBoxConfig
+from module import __version__
 
 log = get_logger()
 
@@ -50,14 +51,10 @@ class NetBoxHandler:
     # keep track of already resolved dependencies
     resolved_dependencies = set()
 
-    # set bogus default version
-    version = "0.0.1"
-
-    def __init__(self, nb_sync_version=None):
+    def __init__(self):
 
         self.settings = NetBoxConfig().parse()
         self.inventory = NetBoxInventory()
-        self.version = nb_sync_version
 
         # flood the console
         if log.level == DEBUG3:
@@ -150,7 +147,7 @@ class NetBoxHandler:
 
         header = {
             "Authorization": f"Token {self.settings.api_token}",
-            "User-Agent": f"netbox-sync/{self.version}",
+            "User-Agent": f"netbox-sync/{__version__}",
             "Content-Type": "application/json"
         }
 

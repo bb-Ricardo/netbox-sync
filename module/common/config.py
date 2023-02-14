@@ -11,11 +11,10 @@
 from module.config.option import ConfigOption
 from module.config.base import ConfigBase
 from module.config import common_config_section_name
-
+from module.common.logging import log_file_max_rotation, log_file_max_size_in_mb
 
 class CommonConfig(ConfigBase):
-    """
-    Controls the parameters for logging
+    """Controls the parameters for logging
     """
 
     section_name = common_config_section_name
@@ -32,11 +31,11 @@ class CommonConfig(ConfigBase):
                                        to have a look at.
                            INFO:       Information about objects that will be create/updated/deleted in NetBox
                            DEBUG:      Will log information about retrieved information, changes in internal
-                                       content structure and parsed config
-                           DEBUG2:     Will also log information about how/why content is parsed or skipped.
+                                       data structure and parsed config
+                           DEBUG2:     Will also log information about how/why data is parsed or skipped.
                            DEBUG3:     Logs all source and NetBox queries/results to stdout. Very useful for
-                                       troubleshooting, but will log any sensitive content contained within a query.
-                        """,
+                                       troubleshooting, but will log any sensitive data contained within a query.
+                         """,
                          default_value="INFO"),
 
             ConfigOption("log_to_file",
@@ -44,12 +43,13 @@ class CommonConfig(ConfigBase):
                          description="""Enabling this options will write all
                          logs to a log file defined in 'log_file'
                          """,
-                         default_value=True),
+                         default_value=False),
 
             ConfigOption("log_file",
                          str,
-                         description="""Destination of the log file if "log_to_file" is enabled.
-                         Log file will be rotated maximum 5 times once the log file reaches size of 10 MB
+                         description=f"""Destination of the log file if "log_to_file" is enabled.
+                         Log file will be rotated maximum {log_file_max_rotation} times once
+                         the log file reaches size of {log_file_max_size_in_mb} MB
                          """,
                          default_value="log/netbox_sync.log")
         ]

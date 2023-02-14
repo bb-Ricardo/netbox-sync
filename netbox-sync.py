@@ -23,13 +23,8 @@ from module.netbox.inventory import NetBoxInventory
 from module.sources import instantiate_sources
 from module.config.parser import ConfigParser
 from module.common.config import CommonConfig
-
-__version__ = "1.3.0"
-__version_date__ = "2022-09-06"
-__author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
-__description__ = "NetBox Sync"
-__license__ = "MIT"
-__url__ = "https://github.com/bb-ricardo/netbox-sync"
+from module.config.file_output import ConfigFileOutput
+from module import __version__, __version_date__, __description__
 
 
 def main():
@@ -37,18 +32,15 @@ def main():
     start_time = datetime.now()
 
     # parse command line
-    args = parse_command_line(self_description=self_description,
-                              version=__version__,
-                              version_date=__version_date__,
-                              url=__url__)
+    args = parse_command_line(self_description=self_description)
+
+    # write out default config file and exit if "generate_config" is defined
+    ConfigFileOutput(args)
 
     # parse config files and environment variables
     config_parse_handler = ConfigParser()
     config_parse_handler.add_config_file_list(args.config_files)
     config_parse_handler.read_config()
-
-    # import pprint
-    # pprint.pprint(config_parse_handler.content)
 
     # read common config
     common_config = CommonConfig().parse(do_log=False)
@@ -78,7 +70,7 @@ def main():
     inventory = NetBoxInventory()
 
     # establish NetBox connection
-    nb_handler = NetBoxHandler(nb_sync_version=__version__)
+    nb_handler = NetBoxHandler()
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
