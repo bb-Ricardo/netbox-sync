@@ -83,6 +83,7 @@ class CheckRedfish(SourceBase):
         "overwrite_power_supply_attributes": True,
         "overwrite_interface_name": False,
         "overwrite_interface_attributes": True,
+        "ip_tenant_inheritance_order": "device, prefix"
     }
 
     init_successful = False
@@ -163,6 +164,18 @@ class CheckRedfish(SourceBase):
                     validation_failed = True
 
             config_settings["permitted_subnets"] = permitted_subnets
+
+        config_settings["ip_tenant_inheritance_order"] = \
+            [x.strip() for x in grab(config_settings, "ip_tenant_inheritance_order", fallback="").split(",")]
+
+        for ip_tenant_inheritance in config_settings["ip_tenant_inheritance_order"]:
+            if ip_tenant_inheritance not in ["device", "prefix", "disabled"]:
+                log.error(f"Config value '{ip_tenant_inheritance}' invalid for "
+                          f"config option 'ip_tenant_inheritance_order'!")
+                validation_failed = True
+        if len(config_settings["ip_tenant_inheritance_order"]) > 2:
+            log.error("Config option 'ip_tenant_inheritance_order' can contain only 2 items max")
+            validation_failed = True
 
         if validation_failed is True:
             log.error("Config validation failed. Exit!")
@@ -876,7 +889,9 @@ class CheckRedfish(SourceBase):
                 # update nic object
                 nic_object.update(data=data_to_update, source=self)
 
-            self.add_update_interface(nic_object, self.device_object, port_data, nic_ips.get(port_name, list()))
+            self.add_update_interface(nic_object, self.device_object, port_data, nic_ips.get(port_name, list()),
+                                                                       ip_tenant_inheritance_order=
+                                                                       self.ip_tenant_inheritance_order)
 
     def update_manager(self):
 
