@@ -7,8 +7,8 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-__version__ = "1.3.0"
-__version_date__ = "2022-09-06"
+__version__ = "1.4.0-beta1"
+__version_date__ = "2023-02-17"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
 __description__ = "NetBox Sync"
 __license__ = "MIT"
