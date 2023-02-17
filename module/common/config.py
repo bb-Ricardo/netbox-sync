@@ -13,6 +13,7 @@ from module.config.base import ConfigBase
 from module.config import common_config_section_name
 from module.common.logging import log_file_max_rotation, log_file_max_size_in_mb
 
+
 class CommonConfig(ConfigBase):
     """Controls the parameters for logging
     """

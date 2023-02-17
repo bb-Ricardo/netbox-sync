@@ -123,4 +123,3 @@ class ConfigOption(DescriptionFormatterMixin):
                 return valid[value.lower()]
 
         raise ValueError
-
