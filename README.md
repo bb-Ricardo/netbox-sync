@@ -38,6 +38,7 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * pyvmomi==7.0.3
 * aiodns==2.0.0
 * setuptools>=62.00.0
+* pyyaml==6.0
 
 ### Environment
 * NetBox >= 2.9
@@ -113,8 +114,8 @@ Run the containerized application in a kubernetes cluster
 
  ```shell
  docker build -t netbox-vsphere-sync .
- docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:v1.2.0
- docker image push your-registry.host/netbox-vsphere-sync:v1.2.0
+ docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:latest
+ docker image push your-registry.host/netbox-vsphere-sync:latest
 
  kubectl create secret generic netbox-vsphere-sync --from-file=settings.ini
  kubectl apply -f netbox-vsphere-sync-cronjob.yaml
@@ -132,7 +133,7 @@ A short description can be found [here](https://netbox.readthedocs.io/en/stable/
 # Running the script
 
 ```
-usage: netbox-sync.py [-h] [-c settings.ini]
+usage: netbox-sync.py [-h] [-c settings.ini [settings.ini ...]] [-g]
                       [-l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}] [-n] [-p]
 
 Sync objects from various sources to NetBox
@@ -140,12 +141,14 @@ Sync objects from various sources to NetBox
 Version: 1.3.0 (2022-09-06)
 Project URL: https://github.com/bb-ricardo/netbox-sync
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
-  -c settings.ini, --config settings.ini
+  -c settings.ini [settings.ini ...], --config settings.ini [settings.ini ...]
                         points to the config file to read config data from
                         which is not installed under the default path
                         './settings.ini'
+  -g, --generate_config
+                        generates default config file.
   -l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}, --log_level {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}
                         set log level (overrides config)
   -n, --dry_run         Operate as usual but don't change anything in NetBox.
@@ -160,9 +163,87 @@ optional arguments:
 It is recommended to set log level to `DEBUG2` this way the program should tell you what is happening and why.
 Also use the dry run option `-n` at the beginning to avoid changes directly in NetBox.
 
-## Setup
-Copy the [settings-example.ini](https://github.com/bb-Ricardo/netbox-sync/blob/main/settings-example.ini) sample settings file to `settings.ini`.
-All options are described in the example file.
+## Configuration
+There are two ways to define configuration. Any combination of config file(s) and environment variables is possible.
+* config files (the [default config](https://github.com/bb-Ricardo/netbox-sync/blob/main/settings-example.ini) file name is set to `./settings.ini`.)
+* environment variables
+
+The config from the environment variables will have precedence over the config file definitions.
+
+### Config files
+Following config file types are supported:
+* ini
+* yaml
+
+There is also more than one config file permitted. Example (config file names are also just examples):
+```bash
+/opt/netbox-sync/netbox-sync.py -c common.ini all-sources.yaml additional-config.yaml
+```
+
+All files are parsed in order of the definition and options will overwrite the same options if defined in a
+previous config file.
+
+To get config file examples which include descriptions and all default values, the `-g` can be used:
+```bash
+# this will create an ini example
+/opt/netbox-sync/netbox-sync.py -g -c settings-example.ini
+
+# and this will create an example config file in yaml format
+/opt/netbox-sync/netbox-sync.py -g -c settings-example.yaml 
+```
+
+### Environment variables
+Each setting which can be defined in a config file can also be defined using an environment variable.
+
+The prefix for all environment variables to be used in netbox-sync is: `NBS`
+
+For configuration in the `common` and `netbox` section a variable is defined like this
+```
+<PREFIX>_<SECTION_NAME>_<CONFIG_OPTION_KEY>=value
+```
+
+Following example represents the same configuration:
+```yaml
+# yaml config example
+common:
+  log_level: DEBUG2
+netbox:
+  host_fqdn: netbox-host.example.com
+  prune_enabled: true
+```
+```bash
+# this variable definition is equal to the yaml config sample above
+NBS_COMMON_LOG_LEVEL="DEBUG2"
+NBS_netbox_host_fqdn="netbox-host.example.com"
+NBS_NETBOX_PRUNE_ENABLED="true"
+```
+
+This way it is possible to expose for example the `NBS_NETBOX_API_KEY` only via an env variable.
+
+The config definitions for `sources` need to be defined using an index. Following conditions apply:
+* a single source needs to use the same index
+* the index can be number or a name (but contain any special characters to support env var parsing)
+* the source needs to be named with `_NAME` variable
+
+Example of defining a source with config and environment variables.
+```ini
+; example for a source
+[source/example-vcenter]
+enabled = True
+type = vmware
+host_fqdn = vcenter.example.com
+username = vcenter-readonly
+```
+```bash
+# define the password on command line
+# here we use '1' as index
+NBS_SOURCE_1_NAME="example-vcenter"
+NBS_SOURCE_1_PASSWORD="super-secret-and-not-saved-to-the-config-file"
+NBS_SOURCE_1_custom_dns_servers="10.0.23.23, 10.0.42.42"
+```
+
+Even to just define one source variable like `NBS_SOURCE_1_PASSWORD` the `NBS_SOURCE_1_NAME` needs to be defined as
+to associate to the according source definition.
 
 ## Cron job
 In Order to sync all items regularly you can add a cron job like this one

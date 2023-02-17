@@ -7,7 +7,6 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-from ipaddress import ip_interface, ip_address
 import asyncio
 
 import aiodns
@@ -43,82 +42,6 @@ def normalize_mac_address(mac_address=None):
         mac_address = ':'.join(mac_address[i:i+2] for i in range(0, len(mac_address), 2))
 
     return mac_address
-
-
-def ip_valid_to_add_to_netbox(ip, permitted_subnets, excluded_subnets=None, interface_name=None):
-    """
-    performs a couple of checks to see if an IP address is valid and allowed
-    to be added to NetBox
-
-    IP address must always be passed as interface notation
-        * 192.168.0.1/24
-        * fd00::0/64
-        * 192.168.23.24/255.255.255.24
-
-    Parameters
-    ----------
-    ip: str
-        IP address to validate
-    permitted_subnets: list
-        list of permitted subnets where each subnet/prefix is an instance of IP4Network or IP6Network
-    excluded_subnets: list
-        list of excluded subnets where each subnet/prefix is an instance of IP4Network or IP6Network
-    interface_name: str
-        name of the interface this IP shall be added. Important for meaningful log messages
-
-    Returns
-    -------
-    bool: if IP address is valid
-    """
-
-    if ip is None:
-        log.error("No IP address provided")
-        return False
-
-    if permitted_subnets is None:
-        return False
-
-    if excluded_subnets is None:
-        excluded_subnets = list()
-
-    ip_text = f"'{ip}'"
-    if interface_name is not None:
-        ip_text = f"{ip_text} for {interface_name}"
-
-    try:
-        if "/" in ip:
-            ip_a = ip_interface(ip).ip
-        else:
-            ip_a = ip_address(ip)
-    except ValueError:
-        log.error(f"IP address {ip_text} invalid!")
-        return False
-
-    if ip_a.is_link_local is True:
-        log.debug(f"IP address {ip_text} is a link local address. Skipping.")
-        return False
-
-    if ip_a.is_loopback is True:
-        log.debug(f"IP address {ip_text} is a loopback address. Skipping.")
-        return False
-
-    ip_permitted = False
-
-    for permitted_subnet in permitted_subnets:
-        if ip_a in permitted_subnet:
-            ip_permitted = True
-            break
-
-    for excluded_subnet in excluded_subnets:
-        if ip_a in excluded_subnet:
-            ip_permitted = False
-            break
-
-    if ip_permitted is False:
-        log.debug(f"IP address {ip_text} not part of any permitted subnet. Skipping.")
-        return False
-
-    return True
 
 
 def perform_ptr_lookups(ips, dns_servers=None):

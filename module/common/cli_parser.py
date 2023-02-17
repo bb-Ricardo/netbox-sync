@@ -12,24 +12,18 @@ import os
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 
 from module.common.logging import valid_log_levels
+from module.config import default_config_file_path
+from module import __version__, __version_date__, __url__
 
 
-def parse_command_line(version=None, self_description=None, version_date=None, url=None, default_config_file_path=None):
+def parse_command_line(self_description=None):
     """
     parse command line arguments, also add current version and version date to description
 
     Parameters
     ----------
-    version: str
-        version of this program
     self_description: str
         short self description of this program
-    version_date: str
-        release date of this version
-    url: str
-        project url
-    default_config_file_path: str
-        path to default config file
 
     Returns
     -------
@@ -37,19 +31,21 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
     """
 
     # define command line options
-    description = f"{self_description}\nVersion: {version} ({version_date})\nProject URL: {url}"
+    description = f"{self_description}\nVersion: {__version__} ({__version_date__})\nProject URL: {__url__}"
 
     parser = ArgumentParser(
         description=description,
         formatter_class=RawDescriptionHelpFormatter)
 
-    parser.add_argument("-c", "--config", default=default_config_file_path, dest="config_file",
-                        help="points to the config file to read config data from " +
-                             "which is not installed under the default path '" +
-                             default_config_file_path + "'",
-                        metavar="settings.ini")
+    parser.add_argument("-c", "--config", default=[], dest="config_files", nargs='+',
+                        help=f"points to the config file to read config data from which is not installed "
+                             f"under the default path '{default_config_file_path}'",
+                        metavar=os.path.basename(default_config_file_path))
 
-    parser.add_argument("-l", "--log_level", choices=valid_log_levels, dest="log_level",
+    parser.add_argument("-g", "--generate_config", action="store_true",
+                        help="generates default config file.")
+
+    parser.add_argument("-l", "--log_level", choices=valid_log_levels,
                         help="set log level (overrides config)")
 
     parser.add_argument("-n", "--dry_run", action="store_true",
@@ -63,8 +59,17 @@ def parse_command_line(version=None, self_description=None, version_date=None, u
     args = parser.parse_args()
 
     # fix supplied config file path
-    if args.config_file != default_config_file_path and args.config_file[0] != os.sep:
-        args.config_file = os.path.realpath(os.getcwd() + os.sep + args.config_file)
+    fixed_config_files = list()
+    for config_file in args.config_files:
+
+        if len(config_file) == 0:
+            continue
+
+        if config_file != default_config_file_path and config_file[0] != os.sep:
+            config_file = os.path.realpath(os.getcwd() + os.sep + config_file)
+        fixed_config_files.append(config_file)
+
+    args.config_files = fixed_config_files
 
     return args
 

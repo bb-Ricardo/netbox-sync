@@ -16,17 +16,25 @@ log = get_logger()
 
 class NetBoxInventory:
     """
-    Class to manage a inventory of NetBoxObject objects
+    Singleton class to manage a inventory of NetBoxObject objects
     """
 
     base_structure = dict()
 
     source_list = list()
 
-    def __init__(self):
+    # track NetBox API version and provided it for all sources
+    netbox_api_version = "0.0.0"
 
-        # track NetBox API version and provided it for all sources
-        self.netbox_api_version = "0.0.0"
+    def __new__(cls):
+        it = cls.__dict__.get("__it__")
+        if it is not None:
+            return it
+        cls.__it__ = it = object.__new__(cls)
+        it.init()
+        return it
+
+    def init(self):
 
         for object_type in NetBoxObject.__subclasses__():
 
@@ -240,13 +248,13 @@ class NetBoxInventory:
 
         return self.base_structure.get(object_type.name, list())
 
-    def get_all_interfaces(self, this_object):
+    def get_all_interfaces(self, this_object: (NBVM, NBDevice)):
         """
         Return all interfaces items for a NBVM, NBDevice object
 
         Parameters
         ----------
-        this_object: (NBVM, NBDevice)
+        this_object: NBVM, NBDevice
             object instance to return interfaces for
 
         Returns
@@ -286,7 +294,8 @@ class NetBoxInventory:
         """
 
         all_sources_tags = [x.source_tag for x in self.source_list]
-        disabled_sources_tags = [x.source_tag for x in self.source_list if getattr(x, "enabled") is False]
+        disabled_sources_tags = \
+            [x.source_tag for x in self.source_list if grab(x, "settings.enabled", fallback=False) is False]
 
         for object_type in NetBoxObject.__subclasses__():
 
