@@ -36,6 +36,12 @@ class SourceBase:
 
     inventory = None
     source_tag = None
+    settings = None
+    init_successful = False
+    name = None
+
+    def set_source_tag(self):
+        self.source_tag = f"Source: {self.name}"
 
     @classmethod
     def implements(cls, source_type):
@@ -696,7 +702,7 @@ class SourceBase:
 
         return return_data
 
-    def add_update_custom_field(self, data):
+    def add_update_custom_field(self, data) -> NBCustomField:
         """
         Adds/updates a NBCustomField object with data.
         Update will only update the 'content_types' attribute.

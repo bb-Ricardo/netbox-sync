@@ -15,25 +15,16 @@ Sync objects from various sources to NetBox
 
 from datetime import datetime
 
-from module.common.misc import grab, get_relative_time
+from module.common.misc import grab, get_relative_time, do_error_exit
 from module.common.cli_parser import parse_command_line
 from module.common.logging import setup_logging
-from module.common.configuration import get_config_file, open_config_file, get_config
 from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
-from module.netbox.object_classes import *
 from module.sources import instantiate_sources
-
-
-__version__ = "1.3.0"
-__version_date__ = "2022-09-06"
-__author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
-__description__ = "NetBox Sync"
-__license__ = "MIT"
-__url__ = "https://github.com/bb-ricardo/netbox-sync"
-
-default_log_level = "INFO"
-default_config_file_path = "./settings.ini"
+from module.config.parser import ConfigParser
+from module.common.config import CommonConfig
+from module.config.file_output import ConfigFileOutput
+from module import __version__, __version_date__, __description__
 
 
 def main():
@@ -41,46 +32,45 @@ def main():
     start_time = datetime.now()
 
     # parse command line
-    args = parse_command_line(self_description=self_description,
-                              version=__version__,
-                              version_date=__version_date__,
-                              url=__url__,
-                              default_config_file_path=default_config_file_path)
+    args = parse_command_line(self_description=self_description)
 
-    # get config file path
-    config_file = get_config_file(args.config_file)
+    # write out default config file and exit if "generate_config" is defined
+    ConfigFileOutput(args)
 
-    # get config handler
-    config_handler = open_config_file(config_file)
+    # parse config files and environment variables
+    config_parse_handler = ConfigParser()
+    config_parse_handler.add_config_file_list(args.config_files)
+    config_parse_handler.read_config()
 
-    # get logging configuration
+    # read common config
+    common_config = CommonConfig().parse(do_log=False)
 
-    # set log level
-    log_level = default_log_level
-    # config overwrites default
-    log_level = config_handler.get("common", "log_level", fallback=log_level)
     # cli option overwrites config file
-    log_level = grab(args, "log_level", fallback=log_level)
+    log_level = grab(args, "log_level", fallback=common_config.log_level)
 
     log_file = None
-    if bool(config_handler.getboolean("common", "log_to_file", fallback=False)) is True:
-        log_file = config_handler.get("common", "log_file", fallback=None)
+    if common_config.log_to_file is True:
+        log_file = common_config.log_file
 
     # setup logging
     log = setup_logging(log_level, log_file)
 
     # now we are ready to go
     log.info(f"Starting {__description__} v{__version__} ({__version_date__})")
-    log.debug(f"Using config file: {config_file}")
+    for config_file in config_parse_handler.file_list:
+        log.debug(f"Using config file: {config_file}")
+
+    # exit if any parser errors occurred here
+    config_parse_handler.log_end_exit_on_errors()
+
+    # just to print config options to log/console
+    CommonConfig().parse()
 
     # initialize an empty inventory which will be used to hold and reference all objects
     inventory = NetBoxInventory()
 
-    # get config for NetBox handler
-    netbox_settings = get_config(config_handler, section="netbox", valid_settings=NetBoxHandler.settings)
-
     # establish NetBox connection
-    nb_handler = NetBoxHandler(settings=netbox_settings, inventory=inventory, nb_sync_version=__version__)
+    nb_handler = NetBoxHandler()
 
     # if purge was selected we go ahead and remove all items which were managed by this tools
     if args.purge is True:
@@ -95,7 +85,7 @@ def main():
 
     # instantiate source handlers and get attributes
     log.info("Initializing sources")
-    sources = instantiate_sources(config_handler, inventory)
+    sources = instantiate_sources()
 
     # all sources are unavailable
     if len(sources) == 0:

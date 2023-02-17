@@ -7,9 +7,11 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-__version__ = "1.3.0"
-__version_date__ = "2022-09-06"
-__author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
-__description__ = "NetBox Sync"
-__license__ = "MIT"
-__url__ = "https://github.com/bb-ricardo/netbox-sync"
+default_config_file_path = "./settings.ini"
+
+common_config_section_name = "common"
+netbox_config_section_name = "netbox"
+source_config_section_name = "source"
+
+env_var_prefix = "NBS"
+env_var_source_prefix = f"{env_var_prefix}_{source_config_section_name.upper()}"
