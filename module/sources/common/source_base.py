@@ -271,8 +271,8 @@ class SourceBase:
             disable_vlan_sync = self.disable_vlan_sync
 
         ip_tenant_inheritance_order = None
-        if hasattr(self, "ip_tenant_inheritance_order"):
-            ip_tenant_inheritance_order = self.ip_tenant_inheritance_order
+        if hasattr(self.settings, "ip_tenant_inheritance_order"):
+            ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
 
         if not isinstance(interface_data, dict):
             log.error(f"Attribute 'interface_data' must be a dict() got {type(interface_data)}.")
