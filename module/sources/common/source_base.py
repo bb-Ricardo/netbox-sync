@@ -267,11 +267,11 @@ class SourceBase:
         """
 
         disable_vlan_sync = False
-        if hasattr(self, "disable_vlan_sync"):
-            disable_vlan_sync = self.disable_vlan_sync
+        if "disable_vlan_sync" in self.settings:
+            disable_vlan_sync = self.settings.disable_vlan_sync
 
         ip_tenant_inheritance_order = None
-        if hasattr(self.settings, "ip_tenant_inheritance_order"):
+        if "ip_tenant_inheritance_order" in self.settings:
             ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
 
         if not isinstance(interface_data, dict):
