@@ -14,6 +14,7 @@ from module.config.base import ConfigBase
 from module.config.option import ConfigOption
 from module.sources.common.conifg import *
 from module.common.logging import get_logger
+from module.common.misc import quoted_split
 from module.sources.common.permitted_subnets import PermittedSubnets
 
 log = get_logger()
@@ -71,7 +72,21 @@ class CheckRedfishConfig(ConfigBase):
                          bool,
                          description="""define if existing interface attributes are overwritten with data discovered
                          via check_redfish if False only data which is not preset in NetBox will be added""",
-                         default_value=True)
+                         default_value=True),
+
+            ConfigOption("ip_tenant_inheritance_order",
+                         str,
+                         description="""\
+                         define in which order the IP address tenant will be assigned if tenant is undefined.
+                         possible values:
+                           * device : host or VM tenant will be assigned to the IP address
+                           * prefix : if the IP address belongs to an existing prefix and this prefix has a tenant assigned, then this one is used
+                           * disabled : no tenant assignment to the IP address will be performed
+                         the order of the definition is important, the default is "device, prefix" which means:
+                         If the device has a tenant then this one will be used. If not, the prefix tenant will be used if defined
+                         """,
+                         default_value="device, prefix"
+                         ),
         ]
 
         super().__init__()
@@ -91,6 +106,18 @@ class CheckRedfishConfig(ConfigBase):
 
                 if not os.access(option.value, os.X_OK | os.R_OK):
                     log.error(f"Inventory file path '{option.value}' not readable.")
+                    self.set_validation_failed()
+
+            if option.key == "ip_tenant_inheritance_order":
+                option.set_value(quoted_split(option.value))
+                for ip_tenant_inheritance in option.value:
+                    if ip_tenant_inheritance not in ["device", "prefix", "disabled"]:
+                        log.error(f"Config value '{ip_tenant_inheritance}' invalid for "
+                                  f"config option 'ip_tenant_inheritance_order'!")
+                        self.set_validation_failed()
+
+                if len(option.value) > 2:
+                    log.error("Config option 'ip_tenant_inheritance_order' can contain only 2 items max")
                     self.set_validation_failed()
 
         permitted_subnets_option = self.get_option_by_name("permitted_subnets")
