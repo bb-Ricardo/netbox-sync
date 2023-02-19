@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2022 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -7,8 +7,8 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-__version__ = "1.4.0-beta1"
-__version_date__ = "2023-02-17"
+__version__ = "1.4.0-beta2"
+__version_date__ = "2023-02-19"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
 __description__ = "NetBox Sync"
 __license__ = "MIT"

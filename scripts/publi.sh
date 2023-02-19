@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
+#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#
+#  netbox-sync.py
+#
+#  This work is licensed under the terms of the MIT license.
+#  For a copy, see file LICENSE.txt included in this
+#  repository or visit: <https://opensource.org/licenses/MIT>.
+
+BASE_PATH="$(realpath "$(dirname "${0}")/..")"
+# shellcheck disable=SC2181
+[[ ${?} -ne 0 ]] && exit 1
+
+cd "${BASE_PATH}" || exit 1
 
 IMAGE_NAME="bbricardo/netbox-sync"
 IMAGE_PLATFORM="linux/arm/v7,linux/arm64/v8,linux/amd64"
 IMAGE_PLATFORM="linux/amd64" # currently only amd64 due to too many dependencies when installing vmware python sdk
-IMAGE_TAG=$(grep "^__version__" netbox-sync.py | sed 's/__version__ = "\(.*\)"/\1/g')
+IMAGE_TAG=$(grep "^__version__" module/__init__.py | sed 's/__version__ = "\(.*\)"/\1/g')
 
 if [[ -z "$IMAGE_TAG" ]]; then
   echo "ERROR: unable to grep version from 'netbox-sync.py'"
