@@ -20,7 +20,7 @@ from packaging import version
 
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, do_error_exit, plural
-from module.netbox.object_classes import *
+from module.netbox import *
 from module.netbox.inventory import NetBoxInventory
 from module.netbox.config import NetBoxConfig
 from module import __version__

@@ -7,7 +7,10 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-from module.netbox.object_classes import *
+import json
+
+from module.netbox import *
+from module.common.misc import grab
 from module.common.logging import get_logger
 from module.common.support import perform_ptr_lookups
 

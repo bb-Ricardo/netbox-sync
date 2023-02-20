@@ -11,18 +11,7 @@ import re
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
 
-from module.netbox.inventory import (
-    NetBoxObject,
-    NBDevice,
-    NBVM,
-    NBInterface,
-    NBVMInterface,
-    NBSite,
-    NBPrefix,
-    NBIPAddress,
-    NBVLAN,
-    NBCustomField
-)
+from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
 
