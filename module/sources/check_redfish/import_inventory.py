@@ -19,28 +19,7 @@ from module.common.logging import get_logger
 from module.common.misc import grab, get_string_or_none
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
-from module.netbox.object_classes import (
-    NetBoxInterfaceType,
-    NBTag,
-    NBManufacturer,
-    NBDeviceType,
-    NBPlatform,
-    NBClusterType,
-    NBClusterGroup,
-    NBDeviceRole,
-    NBSite,
-    NBCluster,
-    NBDevice,
-    NBInterface,
-    NBIPAddress,
-    NBPrefix,
-    NBTenant,
-    NBVRF,
-    NBVLAN,
-    NBPowerPort,
-    NBInventoryItem,
-    NBCustomField
-)
+from module.netbox import *
 
 log = get_logger()
 

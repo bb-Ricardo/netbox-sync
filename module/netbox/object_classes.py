@@ -260,17 +260,6 @@ class NetBoxObject:
     # just skip this object if a mandatory attribute is missing
     skip_object_if_mandatory_attr_is_missing = False
 
-    # list of default attributes which are added to every NetBox object during init
-    default_attributes = {
-        "data": None,
-        "is_new": True,
-        "nb_id": 0,
-        "updated_items": list(),
-        "unset_items": list(),
-        "source": None,
-        "deleted": False
-    }
-
     # keep handle to inventory instance to append objects on demand
     inventory = None
 
@@ -281,18 +270,15 @@ class NetBoxObject:
                 f"are set in {self.__class__.__name__}."
             )
 
-        # inherit and create default attributes from parent
-        for attr_key, attr_value in self.default_attributes.items():
-            if isinstance(attr_value, (list, dict, set)):
-                setattr(self, attr_key, attr_value.copy())
-            else:
-                setattr(self, attr_key, attr_value)
-
-        # store provided inventory handle
-        self.inventory = inventory
-
-        # initialize empty data dict
+        # set default values
         self.data = dict()
+        self.inventory = inventory
+        self.is_new = True
+        self.nb_id = 0
+        self.updated_items = list()
+        self.unset_items = list()
+        self.source = source
+        self.deleted = False
 
         # add empty lists for list items
         for key, data_type in self.data_model.items():

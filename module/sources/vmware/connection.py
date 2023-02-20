@@ -30,28 +30,7 @@ from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
-from module.netbox.object_classes import (
-    NetBoxInterfaceType,
-    NBTag,
-    NBManufacturer,
-    NBDeviceType,
-    NBPlatform,
-    NBClusterType,
-    NBClusterGroup,
-    NBDeviceRole,
-    NBSite,
-    NBCluster,
-    NBDevice,
-    NBVM,
-    NBVMInterface,
-    NBInterface,
-    NBIPAddress,
-    NBPrefix,
-    NBTenant,
-    NBVRF,
-    NBVLAN,
-    NBCustomField
-)
+from module.netbox import *
 
 vsphere_automation_sdk_available = True
 try:
