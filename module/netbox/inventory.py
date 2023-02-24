@@ -319,7 +319,7 @@ class NetBoxInventory:
                 else:
 
                     if bool(set(this_object_tags).intersection(disabled_sources_tags)) is True:
-                        log.debug2(f"Object '{this_object.get_display_name()}' was added "
+                        log.debug2(f"Object {this_object.__class__.name} '{this_object.get_display_name()}' was added "
                                    f"from a currently disabled source. Skipping orphaned tagging.")
                         continue
 
@@ -327,8 +327,10 @@ class NetBoxInventory:
                     if netbox_handler.primary_tag not in this_object_tags:
                         continue
 
-                    if bool(set(this_object_tags).intersection(all_sources_tags)) is False \
-                            and netbox_handler.ignore_unknown_source_object_pruning is True:
+                    if bool(set(this_object_tags).intersection(all_sources_tags)) is True:
+                        for source_tag in all_sources_tags:
+                            this_object.remove_tags(source_tag)
+                    elif netbox_handler.settings.ignore_unknown_source_object_pruning is True:
                         continue
 
                     if getattr(this_object, "prune", False) is False:
