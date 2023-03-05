@@ -30,11 +30,7 @@ class CheckRedfishConfig(ConfigBase):
         self.options = [
             ConfigOption(**config_option_enabled_definition),
 
-            ConfigOption("type",
-                         str,
-                         description="type of source. This defines which source handler to use",
-                         config_example="check_redfish",
-                         mandatory=True),
+            ConfigOption(**{**config_option_type_definition, "config_example": "check_redfish"}),
 
             ConfigOption("inventory_file_path",
                          str,
@@ -74,19 +70,7 @@ class CheckRedfishConfig(ConfigBase):
                          via check_redfish if False only data which is not preset in NetBox will be added""",
                          default_value=True),
 
-            ConfigOption("ip_tenant_inheritance_order",
-                         str,
-                         description="""\
-                         define in which order the IP address tenant will be assigned if tenant is undefined.
-                         possible values:
-                           * device : host or VM tenant will be assigned to the IP address
-                           * prefix : if the IP address belongs to an existing prefix and this prefix has a tenant assigned, then this one is used
-                           * disabled : no tenant assignment to the IP address will be performed
-                         the order of the definition is important, the default is "device, prefix" which means:
-                         If the device has a tenant then this one will be used. If not, the prefix tenant will be used if defined
-                         """,
-                         default_value="device, prefix"
-                         ),
+            ConfigOption(**config_option_ip_tenant_inheritance_order_definition),
         ]
 
         super().__init__()
