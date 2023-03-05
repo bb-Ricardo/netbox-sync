@@ -2282,7 +2282,7 @@ class VMWareHandler(SourceBase):
                 "enabled": int_connected,
             }
 
-            if int_mtu is not None:
+            if int_mtu is not None and self.settings.sync_vm_interface_mtu is True:
                 vm_nic_data["mtu"] = int_mtu
             if int_mode is not None:
                 vm_nic_data["mode"] = int_mode

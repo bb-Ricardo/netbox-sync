@@ -330,6 +330,13 @@ class VMWareConfig(ConfigBase):
                          """,
                          default_value="device, prefix"
                          ),
+            ConfigOption("sync_vm_interface_mtu",
+                         bool,
+                         description="""Usually netbox-sync grabs the MTU size for the VM interface from the
+                         ESXi hosts vSwitch. If this is not fitting or incorrect it is possible to disable the
+                         synchronisation by setting this option to 'False'
+                         """,
+                         default_value=True),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
@@ -342,11 +349,13 @@ class VMWareConfig(ConfigBase):
                          removed=True),
             ConfigOption("sync_tags",
                          bool,
-                         deprecation_message="You need to switch to 'host_tag_source', 'vm_tag_source' or 'cluster_tag_source'",
+                         deprecation_message="You need to switch to 'host_tag_source', " +
+                                             "'vm_tag_source' or 'cluster_tag_source'",
                          removed=True),
             ConfigOption("sync_parent_tags",
                          bool,
-                         deprecation_message="You need to switch to 'host_tag_source', 'vm_tag_source' or 'cluster_tag_source'",
+                         deprecation_message="You need to switch to 'host_tag_source', " +
+                                             "'vm_tag_source' or 'cluster_tag_source'",
                          removed=True)
         ]
 
