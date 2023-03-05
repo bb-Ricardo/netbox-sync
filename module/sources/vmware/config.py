@@ -32,11 +32,7 @@ class VMWareConfig(ConfigBase):
         self.options = [
             ConfigOption(**config_option_enabled_definition),
 
-            ConfigOption("type",
-                         str,
-                         description="type of source. This defines which source handler to use",
-                         config_example="vmware",
-                         mandatory=True),
+            ConfigOption(**{**config_option_type_definition, "config_example": "vmware"}),
 
             ConfigOption("host_fqdn",
                          str,
@@ -317,19 +313,7 @@ class VMWareConfig(ConfigBase):
                          description="""set a matching value for ESXi host management interface description
                          (case insensitive, comma separated). Used to figure out the ESXi primary IP address""",
                          default_value="management, mgmt"),
-            ConfigOption("ip_tenant_inheritance_order",
-                         str,
-                         description="""\
-                         define in which order the IP address tenant will be assigned if tenant is undefined.
-                         possible values:
-                           * device : host or VM tenant will be assigned to the IP address
-                           * prefix : if the IP address belongs to an existing prefix and this prefix has a tenant assigned, then this one is used
-                           * disabled : no tenant assignment to the IP address will be performed
-                         the order of the definition is important, the default is "device, prefix" which means:
-                         If the device has a tenant then this one will be used. If not, the prefix tenant will be used if defined
-                         """,
-                         default_value="device, prefix"
-                         ),
+            ConfigOption(**config_option_ip_tenant_inheritance_order_definition),
             ConfigOption("sync_vm_interface_mtu",
                          bool,
                          description="""Usually netbox-sync grabs the MTU size for the VM interface from the
