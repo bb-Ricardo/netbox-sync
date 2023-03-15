@@ -708,7 +708,8 @@ class NetBoxHandler:
 
         log.info("Pruning orphaned data in NetBox")
 
-        disabled_sources_tags = [x.source_tag for x in self.inventory.source_list if getattr(x, "enabled") is False]
+        disabled_sources_tags = \
+            [x.source_tag for x in self.inventory.source_list if grab(x, "settings.enabled", fallback=False) is False]
 
         # update all items in NetBox accordingly
         today = datetime.now()
