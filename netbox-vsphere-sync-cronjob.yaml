@@ -1,25 +1,57 @@
-apiVersion: batch/v1beta1
+apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: netbox-vsphere-sync
   labels:
     app: netbox-vsphere-sync
 spec:
-  schedule: "10 7-23 * * *"
+  schedule: "*/2 * * * *"
   jobTemplate:
     spec:
       template:
         spec:
           containers:
           - name: netbox-vsphere-sync
-            image: bbricardo/netbox-sync:latest
+            image: bbricardo/netbox-sync:1.4.0-beta2
             imagePullPolicy: IfNotPresent
+            command:
+              - /app/netbox-sync.py
+              - -c
+              - /kube.yaml
+            securityContext:
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+              runAsGroup: 1000
+              runAsNonRoot: true
+              runAsUser: 1000
+              allowPrivilegeEscalation: false
             volumeMounts:
-            - name: netbox-vsphere-sync
-              mountPath: /app/settings.ini
-              subPath: settings.ini
+            - name: config-volume
+              mountPath: /kube.yaml
+              subPath: kube.yaml
+              readOnly: true
+            env:
+              - name: NBS_NETBOX_API_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: netbox-vsphere-sync
+                    key: netbox_api_token
+              - name: NBS_SOURCE_vcsa_NAME
+                value: vcsa
+              - name: NBS_SOURCE_vcsa_USERNAME
+                valueFrom:
+                  secretKeyRef:
+                    name: netbox-vsphere-sync
+                    key: vcsa_username
+              - name: NBS_SOURCE_vcsa_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: netbox-vsphere-sync
+                    key: vcsa_password
           volumes:
-          - name: netbox-vsphere-sync
-            secret:
-              secretName: netbox-vsphere-sync
+          - name: config-volume
+            configMap:
+              name: netbox-vsphere-sync-config
           restartPolicy: Never
