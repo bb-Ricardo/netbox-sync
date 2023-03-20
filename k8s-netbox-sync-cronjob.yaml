@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: netbox-sync
+  labels:
+    app: netbox-sync
+spec:
+  # run every hour
+  schedule: "23 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: netbox-sync
+            image: bbricardo/netbox-sync:latest
+            imagePullPolicy: IfNotPresent
+            args:
+              - -c
+              - /settings.yaml
+              - /secrets/secrets.yaml
+            securityContext:
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+              runAsGroup: 1000
+              runAsUser: 1000
+              runAsNonRoot: true
+              allowPrivilegeEscalation: false
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              limits:
+                cpu: 500m
+                memory: 512Mi
+              requests:
+                cpu: 100m
+                memory: 64Mi
+            volumeMounts:
+            - name: common-config-volume
+              mountPath: /settings.yaml
+              subPath: settings.yaml
+              readOnly: true
+            - name: common-secrets-volume
+              mountPath: /secrets
+              readOnly: true
+          volumes:
+          - name: common-config-volume
+            configMap:
+              name: netbox-sync-config
+          - name: common-secrets-volume
+            secret:
+              secretName: netbox-sync-secrets
+          restartPolicy: Never

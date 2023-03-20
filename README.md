@@ -57,7 +57,7 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 yum install python36-pip
 ```
 
-## Ubuntu 18.04 & 20.04
+## Ubuntu 18.04 & 20.04 && 22.04
 ```shell
 apt-get update && apt-get install python3-venv
 ```
@@ -83,44 +83,6 @@ The `vsphere-automation-sdk` must be installed if tags should be synced from vCe
 pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 ```
 
-## Docker
-
-Run the application in a docker container. You can build it yourself or use the ones from docker hub.
-
-Available here: [bbricardo/netbox-sync](https://hub.docker.com/r/bbricardo/netbox-sync)
-
-* The application working directory is ```/app```
-* Required to mount your ```settings.ini```
-
-To build it by yourself just run:
-```shell
-docker build -t bbricardo/netbox-sync:latest .
-```
-
-To start the container just use:
-```shell
-docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini bbricardo/netbox-sync:latest
-```
-
-## Kubernetes
-
-Run the containerized application in a kubernetes cluster
-
- * Build the container image
- * Tag and push the image to a container registry you have access to
- * Create a secret from the settings.ini
- * Update the image field in the manifest
- * Deploy the manifest to your k8s cluster and check the job is running
-
- ```shell
- docker build -t netbox-vsphere-sync .
- docker image tag netbox-vsphere-sync your-registry.host/netbox-vsphere-sync:latest
- docker image push your-registry.host/netbox-vsphere-sync:latest
-
- kubectl create secret generic netbox-vsphere-sync --from-file=settings.ini
- kubectl apply -f netbox-vsphere-sync-cronjob.yaml
- ```
-
 ## NetBox API token
 In order to updated data in NetBox you need a NetBox API token.
 * API token with all permissions (read, write) except:
@@ -128,7 +90,7 @@ In order to updated data in NetBox you need a NetBox API token.
   * secrets
   * users
 
-A short description can be found [here](https://netbox.readthedocs.io/en/stable/rest-api/authentication/)
+A short description can be found [here](https://docs.netbox.dev/en/stable/integrations/rest-api/#authentication)
 
 # Running the script
 
@@ -138,7 +100,7 @@ usage: netbox-sync.py [-h] [-c settings.ini [settings.ini ...]] [-g]
 
 Sync objects from various sources to NetBox
 
-Version: 1.4.0-beta2 (2023-02-19)
+Version: 1.5.0 (2023-03-20)
 Project URL: https://github.com/bb-ricardo/netbox-sync
 
 options:
@@ -251,6 +213,64 @@ In Order to sync all items regularly you can add a cron job like this one
  # NetBox Sync
  23 */2 * * *  /opt/netbox-sync/.venv/bin/python3 /opt/netbox-sync/netbox-sync.py >/dev/null 2>&1
 ```
+
+## Docker
+
+Run the application in a docker container. You can build it yourself or use the ones from docker hub.
+
+Available here: [bbricardo/netbox-sync](https://hub.docker.com/r/bbricardo/netbox-sync)
+
+* The application working directory is ```/app```
+* Required to mount your ```settings.ini```
+
+To build it by yourself just run:
+```shell
+docker build -t bbricardo/netbox-sync:latest .
+```
+
+To start the container just use:
+```shell
+docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini bbricardo/netbox-sync:latest
+```
+
+## Kubernetes
+
+Run the containerized application in a kubernetes cluster
+
+* Create a config map with the default settings
+* Create a secret witch only contains the credentials needed
+* Adjust the provided [cronjob resource](https://github.com/bb-Ricardo/netbox-sync/blob/main/k8s-netbox-sync-cronjob.yaml) to your needs
+* Deploy the manifest to your k8s cluster and check the job is running
+
+config example saved as `settings.yaml`
+```yaml
+netbox:
+  host_fqdn: netbox.example.com
+
+source:
+  my-vcenter-example:
+    type: vmware
+    host_fqdn: vcenter.example.com
+    permitted_subnets: 172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16, fd00::/8
+    cluster_site_relation: Cluster_NYC = New York, Cluster_FFM.* = Frankfurt, Datacenter_TOKIO/.* = Tokio
+```
+
+secrets example saved as `secrets.yaml`
+```yaml
+netbox:
+  api_token: XYZXYZXYZXYZXYZXYZXYZXYZ
+source:
+  my-vcenter-example:
+    username: vcenter-readonly
+    password: super-secret
+```
+
+Create resource in your k8s cluster
+ ```shell
+kubectl create configmap netbox-sync-config --from-file=settings.yaml
+kubectl create secret generic netbox-sync-secrets --from-file=secrets.yaml
+kubectl apply -f k8s-netbox-sync-cronjob.yaml
+ ```
 
 # How it works
 **READ CAREFULLY**

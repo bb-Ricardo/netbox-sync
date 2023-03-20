@@ -293,10 +293,6 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="disables syncing of any VLANs visible in vCenter to NetBox",
                          default_value=False),
-            ConfigOption("exclude_vlan_by_name",
-                         str),
-            ConfigOption("exclude_vlan_by_id",
-                         str),
             ConfigOption("track_vm_host",
                          bool,
                          description="""enabling this option will add the ESXi host
