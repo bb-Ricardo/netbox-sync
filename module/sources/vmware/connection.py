@@ -1095,10 +1095,11 @@ class VMWareHandler(SourceBase):
 
         for int_name, int_data in nic_data.items():
 
-            if object_type == NBDevice and self.settings.overwrite_device_interface_name is False:
-                del int_data["name"]
-            if object_type == NBVM and self.settings.overwrite_vm_interface_name is False:
-                del int_data["name"]
+            if nic_object_dict.get(int_name) is not None:
+                if object_type == NBDevice and self.settings.overwrite_device_interface_name is False:
+                    del int_data["name"]
+                if object_type == NBVM and self.settings.overwrite_vm_interface_name is False:
+                    del int_data["name"]
 
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
