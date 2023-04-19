@@ -27,6 +27,13 @@ from module import __version__
 
 log = get_logger()
 
+# test for necessary requests exception class
+try:
+    from requests.exceptions import JSONDecodeError as RequestsJSONDecodeError
+except ImportError:
+    log.error(f"Discovered outdated 'requests' version '{requests.__version__}'. Update of virtual environment needed.")
+    exit(1)
+
 
 class NetBoxHandler:
     """
@@ -260,7 +267,7 @@ class NetBoxHandler:
 
         try:
             result = response.json()
-        except (json.decoder.JSONDecodeError, requests.exceptions.JSONDecodeError):
+        except (json.decoder.JSONDecodeError, RequestsJSONDecodeError):
             pass
 
         if response.status_code == 200:
@@ -357,7 +364,7 @@ class NetBoxHandler:
             log.debug("Response Body:")
             try:
                 pprint.pprint(response.json())
-            except json.decoder.JSONDecodeError as e:
+            except (json.decoder.JSONDecodeError, RequestsJSONDecodeError) as e:
                 log.error(e)
 
         return response
