@@ -1055,6 +1055,9 @@ class VMWareHandler(SourceBase):
         else:
             device_vm_object.update(data=object_data, source=self)
 
+        # add object to cache
+        self.add_object_to_cache(vmware_object, device_vm_object)
+
         # update role according to config settings
         object_name = object_data.get(object_type.primary_key)
         role_name = self.get_object_relation(object_name,
@@ -2091,11 +2094,7 @@ class VMWareHandler(SourceBase):
             vm_data["site"] = {"name": site_name}
 
             if self.settings.track_vm_host:
-                vm_data["device"] = {
-                    "name": parent_name,
-                    "cluster": nb_cluster_object,
-                    "site": {"name": site_name}
-                }
+                vm_data["device"] = self.get_object_from_cache(parent_host)
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
