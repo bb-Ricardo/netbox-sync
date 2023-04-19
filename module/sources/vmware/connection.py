@@ -1058,13 +1058,13 @@ class VMWareHandler(SourceBase):
         # update role according to config settings
         object_name = object_data.get(object_type.primary_key)
         role_name = self.get_object_relation(object_name,
-                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation",
-                                             fallback="Server")
+                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation")
 
-        if object_type == NBDevice:
-            device_vm_object.update(data={"device_role": {"name": role_name}})
-        if object_type == NBVM:
-            device_vm_object.update(data={"role": {"name": role_name}})
+        if role_name is not None:
+            if object_type == NBDevice:
+                device_vm_object.update(data={"device_role": {"name": role_name}})
+            if object_type == NBVM:
+                device_vm_object.update(data={"role": {"name": role_name}})
 
         # compile all nic data into one dictionary
         if object_type == NBVM:
