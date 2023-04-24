@@ -153,8 +153,8 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_role_relation",
                                              str,
                                              description="""\
-                                             Define the NetBox device role used for hosts and VMs. The default is
-                                             set to "Server". This is done with a comma separated key = value list.
+                                             Define the NetBox device role used for hosts and VMs.
+                                             This is done with a comma separated key = value list.
                                                key: defines a hosts/VM name as regex
                                                value: defines the NetBox role name (use quotes if name contains commas)
                                              """,
