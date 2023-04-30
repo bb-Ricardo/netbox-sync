@@ -104,7 +104,10 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_include_filter", str),
                                 ConfigOption("vm_exclude_filter",
                                              str, description="simply include/exclude VMs"),
-                                ConfigOption("vm_include_filter", str)
+                                ConfigOption("vm_include_filter", str),
+                                ConfigOption("vmattributes_exclude_filter",
+                                             str, description="simply include/exclude VM attributes"),
+                                ConfigOption("vmattributes_include_filter", str)
                               ]),
             ConfigOptionGroup(title="relations",
                               options=[
