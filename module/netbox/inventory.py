@@ -367,24 +367,24 @@ class NetBoxInventory:
         # store IP addresses to look them up in bulk
         ip_lookup_dict = dict()
 
-        # iterate over all IP addresses and try to match them to a prefix
+        # iterate over all IP addresses
         for ip in self.get_all_items(NBIPAddress):
 
             # ignore IPs which are not handled by any source
             if ip.source is None:
                 continue
 
-            # get IP and prefix length
+            # get IP without prefix length
             ip_a = grab(ip, "data.address", fallback="").split("/")[0]
 
             # check if we meant to look up DNS host name for this IP
-            if grab(ip, "source.dns_name_lookup", fallback=False) is True:
+            if grab(ip, "source.settings.dns_name_lookup", fallback=False) is True:
 
                 if ip_lookup_dict.get(ip.source) is None:
 
                     ip_lookup_dict[ip.source] = {
                         "ips": list(),
-                        "servers": grab(ip, "source.custom_dns_servers")
+                        "servers": grab(ip, "source.settings.custom_dns_servers")
                     }
 
                 ip_lookup_dict[ip.source].get("ips").append(ip_a)
