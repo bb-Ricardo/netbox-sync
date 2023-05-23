@@ -821,6 +821,10 @@ class VMWareHandler(SourceBase):
             if label is None:
                 continue
 
+            # include/exclude vmattributes
+            if self.passes_filter(label, self.vmattributes_include_filter, self.vmattributes_exclude_filter) is False:
+                continue
+
             custom_field = self.add_update_custom_field({
                 "name": f"vcsa_{label}",
                 "label": label,
