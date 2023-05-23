@@ -493,7 +493,7 @@ class VMWareHandler(SourceBase):
         the highest amount of matching interfaces. If the ration of matching interfaces
         exceeds 2.0 then the top matching machine is chosen as desired object.
 
-        If the ration is below 2.0 then None will be returned. The probability is to low that
+        If the ration is below 2.0 then None will be returned. The probability is too low that
         this one is the correct one.
 
         None will also be returned if no machine was found at all.
@@ -1738,10 +1738,16 @@ class VMWareHandler(SourceBase):
                         "vid": pg_data.get("vlan_id")
                     })
 
+            pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
+
+            if pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
+                log.debug2(f"Host NIC with MAC '{pnic_mac_address}' excluded from sync. Skipping")
+                continue
+
             pnic_data = {
                 "name": unquote(pnic_name),
                 "device": None,     # will be set once we found the correct device
-                "mac_address": normalize_mac_address(grab(pnic, "mac")),
+                "mac_address": pnic_mac_address,
                 "enabled": bool(grab(pnic, "linkSpeed")),
                 "description": unquote(pnic_description),
                 "type": NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type()

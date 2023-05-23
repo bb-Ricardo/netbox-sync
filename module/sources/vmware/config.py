@@ -18,6 +18,7 @@ from module.config.group import ConfigOptionGroup
 from module.sources.common.conifg import *
 from module.sources.common.permitted_subnets import PermittedSubnets
 from module.common.logging import get_logger
+from module.common.support import normalize_mac_address
 
 log = get_logger()
 
@@ -329,6 +330,13 @@ class VMWareConfig(ConfigBase):
                          synchronisation by setting this option to 'False'
                          """,
                          default_value=True),
+            ConfigOption("host_nic_exclude_by_mac_list",
+                         str,
+                         description="""defines a comma separated list of MAC addresses which should be excluded
+                         from sync. Any host NIC with a matching MAC address will be excluded from sync.
+                         """,
+                         config_example="AA:BB:CC:11:22:33, 66:77:88:AA:BB:CC"
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
@@ -473,6 +481,22 @@ class VMWareConfig(ConfigBase):
                 if len(option.value) > 2:
                     log.error("Config option 'ip_tenant_inheritance_order' can contain only 2 items max")
                     self.set_validation_failed()
+
+            if option.key == "host_nic_exclude_by_mac_list":
+
+                value_list = list()
+
+                for mac_address in quoted_split(option.value) or list():
+
+                    normalized_mac_address = normalize_mac_address(mac_address)
+
+                    if len(f"{normalized_mac_address}") != 17:
+                        log.error(f"MAC address '{mac_address}' for 'host_nic_exclude_by_mac_list' invalid.")
+                        self.set_validation_failed()
+                    else:
+                        value_list.append(normalized_mac_address)
+
+                option.set_value(value_list)
 
         permitted_subnets_option = self.get_option_by_name("permitted_subnets")
 
