@@ -1741,7 +1741,8 @@ class VMWareHandler(SourceBase):
 
             pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
 
-            if pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
+            if self.settings.host_nic_exclude_by_mac_list is not None and \
+                    pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
                 log.debug2(f"Host NIC with MAC '{pnic_mac_address}' excluded from sync. Skipping")
                 continue
 
