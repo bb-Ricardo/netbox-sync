@@ -676,10 +676,11 @@ class VMWareHandler(SourceBase):
                     log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
                     continue
 
-                tag_list.append(self.inventory.add_update_object(NBTag, data={
-                    "name": tag_name,
-                    "description": tag_description
-                }))
+                if tag_name is not None:
+                    tag_list.append(self.inventory.add_update_object(NBTag, data={
+                        "name": tag_name,
+                        "description": tag_description
+                    }))
 
         return tag_list
 
