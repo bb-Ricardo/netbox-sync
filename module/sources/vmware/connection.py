@@ -814,6 +814,11 @@ class VMWareHandler(SourceBase):
             key = grab(obj_custom_field, "key")
             value = grab(obj_custom_field, "value")
 
+            if self.settings.custom_attribute_exclude is not None and \
+                    key in self.settings.custom_attribute_exclude:
+                log.debug(f"Custom attribute '{key}' excluded from sync. Skipping")
+                continue
+
             if key is None or value is None:
                 continue
 
