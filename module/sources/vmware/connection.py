@@ -814,17 +814,17 @@ class VMWareHandler(SourceBase):
             key = grab(obj_custom_field, "key")
             value = grab(obj_custom_field, "value")
 
-            if self.settings.custom_attribute_exclude is not None and \
-                    key in self.settings.custom_attribute_exclude:
-                log.debug(f"Custom attribute '{key}' excluded from sync. Skipping")
-                continue
-
             if key is None or value is None:
                 continue
 
             label = field_definition.get(key)
 
             if label is None:
+                continue
+
+            if self.settings.custom_attribute_exclude is not None and \
+                    label in self.settings.custom_attribute_exclude:
+                log.debug(f"Custom attribute '{label}' excluded from sync. Skipping")
                 continue
 
             custom_field = self.add_update_custom_field({
