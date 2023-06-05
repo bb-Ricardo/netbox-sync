@@ -317,9 +317,8 @@ type = check_redfish
 inventory_file_path = /opt/redfish_inventory
 ```
 
-**Developers**:
-If you are interested in adding more source types please open an issue/discussion
-because the documentation of implementing a new source hasn't been finished yet. 🤷
+If different sources overwrite the same attribute for ex. a host then the order of the sources should be considered.
+The last source in order from top to bottom will prevail. 
 
 ## Pruning
 Prune objects in NetBox if they are no longer present in any source.
