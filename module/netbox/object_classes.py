@@ -279,6 +279,7 @@ class NetBoxObject:
         self.unset_items = list()
         self.source = source
         self.deleted = False
+        self._original_data = dict()
 
         # add empty lists for list items
         for key, data_type in self.data_model.items():
@@ -612,14 +613,28 @@ class NetBoxObject:
             if key == self.primary_key and current_value_str.lower() == new_value_str.lower():
                 continue
 
-            self.data[key] = new_value
-            self.updated_items.append(key)
-            data_updated = True
-
             if self.is_new is False:
+
+                if self._original_data.get(key) == new_value_str and key in self.updated_items:
+                    self.data[key] = new_value
+                    self.updated_items.remove(key)
+                    log.debug(f"{self.name.capitalize()} '{display_name}' attribute '{key}' was set back to "
+                              f"original NetBox value '{current_value_str}'")
+                    continue
+
+                # save original NetBox value for future use to detect updates which sets it back to the same value
+                # which is already saved in NetBox
+                elif self._original_data.get(key) is None:
+                    self._original_data[key] = current_value_str
+                    print(self._original_data[key])
+
                 new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
                          f"'{current_value_str}' to '{new_value_str}'")
+
+            self.data[key] = new_value
+            self.updated_items.append(key)
+            data_updated = True
 
             self.resolve_relations()
 
