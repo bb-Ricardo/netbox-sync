@@ -1,39 +1,33 @@
-FROM python:3.9-slim-bullseye AS PREBUILD
+FROM python:3.9-slim-bookworm AS builder
+
+COPY requirements.txt .
 
 # Install dependencies
-RUN apt-get update && apt-get -y upgrade && apt-get install -y git-core
+RUN apt-get update && apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m venv /opt/netbox-sync/venv && \
+    /opt/netbox-sync/venv/bin/python3 -m pip install --upgrade pip && \
+    /opt/netbox-sync/venv/bin/pip install -r requirements.txt && \
+    /opt/netbox-sync/venv/bin/pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 
-COPY requirements.txt /tmp/requirements.txt
+FROM python:3.9-slim-bookworm AS netbox-sync
 
-RUN pip3 install --upgrade pip && \
-    pip3 install wheel && \
-    pip3 install -r /tmp/requirements.txt && \
-    pip3 install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
+# Copy installed packages
+COPY --from=builder /opt/netbox-sync/venv /opt/netbox-sync/venv
 
-
-FROM python:3.9-slim-bullseye
-
-# Install dependencies
-RUN apt-get update && apt-get -y upgrade
-
-# Run the application
-WORKDIR /app
-
-RUN set -eux; \
-  addgroup --gid 1000 netbox-sync; \
-  adduser --uid 1000 --ingroup netbox-sync --shell /bin/sh --home /home/netbox-sync --disabled-password \
-          --gecos "netbox-sync,0815,2342,9001" netbox-sync
-
-# Prepare the application
-COPY Dockerfile LICENSE.txt netbox-sync.py README.md requirements.txt settings-example.ini /app/
-COPY module /app/module
-
-RUN chown -R netbox-sync:netbox-sync /app
-
-# disable upgrading setup tools due to bug in setuptools and automation sdk
-# once this is fixed, switch back to: pip3 install --upgrade pip setuptools
-COPY --from=PREBUILD /usr/local /usr/local
+# Add netbox-sync user
+RUN groupadd --gid 1000 netbox-sync && \
+    useradd --uid 1000 --gid netbox-sync --shell /bin/sh \ 
+    --no-create-home --system netbox-sync
 
 USER netbox-sync
+
+# Prepare the application
+WORKDIR /app
+COPY --chown=netbox-sync:netbox-sync . .
+
+# Use virtual env packages and allow timezone setup
+ENV PATH=/opt/netbox-sync/venv/bin:$PATH
+ENV TZ=Europe/Berlin
 
 ENTRYPOINT ["python3", "netbox-sync.py"]
