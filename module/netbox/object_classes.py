@@ -1067,7 +1067,6 @@ class NetBoxObject:
         # mark attribute to unset, this way it will be deleted in NetBox before any other updates are performed
         log.info(f"Setting attribute '{attribute_name}' for '{self.get_display_name()}' to None")
         self.unset_items.append(attribute_name)
-        self.data["assigned_object_id"] = None
 
     def get_nb_reference(self):
         """
