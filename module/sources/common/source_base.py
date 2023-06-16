@@ -295,11 +295,6 @@ class SourceBase:
         if len(tagged_vlans) > 0:
             del interface_data["tagged_vlans"]
 
-        # delete information about any vlans if sync is disable.
-        if disable_vlan_sync is True:
-            untagged_vlan = None
-            tagged_vlans = list()
-
         # get device tenant
         device_tenant = grab(device_object, "data.tenant")
 
@@ -311,11 +306,6 @@ class SourceBase:
             interface_object = self.inventory.add_object(interface_class, data=interface_data, source=self)
         else:
             interface_object.update(data=interface_data, source=self)
-
-        # delete information about any vlans if sync is disable.
-        if disable_vlan_sync is True:
-            interface_object.unset_attribute("untagged_vlan")
-            interface_object.unset_attribute("tagged_vlans")
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
@@ -555,6 +545,11 @@ class SourceBase:
         if untagged_vlan is not None or (untagged_vlan is None and len(tagged_vlans) == 0):
             if matching_untagged_vlan is None and untagged_vlan is not None:
                 matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
+
+                # don't sync newly discovered VLANs to NetBox
+                if disable_vlan_sync is True and not isinstance(matching_untagged_vlan, NetBoxObject):
+                    matching_untagged_vlan = None
+
             elif matching_untagged_vlan is not None:
                 log.debug2(f"Found matching prefix VLAN {matching_untagged_vlan.get_display_name()} for "
                            f"untagged interface VLAN.")
@@ -575,7 +570,12 @@ class SourceBase:
             else:
                 matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
 
-            compiled_tagged_vlans.append(matching_tagged_vlan)
+                # don't sync newly discovered VLANs to NetBox
+                if disable_vlan_sync is True and not isinstance(matching_tagged_vlan, NetBoxObject):
+                    matching_tagged_vlan = None
+
+            if matching_tagged_vlan is not None:
+                compiled_tagged_vlans.append(matching_tagged_vlan)
 
         if len(compiled_tagged_vlans) > 0:
             vlan_interface_data["tagged_vlans"] = compiled_tagged_vlans
