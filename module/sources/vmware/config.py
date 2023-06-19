@@ -505,6 +505,12 @@ class VMWareConfig(ConfigBase):
 
                 option.set_value(value_list)
 
+            if option.key == "custom_attribute_exclude":
+
+                option.set_value(quoted_split(option.value))
+
+                continue
+
         permitted_subnets_option = self.get_option_by_name("permitted_subnets")
 
         if permitted_subnets_option is not None:
