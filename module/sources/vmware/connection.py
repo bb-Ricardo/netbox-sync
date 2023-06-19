@@ -2409,10 +2409,10 @@ class VMWareHandler(SourceBase):
         server_role_object = self.inventory.get_by_data(NBDeviceRole, data={"name": "Server"})
 
         if server_role_object is not None:
-            server_role_object.update(data={
-                "name": "Server",
-                "color": "9e9e9e",
-                "vm_role": True
-            })
+            role_data = {"name": "Server", "vm_role": True}
+            if server_role_object.is_new is True:
+                role_data["color"] = "9e9e9e"
+
+            server_role_object.update(data=role_data)
 
 # EOF
