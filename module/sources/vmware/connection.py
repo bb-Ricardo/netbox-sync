@@ -822,6 +822,11 @@ class VMWareHandler(SourceBase):
             if label is None:
                 continue
 
+            if self.settings.custom_attribute_exclude is not None and \
+                    label in self.settings.custom_attribute_exclude:
+                log.debug(f"Custom attribute '{label}' excluded from sync. Skipping")
+                continue
+
             custom_field = self.add_update_custom_field({
                 "name": f"vcsa_{label}",
                 "label": label,

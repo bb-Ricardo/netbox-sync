@@ -337,6 +337,13 @@ class VMWareConfig(ConfigBase):
                          """,
                          config_example="AA:BB:CC:11:22:33, 66:77:88:AA:BB:CC"
                          ),
+            ConfigOption("custom_attribute_exclude",
+                         str,
+                         description="""defines a comma separated list of custom attribute which should be excluded
+                         from sync. Any custom attribute with a matching attribute key will be excluded from sync.
+                         """,
+                         config_example="VB_LAST_BACKUP, VB_LAST_BACKUP2"
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
@@ -497,6 +504,12 @@ class VMWareConfig(ConfigBase):
                         value_list.append(normalized_mac_address)
 
                 option.set_value(value_list)
+
+            if option.key == "custom_attribute_exclude":
+
+                option.set_value(quoted_split(option.value))
+
+                continue
 
         permitted_subnets_option = self.get_option_by_name("permitted_subnets")
 
