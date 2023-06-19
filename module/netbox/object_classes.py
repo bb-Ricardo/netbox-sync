@@ -626,7 +626,6 @@ class NetBoxObject:
                 # which is already saved in NetBox
                 elif self._original_data.get(key) is None:
                     self._original_data[key] = current_value_str
-                    print(self._original_data[key])
 
                 new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
