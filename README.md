@@ -100,7 +100,7 @@ usage: netbox-sync.py [-h] [-c settings.ini [settings.ini ...]] [-g]
 
 Sync objects from various sources to NetBox
 
-Version: 1.4.2 (2023-04-24)
+Version: 1.5.0 (2023-07-07)
 Project URL: https://github.com/bb-ricardo/netbox-sync
 
 options:
@@ -318,7 +318,7 @@ inventory_file_path = /opt/redfish_inventory
 ```
 
 If different sources overwrite the same attribute for ex. a host then the order of the sources should be considered.
-The last source in order from top to bottom will prevail. 
+The last source in order from top to bottom will prevail.
 
 ## Pruning
 Prune objects in NetBox if they are no longer present in any source.

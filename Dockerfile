@@ -17,7 +17,7 @@ COPY --from=builder /opt/netbox-sync/venv /opt/netbox-sync/venv
 
 # Add netbox-sync user
 RUN groupadd --gid 1000 netbox-sync && \
-    useradd --uid 1000 --gid netbox-sync --shell /bin/sh \ 
+    useradd --uid 1000 --gid netbox-sync --shell /bin/sh \
     --no-create-home --system netbox-sync
 
 USER netbox-sync
