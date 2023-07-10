@@ -1,9 +1,8 @@
-settings.ini
-.dockerignore
-Dockerfile
-.git*
-.github
-docs
-scripts
-*.yaml
-requirements_3.6.txt
+*
+!docs
+!module
+!LICENSE.txt
+!README.md
+!netbox-sync.py
+!requirements.txt
+!settings-example.ini
