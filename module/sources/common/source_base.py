@@ -10,10 +10,12 @@
 import re
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
+from typing import List
 
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
+from module.sources.common.excluded_vlan import ExcludedVLANName, ExcludedVLANID
 
 log = get_logger()
 
@@ -540,14 +542,14 @@ class SourceBase:
             if grab(prefix_vlan, "data.vid") in tagged_vlan_ids:
                 matching_tagged_vlans[grab(prefix_vlan, "data.vid")] = prefix_vlan
 
-        # try to find vlan object if no matching prefix VLAN ws found
+        # try to find vlan object if no matching prefix VLAN was found
         vlan_interface_data = dict()
         if untagged_vlan is not None or (untagged_vlan is None and len(tagged_vlans) == 0):
             if matching_untagged_vlan is None and untagged_vlan is not None:
                 matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
 
                 # don't sync newly discovered VLANs to NetBox
-                if disable_vlan_sync is True and not isinstance(matching_untagged_vlan, NetBoxObject):
+                if self.add_vlan_object_to_netbox(matching_untagged_vlan, site_name) is False:
                     matching_untagged_vlan = None
 
             elif matching_untagged_vlan is not None:
@@ -555,7 +557,6 @@ class SourceBase:
                            f"untagged interface VLAN.")
 
             if matching_untagged_vlan is not None:
-
                 vlan_interface_data["untagged_vlan"] = matching_untagged_vlan
                 if grab(interface_object, "data.mode") is None:
                     vlan_interface_data["mode"] = "access"
@@ -571,7 +572,7 @@ class SourceBase:
                 matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
 
                 # don't sync newly discovered VLANs to NetBox
-                if disable_vlan_sync is True and not isinstance(matching_tagged_vlan, NetBoxObject):
+                if self.add_vlan_object_to_netbox(matching_tagged_vlan, site_name) is False:
                     matching_tagged_vlan = None
 
             if matching_tagged_vlan is not None:
@@ -690,6 +691,59 @@ class SourceBase:
             log.debug2("No matching existing VLAN found for this VLAN id.")
 
         return return_data
+
+    def add_vlan_object_to_netbox(self, vlan_data, site_name=None):
+        """
+        Determines if a newly discovered VLAN should be synced to NetBox or not
+
+        Parameters
+        ----------
+        vlan_data: dict, NetBoxVLAN
+            dict with NBVLAN data attributes
+        site_name: str
+            name of site the VLAN could be present
+
+        Returns
+        -------
+        Bool: True or False based on config settings
+
+        """
+
+        # get config data
+        disable_vlan_sync = False
+        vlan_sync_exclude_by_name: List[ExcludedVLANName] = list()
+        vlan_sync_exclude_by_id: List[ExcludedVLANID] = list()
+        if "disable_vlan_sync" in self.settings:
+            disable_vlan_sync = self.settings.disable_vlan_sync
+        if "vlan_sync_exclude_by_name" in self.settings:
+            vlan_sync_exclude_by_name = self.settings.vlan_sync_exclude_by_name
+        if "vlan_sync_exclude_by_id" in self.settings:
+            vlan_sync_exclude_by_id = self.settings.vlan_sync_exclude_by_id
+
+        # VLAN is already an existing NetBox VLAN, then it can be reused
+        if isinstance(vlan_data, NetBoxObject):
+            return True
+
+        if vlan_data is None:
+            return False
+
+        if disable_vlan_sync is True:
+            return False
+
+        # get VLAN details
+        vlan_name = vlan_data.get("name")
+        vlan_id = vlan_data.get("vid")
+
+        for excluded_vlan in vlan_sync_exclude_by_name or list():
+            if excluded_vlan.matches(vlan_name, site_name):
+                print("return FALSE")
+                return False
+
+        for excluded_vlan in vlan_sync_exclude_by_id or list():
+            if excluded_vlan.matches(vlan_id, site_name):
+                return False
+
+        return True
 
     def add_update_custom_field(self, data) -> NBCustomField:
         """
