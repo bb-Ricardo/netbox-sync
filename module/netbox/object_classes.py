@@ -1606,7 +1606,8 @@ class NBInterface(NetBoxObject):
             "tagged_vlans": NBVLANList,
             "description": 200,
             "connection_status": bool,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "parent": object
         }
         super().__init__(*args, **kwargs)
 
@@ -1618,6 +1619,16 @@ class NBInterface(NetBoxObject):
                 result_list.append(ip_object)
 
         return result_list
+
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        # remove definition of interface type if a parent interface is set as it only supports virtual types
+        if grab(self, "data.parent") is not None and data.get("type") is not None:
+            log.debug2(f"{self.name} '{self.get_display_name()}' attribute 'parent' is set. "
+                       f"Removing type {data.get('type')} from update request")
+            del data["type"]
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
 
 class NBIPAddress(NetBoxObject):
