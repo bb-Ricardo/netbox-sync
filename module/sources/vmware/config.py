@@ -15,7 +15,7 @@ from module.config import source_config_section_name
 from module.config.base import ConfigBase
 from module.config.option import ConfigOption
 from module.config.group import ConfigOptionGroup
-from module.sources.common.conifg import *
+from module.sources.common.config import *
 from module.sources.common.permitted_subnets import PermittedSubnets
 from module.common.logging import get_logger
 from module.common.support import normalize_mac_address
