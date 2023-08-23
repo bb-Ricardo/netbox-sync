@@ -8,41 +8,21 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import pprint
-import re
 import ssl
-from ipaddress import ip_address, ip_network, ip_interface
+from ipaddress import ip_interface
 from socket import gaierror
 from urllib.parse import unquote
 
+from packaging import version
 import openstack
 
 from module.sources.common.source_base import SourceBase
+from module.sources.openstack.config import OpenStackConfig
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none
-from module.common.support import normalize_mac_address, ip_valid_to_add_to_netbox
-from module.netbox.object_classes import (
-    NetBoxObject,
-    NetBoxInterfaceType,
-    NBTag,
-    NBManufacturer,
-    NBDeviceType,
-    NBPlatform,
-    NBClusterType,
-    NBClusterGroup,
-    NBDeviceRole,
-    NBSite,
-    NBCluster,
-    NBDevice,
-    NBVM,
-    NBVMInterface,
-    NBInterface,
-    NBIPAddress,
-    NBPrefix,
-    NBTenant,
-    NBVRF,
-    NBVLAN,
-    NBCustomField
-)
+from module.common.support import normalize_mac_address
+from module.netbox.inventory import NetBoxInventory
+from module.netbox import *
 
 log = get_logger()
 
@@ -75,55 +55,6 @@ class OpenStackHandler(SourceBase):
         NBCustomField
     ]
 
-    settings = {
-        "enabled": True,
-        "auth_url": None,
-        "project": None,
-        "username": None,
-        "password": None,
-        "region": None,
-        "user_domain": None,
-        "project_domain": None,
-        "group_name": "Openstack",
-        "permitted_subnets": None,
-        "cluster_exclude_filter": None,
-        "cluster_include_filter": None,
-        "host_exclude_filter": None,
-        "host_include_filter": None,
-        "vm_exclude_filter": None,
-        "vm_include_filter": None,
-        "cluster_site_relation": None,
-        "cluster_tag_relation": None,
-        "cluster_tenant_relation": None,
-        "host_role_relation": None,
-        "host_site_relation": None,
-        "host_tag_relation": None,
-        "host_tenant_relation": None,
-        "vm_platform_relation": None,
-        "vm_role_relation": None,
-        "vm_tag_relation": None,
-        "vm_tenant_relation": None,
-        "dns_name_lookup": False,
-        "custom_dns_servers": None,
-        "validate_tls_certs": False,
-        "set_primary_ip": "when-undefined",
-        "skip_vm_platform": False,
-        "skip_vm_comments": False,
-        "strip_host_domain_name": False,
-        "strip_vm_domain_name": False
-    }
-
-    deprecated_settings = {}
-
-    removed_settings = {
-        "netbox_host_device_role": "host_role_relation",
-        "netbox_vm_device_role": "vm_role_relation"
-    }
-
-    init_successful = False
-    inventory = None
-    name = None
-    source_tag = None
     source_type = "openstack"
 
     # internal vars
@@ -132,20 +63,23 @@ class OpenStackHandler(SourceBase):
 
     site_name = None
 
-    def __init__(self, name=None, settings=None, inventory=None):
+    def __init__(self, name=None):
 
         if name is None:
             raise ValueError(f"Invalid value for attribute 'name': '{name}'.")
 
-        self.inventory = inventory
+        self.inventory = NetBoxInventory()
         self.name = name
 
-        self.parse_config_settings(settings)
+        # parse settings
+        settings_handler = OpenStackConfig()
+        settings_handler.source_name = self.name
+        self.settings = settings_handler.parse()
 
-        self.source_tag = f"Source: {name}"
+        self.set_source_tag()
         self.site_name = f"OpenStack: {name}"
 
-        if self.enabled is False:
+        if self.settings.enabled is False:
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
@@ -162,116 +96,8 @@ class OpenStackHandler(SourceBase):
         self.processed_host_names = dict()
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
+        self.object_cache = dict()
         self.parsing_vms_the_first_time = True
-
-    def parse_config_settings(self, config_settings):
-        """
-        Validate parsed settings from config file
-
-        Parameters
-        ----------
-        config_settings: dict
-            dict of config settings
-
-        """
-
-        validation_failed = False
-
-        for setting in ["auth_url", "project", "username", "password", "region", "user_domain", "project_domain"]:
-            if config_settings.get(setting) is None:
-                log.error(f"Config option '{setting}' in 'source/{self.name}' can't be empty/undefined")
-                validation_failed = True
-
-        # check permitted ip subnets
-        if config_settings.get("permitted_subnets") is None:
-            log.info(f"Config option 'permitted_subnets' in 'source/{self.name}' is undefined. "
-                     f"No IP addresses will be populated to NetBox!")
-        else:
-            config_settings["permitted_subnets"] = \
-                [x.strip() for x in config_settings.get("permitted_subnets").split(",") if x.strip() != ""]
-
-            permitted_subnets = list()
-            for permitted_subnet in config_settings["permitted_subnets"]:
-                try:
-                    permitted_subnets.append(ip_network(permitted_subnet))
-                except Exception as e:
-                    log.error(f"Problem parsing permitted subnet: {e}")
-                    validation_failed = True
-
-            config_settings["permitted_subnets"] = permitted_subnets
-
-        # check include and exclude filter expressions
-        for setting in [x for x in config_settings.keys() if "filter" in x]:
-            if config_settings.get(setting) is None or config_settings.get(setting).strip() == "":
-                continue
-
-            re_compiled = None
-            try:
-                re_compiled = re.compile(config_settings.get(setting))
-            except Exception as e:
-                log.error(f"Problem parsing regular expression for '{setting}': {e}")
-                validation_failed = True
-
-            config_settings[setting] = re_compiled
-
-        for relation_option in [x for x in self.settings.keys() if "relation" in x]:
-
-            if config_settings.get(relation_option) is None:
-                continue
-
-            relation_data = list()
-
-            relation_type = relation_option.split("_")[1]
-
-            # obey quotations to be able to add names including a comma
-            # thanks to: https://stackoverflow.com/a/64333329
-            for relation in re.split(r",(?=(?:[^\"']*[\"'][^\"']*[\"'])*[^\"']*$)",
-                                     config_settings.get(relation_option)):
-
-                object_name = relation.split("=")[0].strip(' "')
-                relation_name = relation.split("=")[1].strip(' "')
-
-                if len(object_name) == 0 or len(relation_name) == 0:
-                    log.error(f"Config option '{relation}' malformed got '{object_name}' for "
-                              f"object name and '{relation_name}' for {relation_type} name.")
-                    validation_failed = True
-
-                try:
-                    re_compiled = re.compile(object_name)
-                except Exception as e:
-                    log.error(f"Problem parsing regular expression '{object_name}' for '{relation}': {e}")
-                    validation_failed = True
-                    continue
-
-                relation_data.append({
-                    "object_regex": re_compiled,
-                    "assigned_name": relation_name
-                })
-
-            config_settings[relation_option] = relation_data
-
-        if config_settings.get("dns_name_lookup") is True and config_settings.get("custom_dns_servers") is not None:
-
-            custom_dns_servers = \
-                [x.strip() for x in config_settings.get("custom_dns_servers").split(",") if x.strip() != ""]
-
-            tested_custom_dns_servers = list()
-            for custom_dns_server in custom_dns_servers:
-                try:
-                    tested_custom_dns_servers.append(str(ip_address(custom_dns_server)))
-                except ValueError:
-                    log.error(f"Config option 'custom_dns_servers' value '{custom_dns_server}' "
-                              f"does not appear to be an IP address.")
-                    validation_failed = True
-
-            config_settings["custom_dns_servers"] = tested_custom_dns_servers
-
-        if validation_failed is True:
-            log.error("Config validation failed. Exit!")
-            exit(1)
-
-        for setting in self.settings.keys():
-            setattr(self, setting, config_settings.get(setting))
 
     def create_openstack_session(self):
         """
@@ -285,37 +111,37 @@ class OpenStackHandler(SourceBase):
         if self.session is not None:
             return True
 
-        log.debug(f"Starting OpenStack connection to '{self.auth_url}'")
+        log.debug(f"Starting OpenStack connection to '{self.settings.auth_url}'")
 
         ssl_context = ssl.create_default_context()
-        if bool(self.validate_tls_certs) is False:
+        if self.settings.validate_tls_certs is False:
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
 
         try:
             self.session = openstack.connect(
-                auth_url=self.auth_url,
-                project_name=self.project,
-                username=self.username,
-                password=self.password,
-                region_name=self.region,
-                user_domain_name=self.user_domain,
-                project_domain_name=self.project_domain,
+                auth_url=self.settings.auth_url,
+                project_name=self.settings.project,
+                username=self.settings.username,
+                password=self.settings.password,
+                region_name=self.settings.region,
+                user_domain_name=self.settings.user_domain,
+                project_domain_name=self.settings.project_domain,
                 app_name='netbox-sync',
                 app_version='0.1',
             )
 
         except (gaierror, OSError) as e:
             log.error(
-                f"Unable to connect to OpenStack instance '{self.auth_url}' on port {self.port}. "
+                f"Unable to connect to OpenStack instance '{self.settings.auth_url}' on port {self.settings.port}. "
                 f"Reason: {e}"
             )
             return False
         except Exception as e:
-            log.error(f"Unable to connect to OpenStack instance '{self.auth_url}' on port {self.port}. {e.msg}")
+            log.error(f"Unable to connect to OpenStack instance '{self.settings.auth_url}' on port {self.settings.port}. {e.msg}")
             return False
 
-        log.info(f"Successfully connected to OpenStack '{self.auth_url}'")
+        log.info(f"Successfully connected to OpenStack '{self.settings.auth_url}'")
 
         return True
 
@@ -327,7 +153,7 @@ class OpenStackHandler(SourceBase):
         Every update of new/existing objects fot this source has to happen here.
         """
 
-        log.info(f"Query data from OpenStack: '{self.auth_url}'")
+        log.info(f"Query data from OpenStack: '{self.settings.auth_url}'")
 
         """
         Mapping of object type keywords to view types and handlers
@@ -343,8 +169,9 @@ class OpenStackHandler(SourceBase):
         where you create the same machines with a different setup
         like a new version or something. This way NetBox will be
         updated primarily with the actual active VM data.
-
         """
+
+        self.inventory.add_update_object(NBClusterGroup, data={"name": self.settings.group_name}, source=self)
 
         availability_zones = self.session.compute.availability_zones(details=True)
         for availability_zone in availability_zones:
@@ -425,9 +252,9 @@ class OpenStackHandler(SourceBase):
         site_name = self.get_object_relation(object_name, relation_name)
 
         if object_type == NBDevice and site_name is None:
-            site_name = self.permitted_clusters.get(cluster_name) or \
-                        self.get_site_name(NBCluster, object_name, cluster_name)
-            log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+            site_name = self.get_site_name(NBCluster, cluster_name)
+            if site_name is not None:
+                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
 
         # set default site name
         if site_name is None:
@@ -449,7 +276,7 @@ class OpenStackHandler(SourceBase):
         the highest amount of matching interfaces. If the ration of matching interfaces
         exceeds 2.0 then the top matching machine is chosen as desired object.
 
-        If the ration is below 2.0 then None will be returned. The probability is to low that
+        If the ration is below 2.0 then None will be returned. The probability is too low that
         this one is the correct one.
 
         None will also be returned if no machine was found at all.
@@ -613,12 +440,25 @@ class OpenStackHandler(SourceBase):
         """
 
         resolved_list = list()
-        for single_relation in grab(self, relation, fallback=list()):
+        for single_relation in grab(self.settings, relation, fallback=list()):
             object_regex = single_relation.get("object_regex")
+            match_found = False
             if object_regex.match(name):
                 resolved_name = single_relation.get("assigned_name")
-                log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}.")
+                log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}")
                 resolved_list.append(resolved_name)
+                match_found = True
+
+            # special cluster condition
+            if match_found is False and grab(f"{relation}".split("_"), "0") == "cluster":
+
+                stripped_name = "/".join(name.split("/")[1:])
+                if object_regex.match(stripped_name):
+
+                    resolved_name = single_relation.get("assigned_name")
+                    log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) "
+                               f"for {stripped_name}")
+                    resolved_list.append(resolved_name)
 
         if grab(f"{relation}".split("_"), "1") == "tag":
             return resolved_list
@@ -757,12 +597,13 @@ class OpenStackHandler(SourceBase):
         # update role according to config settings
         object_name = object_data.get(object_type.primary_key)
         role_name = self.get_object_relation(object_name,
-                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation",
-                                             fallback="Server")
+                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation")
 
         if object_type == NBDevice:
+            if role_name is None:
+                role_name = "Server"
             device_vm_object.update(data={"device_role": {"name": role_name}})
-        if object_type == NBVM:
+        if object_type == NBVM and role_name is not None:
             device_vm_object.update(data={"role": {"name": role_name}})
 
         # compile all nic data into one dictionary
@@ -801,10 +642,10 @@ class OpenStackHandler(SourceBase):
             # add all interface IPs
             for ip_object in ip_address_objects:
 
-                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
-
                 if ip_object is None:
                     continue
+
+                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
 
                 # continue if address is not a primary IP
                 if ip_interface_object not in [primary_ipv4_object, primary_ipv6_object]:
@@ -813,7 +654,7 @@ class OpenStackHandler(SourceBase):
                 # set/update/remove primary IP addresses
                 set_this_primary_ip = False
                 ip_version = ip_interface_object.ip.version
-                if self.set_primary_ip == "always":
+                if self.settings.set_primary_ip == "always":
 
                     for object_type in [NBDevice, NBVM]:
 
@@ -836,7 +677,8 @@ class OpenStackHandler(SourceBase):
 
                     set_this_primary_ip = True
 
-                elif self.set_primary_ip != "never" and grab(device_vm_object, f"data.primary_ip{ip_version}") is None:
+                elif self.settings.set_primary_ip != "never" and \
+                        grab(device_vm_object, f"data.primary_ip{ip_version}") is None:
                     set_this_primary_ip = True
 
                 if set_this_primary_ip is True:
@@ -846,6 +688,38 @@ class OpenStackHandler(SourceBase):
                     device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
 
         return
+
+    def add_object_to_cache(self, obj_type, key, netbox_object):
+
+        if None in [type, key, netbox_object]:
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = obj_type.__class__.__name__
+        except Exception:
+            return
+
+        if self.object_cache.get(vm_class_name) is None:
+            self.object_cache[vm_class_name] = dict()
+
+        self.object_cache[vm_class_name][key] = netbox_object
+
+    def get_object_from_cache(self, obj_type, key):
+
+        if obj_type is None or key is None:
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = obj_type.__class__.__name__
+        except Exception:
+            return
+
+        if self.object_cache.get(vm_class_name) is None:
+            return
+
+        return self.object_cache[vm_class_name].get(key)
 
     def add_cluster(self, obj):
         """
@@ -860,15 +734,18 @@ class OpenStackHandler(SourceBase):
             cluster to add
         """
 
-        name = get_string_or_none(obj.name)
-        group = self.group_name
+        name = get_string_or_none(grab(obj, "name"))
+        group = self.inventory.get_by_data(NBClusterGroup, data={"name": self.settings.group_name})
 
         if name is None or group is None:
             return
 
+        group_name = grab(group, "data.name")
+
         log.debug(f"Parsing OpenStack AZ: {name}")
 
-        if self.passes_filter(name, self.cluster_include_filter, self.cluster_exclude_filter) is False:
+        if self.passes_filter(name, self.settings.cluster_include_filter,
+                              self.settings.cluster_exclude_filter) is False:
             return
 
         site_name = self.get_site_name(NBCluster, name)
@@ -876,11 +753,54 @@ class OpenStackHandler(SourceBase):
         data = {
             "name": name,
             "type": {"name": "Openstack"},
-            "group": {"name": group},
+            "group": group,
             "site": {"name": site_name}
         }
 
-        self.inventory.add_update_object(NBCluster, data=data, source=self)
+        # try to find cluster including cluster group
+        log.debug2("Trying to find a matching existing cluster")
+        cluster_object = None
+        fallback_cluster_object = None
+        for cluster_candidate in self.inventory.get_all_items(NBCluster):
+            if grab(cluster_candidate, "data.name") != name:
+                continue
+
+            # try to find a cluster with matching site
+            if cluster_candidate.get_site_name() == site_name:
+                cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
+                break
+
+            if grab(cluster_candidate, "data.group") is not None and \
+                    grab(cluster_candidate, "data.group.data.name") == group_name:
+                cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'cluster group' are matching")
+                break
+
+            if grab(cluster_candidate, "data.tenant") is not None and \
+                    tenant_name is not None and \
+                    grab(cluster_candidate, "data.tenant.data.name") == tenant_name:
+                cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'tenant' are matching")
+                break
+
+            # if only the name matches and there are multiple cluster with the same name we choose the first
+            # cluster returned from netbox. This needs to be done to not ignore possible matches in one of
+            # the next iterations
+            if fallback_cluster_object is None:
+                fallback_cluster_object = cluster_candidate
+
+        if cluster_object is None and fallback_cluster_object is not None:
+            log.debug2(f"Found an existing cluster where 'name' "
+                       f"matches (NetBox id: {fallback_cluster_object.get_nb_reference()})")
+            cluster_object = fallback_cluster_object
+
+        if cluster_object is not None:
+            cluster_object.update(data=data, source=self)
+        else:
+            cluster_object = self.inventory.add_update_object(NBCluster, data=data, source=self)
+
+        self.add_object_to_cache(NBCluster, name, cluster_object)
 
         self.cluster_host_map[name] = list()
         for host in obj.hosts:
@@ -907,9 +827,9 @@ class OpenStackHandler(SourceBase):
             host object to parse
         """
 
-        name = get_string_or_none(obj.name)
+        name = get_string_or_none(grab(obj, "name"))
 
-        if name is not None and self.strip_host_domain_name is True:
+        if name is not None and self.settings.strip_host_domain_name is True:
             name = name.split(".")[0]
 
         # parse data
@@ -938,6 +858,9 @@ class OpenStackHandler(SourceBase):
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
             return
 
+        # get cluster object
+        nb_cluster_object = self.get_object_from_cache(NBCluster, cluster_name)
+
         # get a site for this host
         site_name = self.get_site_name(NBDevice, name, cluster_name)
 
@@ -953,7 +876,7 @@ class OpenStackHandler(SourceBase):
         self.processed_host_names[site_name].append(name)
 
         # filter hosts by name
-        if self.passes_filter(name, self.host_include_filter, self.host_exclude_filter) is False:
+        if self.passes_filter(name, self.settings.host_include_filter, self.settings.host_exclude_filter) is False:
             return
 
         #
@@ -995,7 +918,7 @@ class OpenStackHandler(SourceBase):
                 }
             },
             "site": {"name": site_name},
-            "cluster": {"name": cluster_name},
+            "cluster": nb_cluster_object,
             "status": status
         }
 
@@ -1057,10 +980,14 @@ class OpenStackHandler(SourceBase):
             virtual machine object to parse
         """
 
-        name = get_string_or_none(obj.name)
+        name = get_string_or_none(grab(obj, "name"))
 
-        if name is not None and self.strip_vm_domain_name is True:
+        if name is not None and self.settings.strip_vm_domain_name is True:
             name = name.split(".")[0]
+
+        if self.settings.set_vm_name_to_uuid:
+            display_name = name
+            name = get_string_or_none(obj.uuid)
 
         log.debug(f"Parsing OpenStack VM: {name}")
 
@@ -1070,7 +997,7 @@ class OpenStackHandler(SourceBase):
         cluster_name = get_string_or_none(obj.availability_zone)
 
         # honor strip_host_domain_name
-        if cluster_name is not None and self.strip_host_domain_name is True:
+        if cluster_name is not None and self.settings.strip_host_domain_name is True:
             cluster_name = cluster_name.split(".")[0]
 
         # check VM cluster
@@ -1081,6 +1008,8 @@ class OpenStackHandler(SourceBase):
         elif self.permitted_clusters.get(cluster_name) is None:
             log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
             return
+
+        nb_cluster_object = self.get_object_from_cache(NBCluster, cluster_name)
 
         if name in self.processed_vm_names.get(cluster_name, list()):
             log.warning(f"Virtual machine '{name}' for cluster '{cluster_name}' already parsed. "
@@ -1094,16 +1023,17 @@ class OpenStackHandler(SourceBase):
         self.processed_vm_names[cluster_name].append(name)
 
         # filter VMs by name
-        if self.passes_filter(name, self.vm_include_filter, self.vm_exclude_filter) is False:
+        if self.passes_filter(name, self.settings.vm_include_filter, self.settings.vm_exclude_filter) is False:
             return
 
         #
         # Collect data
         #
 
+        site_name = self.get_site_name(NBCluster, cluster_name)
         # first check against vm_platform_relation
         platform = None
-        if bool(self.skip_vm_platform) is False:
+        if self.settings.skip_vm_platform is False:
             platform = get_string_or_none(obj.flavor["original_name"])
 
             if platform is not None:
@@ -1116,27 +1046,46 @@ class OpenStackHandler(SourceBase):
             disk += int(size)
 
         annotation = None
-        if bool(self.skip_vm_comments) is False:
-            annotation = get_string_or_none(obj.id)
+        if self.settings.skip_vm_comments is False:
+            if self.settings.set_vm_name_to_uuid:
+                annotation = display_name
+            else:
+                annotation = get_string_or_none(obj.id)
 
         # assign vm_tenant_relation
         tenant_name = self.get_object_relation(name, "vm_tenant_relation")
 
         vm_data = {
             "name": name,
-            "cluster": {"name": cluster_name},
+            "cluster": nb_cluster_object,
             "status": status,
             "memory": obj.flavor["ram"],
             "vcpus": obj.flavor["vcpus"],
             "disk": disk
         }
 
+        # Add adaption for change in NetBox 3.3.0 VM model
+        # issue: https://github.com/netbox-community/netbox/issues/10131#issuecomment-1225783758
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.3.0"):
+            vm_data["site"] = {"name": site_name}
         if platform is not None:
             vm_data["platform"] = {"name": platform}
         if annotation is not None:
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
+
+        if self.settings.set_vm_name_to_uuid:
+            custom_field = self.add_update_custom_field({
+                    "name": "openstack_vm_name",
+                    "label": "name",
+                    "content_types": "virtualization.virtualmachine",
+                    "type": str,
+                    "description": f"Openstack '{self.name}' synced object attribute 'name'"
+                })
+            vm_data["custom_fields"] = {
+                grab(custom_field, "data.name"): get_string_or_none(grab(obj, "name"))
+            }
 
         vm_primary_ip4 = None
         vm_primary_ip6 = None
@@ -1169,7 +1118,7 @@ class OpenStackHandler(SourceBase):
                     "description": full_name,
                     "enabled": True,
                 }
-                if ip_valid_to_add_to_netbox(ip_addr, self.permitted_subnets, full_name) is True:
+                if self.settings.permitted_subnets.permitted(ip_addr, interface_name=full_name) is True:
                     vm_nic_dict[network] = vm_nic_data
                 else:
                     log.debug(f"Virtual machine '{name}' address '{ip_addr}' is not valid to add. Skipping")
@@ -1192,7 +1141,7 @@ class OpenStackHandler(SourceBase):
         self.inventory.add_update_object(NBTag, data={
             "name": self.source_tag,
             "description": f"Marks objects synced from Openstack '{self.name}' "
-                           f"({self.auth_url}) to this NetBox Instance."
+                           f"({self.settings.auth_url}) to this NetBox Instance."
         })
 
         # update virtual site if present
@@ -1209,11 +1158,10 @@ class OpenStackHandler(SourceBase):
         server_role_object = self.inventory.get_by_data(NBDeviceRole, data={"name": "Server"})
 
         if server_role_object is not None:
-            server_role_object.update(data={
-                "name": "Server",
-                "color": "9e9e9e",
-                "vm_role": True
-            })
+            role_data = {"name": "Server", "vm_role": True}
+            if server_role_object.is_new is True:
+                role_data["color"] = "9e9e9e"
 
+            server_role_object.update(data=role_data)
 
 # EOF
