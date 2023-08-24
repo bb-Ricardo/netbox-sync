@@ -987,7 +987,7 @@ class OpenStackHandler(SourceBase):
 
         if self.settings.set_vm_name_to_uuid:
             display_name = name
-            name = get_string_or_none(obj.uuid)
+            name = get_string_or_none(obj.id)
 
         log.debug(f"Parsing OpenStack VM: {name}")
 
@@ -1047,9 +1047,7 @@ class OpenStackHandler(SourceBase):
 
         annotation = None
         if self.settings.skip_vm_comments is False:
-            if self.settings.set_vm_name_to_uuid:
-                annotation = display_name
-            else:
+            if not self.settings.set_vm_name_to_uuid:
                 annotation = get_string_or_none(obj.id)
 
         # assign vm_tenant_relation
@@ -1080,7 +1078,7 @@ class OpenStackHandler(SourceBase):
                     "name": "openstack_vm_name",
                     "label": "name",
                     "content_types": "virtualization.virtualmachine",
-                    "type": str,
+                    "type": "text",
                     "description": f"Openstack '{self.name}' synced object attribute 'name'"
                 })
             vm_data["custom_fields"] = {
