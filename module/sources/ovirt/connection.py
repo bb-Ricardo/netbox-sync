@@ -930,7 +930,7 @@ class OVirtHandler(SourceBase):
         # collect all necessary data
         manufacturer = get_string_or_none(obj.hardware_information.manufacturer)
         model = get_string_or_none(obj.hardware_information.product_name)
-        platform = get_string_or_none(obj.version.full_version)
+        platform = f"{obj.os.type} {obj.os.version.full_version}"
 
         # if the device vendor/model cannot be retrieved (due to problem on the host),
         # set a dummy value so the host still gets synced
