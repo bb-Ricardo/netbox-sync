@@ -1098,7 +1098,9 @@ class OpenStackHandler(SourceBase):
                 ip_addr = address["addr"]
                 prefix = None
 
-                matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr))
+                matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr), site_name)
+                if matched_prefix is None:
+                    matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr))
                 if matched_prefix is not None:
                     prefix = matched_prefix.data["prefix"].prefixlen
                     ip_addr = f"{ip_addr}/{prefix}"
