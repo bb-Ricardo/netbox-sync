@@ -757,6 +757,10 @@ class OpenStackHandler(SourceBase):
             "site": {"name": site_name}
         }
 
+        tenant_name = self.get_object_relation(name, "cluster_tenant_relation")
+        if tenant_name is not None:
+            data["tenant"] = {"name": tenant_name}
+
         # try to find cluster including cluster group
         log.debug2("Trying to find a matching existing cluster")
         cluster_object = None
