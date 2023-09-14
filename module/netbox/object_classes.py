@@ -541,7 +541,9 @@ class NetBoxObject:
 
             # allows an empty site for netbox objects where a site is not mandatory
             # required for clusters and sub-objects without site reference
-            if isinstance(self, (NBCluster, NBVM, NBVLAN)) and key == "site" and "name" in value and value["name"] is None:
+            if isinstance(self, (NBCluster, NBVM, NBVLAN)) and \
+                    key == "site" and \
+                    "name" in value and value.get("name") is None:
                 parsed_data[key] = None
                 continue
 
