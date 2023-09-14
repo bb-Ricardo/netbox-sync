@@ -478,6 +478,11 @@ class VMWareHandler(SourceBase):
             site_name = self.site_name
             log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
 
+        # set the site for cluster to None if None-keyword ("<NONE>") is set via cluster_site_relation
+        if object_type == NBCluster and site_name == "<NONE>":
+            site_name = None
+            log.debug2(f"Site relation for '{object_name}' set to None")
+
         return site_name
 
     def get_object_based_on_macs(self, object_type, mac_list=None):
