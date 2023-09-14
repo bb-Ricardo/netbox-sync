@@ -531,12 +531,18 @@ class NetBoxHandler:
             prune_text = f"Objects would be automatically removed after {self.settings.prune_delay_in_days} days " \
                          f"but pruning is currently disabled."
 
-        self.inventory.add_update_object(NBTag, data={
-            "name": self.orphaned_tag,
-            "color": "607d8b",
-            "description": "A source which has previously provided this object no "
-                           f"longer states it exists. {prune_text}"
-        })
+        orphaned_tag_object = self.inventory.add_update_object(NBTag, data={"name": self.orphaned_tag})
+
+        if orphaned_tag_object is not None:
+            orphaned_tag_data = {
+                "name": self.orphaned_tag,
+                "description": "A source which has previously provided this object no "
+                               f"longer states it exists. {prune_text}"
+            }
+            if orphaned_tag_object.is_new is True:
+                orphaned_tag_data["color"] = "607d8a"
+
+            orphaned_tag_object.update(data=orphaned_tag_data)
 
         self.inventory.add_update_object(NBTag, data={
             "name": self.primary_tag,
