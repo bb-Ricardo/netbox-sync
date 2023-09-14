@@ -539,6 +539,12 @@ class NetBoxObject:
                 if type_check_failed is True:
                     continue
 
+            # allows an empty site for netbox objects where a site is not mandatory
+            # required for clusters and sub-objects without site reference
+            if isinstance(self, (NBCluster, NBVM, NBVLAN)) and key == "site" and "name" in value and value["name"] is None:
+                parsed_data[key] = None
+                continue
+
             # this is meant to be reference to a different object
             if defined_value_type in NetBoxObject.__subclasses__() and defined_value_type != NBCustomField:
 

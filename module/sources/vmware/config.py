@@ -122,9 +122,13 @@ class VMWareConfig(ConfigBase):
                                              address it is important to pick the correct site.
                                              A VM always depends on the cluster site relation
                                              a cluster can be specified as "Cluster-name" or
-                                             "Datacenter-name/Cluster-name" if multiple clusters have the same name
+                                             "Datacenter-name/Cluster-name" if multiple clusters have the same name.
+                                             When a vCenter cluster consists of hosts from multiple NetBox sites, 
+                                             it is possible to leave the site for a NetBox cluster empty. All VMs from 
+                                             this cluster will then also have no site reference. 
+                                             The keyword "<NONE>" can be used as a value for this.
                                              """,
-                                             config_example="Cluster_NYC = New York, Cluster_FFM.* = Frankfurt, Datacenter_TOKIO/.* = Tokio"),
+                                             config_example="Cluster_NYC = New York, Cluster_FFM.* = Frankfurt, Datacenter_TOKIO/.* = Tokio, Cluster_MultiSite = <NONE>"),
                                 ConfigOption("host_site_relation",
                                              str,
                                              description="""Same as cluster site but on host level.
