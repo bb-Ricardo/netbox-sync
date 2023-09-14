@@ -12,7 +12,7 @@ import os
 from module.config import source_config_section_name
 from module.config.base import ConfigBase
 from module.config.option import ConfigOption
-from module.sources.common.conifg import *
+from module.sources.common.config import *
 from module.common.logging import get_logger
 from module.common.misc import quoted_split
 from module.sources.common.permitted_subnets import PermittedSubnets

@@ -15,7 +15,7 @@ from module.config import source_config_section_name
 from module.config.base import ConfigBase
 from module.config.option import ConfigOption
 from module.config.group import ConfigOptionGroup
-from module.sources.common.conifg import *
+from module.sources.common.config import *
 from module.sources.common.permitted_subnets import PermittedSubnets
 from module.sources.common.excluded_vlan import ExcludedVLANID, ExcludedVLANName
 from module.common.logging import get_logger
