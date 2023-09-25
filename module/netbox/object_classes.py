@@ -10,6 +10,9 @@
 import json
 from ipaddress import ip_network, IPv4Network, IPv6Network
 
+# noinspection PyUnresolvedReferences
+from packaging import version
+
 from module.common.misc import grab, do_error_exit
 from module.common.logging import get_logger
 from module.netbox.manufacturer_mapping import sanitize_manufacturer_name
@@ -1513,6 +1516,7 @@ class NBDevice(NetBoxObject):
             "name": 64,
             "device_type": NBDeviceType,
             "device_role": NBDeviceRole,
+            "role": NBDeviceRole,
             "platform": NBPlatform,
             "serial": 50,
             "site": NBSite,
@@ -1526,6 +1530,16 @@ class NBDevice(NetBoxObject):
             "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
+
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        # Add adaption for change in NetBox 3.6.0 Device model
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.6.0"):
+            if data.get("device_role") is not None:
+                data["role"] = data.get("device_role")
+                del data["device_role"]
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
 
 class NBVM(NetBoxObject):
