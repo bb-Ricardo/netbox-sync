@@ -10,6 +10,7 @@
 import datetime
 import pprint
 import ssl
+import re
 from ipaddress import ip_address, ip_interface
 from urllib.parse import unquote
 
@@ -1984,7 +1985,13 @@ class VMWareHandler(SourceBase):
 
         name = get_string_or_none(grab(obj, "name"))
 
-        if name is not None and self.settings.strip_vm_domain_name is True:
+        if name is not None and self.settings.keep_vm_domain_name_filter is not None:
+            vm_domain_name_pattern = re.compile(self.settings.keep_vm_domain_name_filter)
+            if vm_domain_name_pattern.search(name):
+                name = name
+            else:
+                name = name + "." + self.settings.add_vm_domain_name
+        elif name is not None and self.settings.strip_vm_domain_name is True:
             name = name.split(".")[0]
 
         #

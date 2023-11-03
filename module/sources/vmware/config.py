@@ -252,6 +252,14 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="strip domain part from VM name before syncing VM to NetBox",
                          default_value=False),
+            ConfigOption("add_vm_domain_name",
+                         str,
+                         description="If no domain, add this to it when syncing VM to NetBox",
+                         config_example="example.com"),
+            ConfigOption("keep_vm_domain_name_filter",
+                         str,
+                         description="Pattern for which domain names we keep, vs adding bits or truncating",
+                         config_example=".*example.(com|net)$"),
             ConfigOptionGroup(title="tag source",
                               description="""\
                               sync tags assigned to clusters, hosts and VMs in vCenter to NetBox
