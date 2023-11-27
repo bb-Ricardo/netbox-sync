@@ -1195,7 +1195,8 @@ class NBTag(NetBoxObject):
             "name": 100,
             "slug": 100,
             "color": 6,
-            "description": 200
+            "description": 200,
+            "tagged_items": int
         }
         super().__init__(*args, **kwargs)
 

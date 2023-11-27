@@ -44,7 +44,7 @@ class NetBoxHandler:
     minimum_api_version = "2.9"
 
     # This tag gets added to all objects create/updated/inherited by this program
-    primary_tag = "NetBox-synced"
+    primary_tag = primary_tag_name
 
     # all objects which have a primary tag but not present in any source anymore will get this tag assigned
     orphaned_tag = f"{primary_tag}: Orphaned"
@@ -868,5 +868,26 @@ class NetBoxHandler:
             log.warning("Unfortunately we were not able to delete all objects. Sorry")
 
         return
+
+    def delete_unused_tags(self):
+        """
+        deletes all tags with primary tag in description and the attribute 'tagged_items' returned 0
+        """
+
+        self.query_current_data([NBTag])
+
+        for this_tag in self.inventory.get_all_items(NBTag):
+
+            tag_description = grab(this_tag, "data.description")
+            tag_tagged_items = grab(this_tag, "data.tagged_items")
+
+            if tag_description is None or not tag_description.startswith(self.primary_tag):
+                continue
+
+            if tag_tagged_items is None or tag_tagged_items != 0:
+                continue
+
+            log.info(f"Deleting unused tag {this_tag.get_display_name()}")
+            self.request(NBTag, req_type="DELETE", nb_id=this_tag.nb_id)
 
 # EOF
