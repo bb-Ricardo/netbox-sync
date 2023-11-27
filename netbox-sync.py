@@ -127,6 +127,9 @@ def main():
     # prune orphaned objects from NetBox
     nb_handler.prune_data()
 
+    # delete tags which are not used anymore
+    nb_handler.delete_unused_tags()
+
     # loop over sources and patch netbox data
     for source in sources:
         # closing all open connections

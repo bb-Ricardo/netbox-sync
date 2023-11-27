@@ -36,3 +36,5 @@ from module.netbox.object_classes import (
     NBInventoryItem,
     NBPowerPort
 )
+
+primary_tag_name = "NetBox-synced"

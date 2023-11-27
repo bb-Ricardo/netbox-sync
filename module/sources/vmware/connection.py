@@ -676,8 +676,8 @@ class VMWareHandler(SourceBase):
                 # noinspection PyBroadException
                 try:
                     tag_name = self.tag_session.tagging.Tag.get(tag_id).name
-                    tag_prefix_source = f"NetBox-synced {self.name}"
-                    tag_description = f"{tag_prefix_source} {self.tag_session.tagging.Tag.get(tag_id).description}"
+                    tag_description = f"{primary_tag_name} {self.name}: "\
+                                      f"{self.tag_session.tagging.Tag.get(tag_id).description}"
                 except Exception as e:
                     log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
                     continue
