@@ -403,7 +403,20 @@ class SourceBase:
                 # continue if
                 #   * both are in global scope
                 #   * both are part of the same vrf
-                if possible_ip_vrf != grab(ip, "data.vrf"):
+                current_vrf = grab(ip, "data.vrf")
+                if possible_ip_vrf != current_vrf:
+                    if not isinstance(possible_ip_vrf, NetBoxObject):
+                        possible_ip_vrf = str(possible_ip_vrf)
+                    else:
+                        possible_ip_vrf = possible_ip_vrf.get_display_name()
+                    if not isinstance(current_vrf, NetBoxObject):
+                        current_vrf = str(current_vrf)
+                    else:
+                        current_vrf = current_vrf.get_display_name()
+
+                    log.warning(f"Possibly wrongly assigned VRF for {current_ip_nic.get_display_name()} IP "
+                                f"'{ip_address_string}'. Current VRF '{current_vrf}' and "
+                                f"possible VRF '{possible_ip_vrf}'")
                     continue
 
                 # IP address is not assigned to any interface
