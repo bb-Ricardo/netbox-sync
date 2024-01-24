@@ -123,9 +123,9 @@ class VMWareConfig(ConfigBase):
                                              A VM always depends on the cluster site relation
                                              a cluster can be specified as "Cluster-name" or
                                              "Datacenter-name/Cluster-name" if multiple clusters have the same name.
-                                             When a vCenter cluster consists of hosts from multiple NetBox sites, 
-                                             it is possible to leave the site for a NetBox cluster empty. All VMs from 
-                                             this cluster will then also have no site reference. 
+                                             When a vCenter cluster consists of hosts from multiple NetBox sites,
+                                             it is possible to leave the site for a NetBox cluster empty. All VMs from
+                                             this cluster will then also have no site reference.
                                              The keyword "<NONE>" can be used as a value for this.
                                              """,
                                              config_example="Cluster_NYC = New York, Cluster_FFM.* = Frankfurt, Datacenter_TOKIO/.* = Tokio, Cluster_MultiSite = <NONE>"),
@@ -335,6 +335,16 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="""define if the name of the VM interface discovered overwrites the
                          interface name in NetBox. The interface will only be matched by identical MAC address""",
+                         default_value=True),
+            ConfigOption("overwrite_device_platform",
+                         bool,
+                         description="""define if the platform of the device discovered overwrites the device
+                         platform in NetBox.""",
+                         default_value=True),
+            ConfigOption("overwrite_vm_platform",
+                         bool,
+                         description="""define if the platform of the VM discovered overwrites the VM
+                         platform in NetBox.""",
                          default_value=True),
             ConfigOption("host_management_interface_match",
                          str,
