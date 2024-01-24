@@ -1734,6 +1734,11 @@ class NBIPAddress(NetBoxObject):
         if "assigned_object_id" in self.updated_items:
             self.updated_items.append("assigned_object_type")
 
+        # if ip association has been removed we also need to get rid of object type
+        if "assigned_object_type" in self.updated_items and self.data.get("assigned_object_id") is None \
+                and "assigned_object_type" in self.updated_items:
+            self.updated_items.remove("assigned_object_type")
+
         if assigned_object is None or previous_ip_device_vm is None:
             return
 
