@@ -1065,6 +1065,15 @@ class VMWareHandler(SourceBase):
             log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
             device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
         else:
+
+            if object_type == NBVM and self.settings.overwrite_vm_platform is False and \
+                    object_data.get("platform") is not None:
+                del object_data["platform"]
+
+            if object_type == NBDevice and self.settings.overwrite_device_platform is False and \
+                    object_data.get("platform") is not None:
+                del object_data["platform"]
+
             device_vm_object.update(data=object_data, source=self)
 
         # add object to cache

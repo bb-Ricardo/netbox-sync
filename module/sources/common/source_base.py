@@ -747,7 +747,6 @@ class SourceBase:
 
         for excluded_vlan in vlan_sync_exclude_by_name or list():
             if excluded_vlan.matches(vlan_name, site_name):
-                print("return FALSE")
                 return False
 
         for excluded_vlan in vlan_sync_exclude_by_id or list():
