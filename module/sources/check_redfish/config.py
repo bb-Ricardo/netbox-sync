@@ -80,17 +80,24 @@ class CheckRedfishConfig(ConfigBase):
         for option in self.options:
 
             if option.key == "inventory_file_path":
+                if option.value is None:
+                    self.set_validation_failed()
+                    continue
+
                 if not os.path.exists(option.value):
                     log.error(f"Inventory file path '{option.value}' not found.")
                     self.set_validation_failed()
+                    continue
 
                 if os.path.isfile(option.value):
                     log.error(f"Inventory file path '{option.value}' needs to be a directory.")
                     self.set_validation_failed()
+                    continue
 
                 if not os.access(option.value, os.X_OK | os.R_OK):
                     log.error(f"Inventory file path '{option.value}' not readable.")
                     self.set_validation_failed()
+                    continue
 
             if option.key == "ip_tenant_inheritance_order":
                 option.set_value(quoted_split(option.value))
