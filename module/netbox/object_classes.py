@@ -230,6 +230,8 @@ class NetBoxObject:
             name of the data model key which represents the secondary key of this object besides id
         enforce_secondary_key:
             bool if secondary key of an object shall be added to name when get_display_name() method is called
+        min_netbox_version:
+            defines since which NetBox version this object is available
 
     The data_model attribute needs to be a dict describing the data model in NetBox.
     Key must be string.
@@ -257,6 +259,7 @@ class NetBoxObject:
     api_path = ""
     primary_key = ""
     data_model = {}
+    min_netbox_version = "0.0"
     # _mandatory_attrs must be set at subclasses
     _mandatory_attrs = ("name", "api_path", "primary_key", "data_model")
 
@@ -1571,6 +1574,14 @@ class NBVM(NetBoxObject):
         }
         super().__init__(*args, **kwargs)
 
+    def get_virtual_disks(self):
+        result_list = list()
+        for ip_object in self.inventory.get_all_items(NBVirtualDisk):
+            if grab(ip_object, "data.virtual_machine") == self:
+                result_list.append(ip_object)
+
+        return result_list
+
 
 class NBVMInterface(NetBoxObject):
     name = "virtual machine interface"
@@ -1652,6 +1663,24 @@ class NBInterface(NetBoxObject):
             del data["type"]
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+
+class NBVirtualDisk(NetBoxObject):
+    name = "Virtual Disk"
+    api_path = "virtualization/virtual-disks"
+    primary_key = "name"
+    secondary_key = "virtual_machine"
+    min_netbox_version = "3.7"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 64,
+            "virtual_machine": NBVM,
+            "description": 200,
+            "size": int,  # in GB
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBIPAddress(NetBoxObject):
