@@ -397,6 +397,10 @@ class NetBoxHandler:
             if nb_object_class in self.resolved_dependencies:
                 continue
 
+            # make sure to query only available object types
+            if version.parse(self.inventory.netbox_api_version) < version.parse(nb_object_class.min_netbox_version):
+                continue
+
             # initialize cache variables
             cached_nb_data = list()
             cache_file = f"{self.cache_directory}{os.sep}{nb_object_class.__name__}.cache"
