@@ -572,6 +572,10 @@ class NetBoxHandler:
 
         """
 
+        # make sure to query only available object types
+        if version.parse(self.inventory.netbox_api_version) < version.parse(nb_object_sub_class.min_netbox_version):
+            return
+
         for this_object in self.inventory.get_all_items(nb_object_sub_class):
 
             # unset data if requested
