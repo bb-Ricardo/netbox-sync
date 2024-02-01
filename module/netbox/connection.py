@@ -629,6 +629,13 @@ class NetBoxHandler:
                     else:
                         data_to_patch[key] = value
 
+            # special case for IP address
+            if isinstance(this_object, NBIPAddress):
+                # if object is new and and has no id, then we need to remove assigned_object_type from data_to_patch
+                if "assigned_object_id" in unresolved_dependency_data.keys() and \
+                        "assigned_object_type" in data_to_patch.keys():
+                    del data_to_patch["assigned_object_type"]
+
             issued_request = False
             returned_object_data = None
             if len(data_to_patch.keys()) > 0:
