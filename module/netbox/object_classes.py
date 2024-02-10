@@ -457,8 +457,7 @@ class NetBoxObject:
 
             return
 
-        if source is not None:
-            self.source = source
+        self.set_source(source)
 
         display_name = self.get_display_name(data)
 
@@ -558,10 +557,10 @@ class NetBoxObject:
 
                 if not isinstance(value, NetBoxObject):
                     # try to find object.
-                    value = self.inventory.add_update_object(defined_value_type, data=value)
-                    # add source if item was created via this source
-                    if value.source is None:
-                        value.source = source
+                    value = self.inventory.add_update_object(defined_value_type, data=value, source=source)
+
+                # add source if currently undefined (read from NetBox)
+                value.set_source(source)
 
             # add to parsed data dict
             parsed_data[key] = value
@@ -653,6 +652,14 @@ class NetBoxObject:
 
         if data_updated is True and self.is_new is False:
             log.debug("Updated %s object: %s" % (self.name, self.get_display_name()))
+
+    def set_source(self, source=None):
+        """
+        updates the source attribute, Only update if undefined
+        """
+
+        if source is not None and self.source is None:
+            self.source = source
 
     def get_display_name(self, data=None, including_second_key=False):
         """
@@ -989,6 +996,9 @@ class NetBoxObject:
             else:
                 log.error(f"Unable to parse provided VLAN data: {vlan}")
                 continue
+
+            # set source for this vlan if undefined
+            new_vlan_object.set_source(self.source)
 
             # VLAN already in list, must have been submitted twice
             if new_vlan_object in new_vlan_list:
