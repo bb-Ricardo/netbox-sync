@@ -1099,10 +1099,16 @@ class VMWareHandler(SourceBase):
         # update VM disk data information
         if version.parse(self.inventory.netbox_api_version) >= version.parse("3.7.0") and \
                 object_type == NBVM and disk_data is not None and len(disk_data) > 0:
+
+            # create pairs of existing and discovered disks.
+            # currently these disks are only used within the VM model. that's we we use this simple approach and
+            # just rewrite disk as they appear in order.
+            # otherwise we would need to implement a matching function like matching interfaces.
             disk_zip_list = zip_longest(
                 sorted(device_vm_object.get_virtual_disks(), key=lambda x: grab(x, "data.name")),
                 sorted(disk_data, key=lambda x: x.get("name")),
                 fillvalue="X")
+
             for existing, discovered in disk_zip_list:
                 if existing == "X":
                     self.inventory.add_object(NBVirtualDisk, source=self,
@@ -2208,7 +2214,8 @@ class VMWareHandler(SourceBase):
 
                 vm_device_description = list()
                 if grab(vm_device, 'backing.diskMode') is not None:
-                    vm_device_description.append(str(grab(vm_device, 'backing.diskMode')).capitalize())
+                    vm_device_description.append(
+                        str(grab(vm_device, 'backing.diskMode')).capitalize().replace("_", "-"))
 
                 if grab(vm_device, 'backing.thinProvisioned') is True:
                     vm_device_description.append("ThinProvisioned")
@@ -2218,9 +2225,15 @@ class VMWareHandler(SourceBase):
                 if grab(vm_device_backing, "fileName") is not None:
                     vm_device_description.append(grab(vm_device_backing, "fileName"))
 
+                disk_size = grab(vm_device, "capacityInKB", fallback=0)
+                disk_size_in_gb = int(disk_size / 1024 / 1024)
+                if disk_size_in_gb < 1:
+                    vm_device_description.append(f"Size: {int(disk_size / 1024)} MB")
+                    disk_size_in_gb = 1
+
                 disk_data.append({
                     "name": grab(vm_device, "deviceInfo.label"),
-                    "size": int(grab(vm_device, "capacityInKB", fallback=0) / 1024 / 1024),
+                    "size": disk_size_in_gb,
                     "description": " / ".join(vm_device_description)
                 })
 
