@@ -830,6 +830,8 @@ class VMWareHandler(SourceBase):
             if label is None:
                 continue
 
+            label = label.strip('"')
+
             if self.settings.custom_attribute_exclude is not None and \
                     label in self.settings.custom_attribute_exclude:
                 log.debug(f"Custom attribute '{label}' excluded from sync. Skipping")
