@@ -16,6 +16,7 @@ from itertools import zip_longest
 
 import urllib3
 import requests
+import http
 # noinspection PyUnresolvedReferences
 from packaging import version
 # noinspection PyUnresolvedReferences
@@ -348,7 +349,7 @@ class VMWareHandler(SourceBase):
             # test if session is still alive
             try:
                 self.session.sessionManager.currentSession.key
-            except (vim.fault.NotAuthenticated, AttributeError):
+            except (vim.fault.NotAuthenticated, AttributeError, http.client.RemoteDisconnected):
                 log.info("No existing vCenter session found.")
                 self.session = None
                 self.tag_session = None
