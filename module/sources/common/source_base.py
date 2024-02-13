@@ -745,6 +745,14 @@ class SourceBase:
         vlan_name = vlan_data.get("name")
         vlan_id = vlan_data.get("vid")
 
+        if vlan_id == 4095:
+            log.debug(f"Skipping sync of VLAN '{vlan_name}' ID: '{vlan_id}' (VMware 'Virtual Guest Tagging') to NetBox")
+            return False
+
+        if vlan_id >= 4096:
+            log.warning(f"Skipping sync of invalid VLAN '{vlan_name}' ID: '{vlan_id}'")
+            return False
+
         for excluded_vlan in vlan_sync_exclude_by_name or list():
             if excluded_vlan.matches(vlan_name, site_name):
                 return False
