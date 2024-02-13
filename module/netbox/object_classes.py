@@ -1646,6 +1646,8 @@ class NBInterface(NetBoxObject):
             "mgmt_only": bool,
             "mtu": int,
             "mode": ["access", "tagged", "tagged-all"],
+            "speed": int,
+            "duplex": ["half", "full", "auto"],
             "untagged_vlan": NBVLAN,
             "tagged_vlans": NBVLANList,
             "description": 200,
