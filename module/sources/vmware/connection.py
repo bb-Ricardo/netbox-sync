@@ -1748,6 +1748,12 @@ class VMWareHandler(SourceBase):
             if pnic_link_speed is None:
                 pnic_link_speed = grab(pnic, "validLinkSpecification.0.speedMb")
 
+            pnic_link_duplex = grab(pnic, "linkSpeed.duplex")
+            if pnic_link_duplex is None:
+                pnic_link_duplex = grab(pnic, "spec.linkSpeed.duplex")
+            if pnic_link_duplex is None:
+                pnic_link_duplex = grab(pnic, "validLinkSpecification.0.duplex")
+
             # determine link speed text
             pnic_description = ""
             if pnic_link_speed is not None:
@@ -1810,6 +1816,13 @@ class VMWareHandler(SourceBase):
                 pnic_data["mtu"] = pnic_mtu
             if pnic_mode is not None:
                 pnic_data["mode"] = pnic_mode
+
+            # add link speed and duplex attributes
+            if version.parse(self.inventory.netbox_api_version) >= version.parse("3.2.0"):
+                if pnic_link_speed is not None:
+                    pnic_data["speed"] = pnic_link_speed * 1000
+                if pnic_link_duplex is not None:
+                    pnic_data["duplex"] = "full" if pnic_link_duplex is True else "half"
 
             # determine interface mode for non VM traffic NICs
             if len(pnic_vlans) > 0:

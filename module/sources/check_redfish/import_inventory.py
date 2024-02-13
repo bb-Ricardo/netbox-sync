@@ -722,6 +722,8 @@ class CheckRedfish(SourceBase):
             hostname = get_string_or_none(grab(nic_port, "hostname"))
             health_status = get_string_or_none(grab(nic_port, "health_status"))
             adapter_id = get_string_or_none(grab(nic_port, "adapter_id"))
+            link_speed = grab(nic_port, "capable_speed") or grab(nic_port, "current_speed") or 0
+            link_duplex = grab(nic_port, "full_duplex")
 
             mac_address = None
             wwn = None
@@ -749,9 +751,6 @@ class CheckRedfish(SourceBase):
                 port_name += f" ({port_id})"
             else:
                 port_name = port_id
-
-            # get port speed
-            link_speed = grab(nic_port, "capable_speed") or grab(nic_port, "current_speed") or 0
 
             if link_speed == 0 and adapter_id is not None:
                 link_type = self.interface_adapter_type_dict.get(adapter_id)
@@ -784,14 +783,22 @@ class CheckRedfish(SourceBase):
                 "mac_address": mac_address,
                 "wwn": wwn,
                 "enabled": enabled,
-                "description": ", ".join(description),
                 "type": link_type.get_this_netbox_type(),
                 "mgmt_only": mgmt_only,
                 "health": health_status
             }
 
+            if len(description) > 0:
+                port_data_dict[port_name]["description"] = ", ".join(description)
             if mgmt_only is True:
                 port_data_dict[port_name]["mode"] = "access"
+
+            # add link speed and duplex attributes
+            if version.parse(self.inventory.netbox_api_version) >= version.parse("3.2.0"):
+                if link_speed > 0:
+                    port_data_dict[port_name]["speed"] = link_speed * 1000
+                if link_duplex is not None:
+                    port_data_dict[port_name]["duplex"] = "full" if link_duplex is True else "half"
 
             # collect ip addresses
             nic_ips[port_name] = list()
