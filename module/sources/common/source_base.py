@@ -46,7 +46,8 @@ class SourceBase:
     def finish(self):
         pass
 
-    def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=None):
+    def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=None,
+                                                    append_unmatched_interfaces=False):
         """
         Try to match current object interfaces to discovered ones. This will be done
         by multiple approaches. Order as following listing whatever matches first will be chosen.
@@ -73,6 +74,8 @@ class SourceBase:
             object type to look for
         interface_data_dict: dict
             dictionary with interface data to compare to existing machine
+        append_unmatched_interfaces: bool
+            if True add unmatched interfaces as new interfaces instead of trying to assign to en unmatched on
 
         Returns
         -------
@@ -163,12 +166,17 @@ class SourceBase:
         current_object_interface_names.sort()
         unmatched_interface_names.sort()
 
-        matching_nics = dict(zip(unmatched_interface_names, current_object_interface_names))
+        # Don't match to existing interfaces, just append additionally to list of interfaces
+        if append_unmatched_interfaces is True:
+            for int_name in unmatched_interface_names:
+                return_data[int_name] = None
+        else:
+            matching_nics = dict(zip(unmatched_interface_names, current_object_interface_names))
 
-        for new_int, current_int in matching_nics.items():
-            current_int_object = current_object_interfaces.get(current_int)
-            log.debug2(f"Matching '{new_int}' to NetBox Interface '{current_int_object.get_display_name()}'")
-            return_data[new_int] = current_int_object
+            for new_int, current_int in matching_nics.items():
+                current_int_object = current_object_interfaces.get(current_int)
+                log.debug2(f"Matching '{new_int}' to NetBox Interface '{current_int_object.get_display_name()}'")
+                return_data[new_int] = current_int_object
 
         return return_data
 
