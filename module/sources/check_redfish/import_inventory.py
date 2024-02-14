@@ -849,10 +849,9 @@ class CheckRedfish(SourceBase):
 
                 data_to_update["mgmt_only"] = mgmt_only
 
-                # update nic object
-                nic_object.update(data=data_to_update, source=self)
-            else:
-                self.add_update_interface(nic_object, self.device_object, port_data, nic_ips.get(port_name, list()))
+                port_data = data_to_update
+
+            self.add_update_interface(nic_object, self.device_object, port_data, nic_ips.get(port_name, list()))
 
     def update_manager(self):
 
