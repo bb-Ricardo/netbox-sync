@@ -265,11 +265,6 @@ class SourceBase:
             added to this interface
         """
 
-        # should be removed / unused code
-        disable_vlan_sync = False
-        if "disable_vlan_sync" in self.settings:
-            disable_vlan_sync = self.settings.disable_vlan_sync
-
         ip_tenant_inheritance_order = None
         if "ip_tenant_inheritance_order" in self.settings:
             ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
