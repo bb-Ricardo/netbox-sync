@@ -791,7 +791,7 @@ class NetBoxObject:
 
         return r
 
-    def get_tags(self):
+    def get_tags(self) -> list:
         """
         returns a list of strings of tag names
 
@@ -801,6 +801,7 @@ class NetBoxObject:
         """
 
         tag_list = list()
+
         if "tags" not in self.data_model.keys():
             return tag_list
 
@@ -812,7 +813,18 @@ class NetBoxObject:
             else:
                 log.error(f"This tag is not an NetBox object: {tag}")
                 log.error(f"Please report this here: https://github.com/bb-Ricardo/netbox-sync/issues/120")
+
         return tag_list
+
+    @classmethod
+    def extract_tag_name(cls, this_tag):
+
+        if isinstance(this_tag, NBTag):
+            return this_tag.get_display_name()
+        elif isinstance(this_tag, str):
+            return this_tag
+        elif isinstance(this_tag, dict) and this_tag.get("name") is not None:
+            return this_tag.get("name")
 
     def compile_tags(self, tags, remove=False):
         """
@@ -842,20 +854,13 @@ class NetBoxObject:
 
         new_tag_list = NBTagList()
 
-        def extract_tags(this_tags):
-            if isinstance(this_tags, NBTag):
-                sanitized_tag_strings.append(this_tags.get_display_name())
-            elif isinstance(this_tags, str):
-                sanitized_tag_strings.append(this_tags)
-            elif isinstance(this_tags, dict) and this_tags.get("name") is not None:
-                sanitized_tag_strings.append(this_tags.get("name"))
-
         if isinstance(tags, list):
             for tag in tags:
-                extract_tags(tag)
+                sanitized_tag_strings.append(self.extract_tag_name(tag))
+
         else:
             # noinspection PyTypeChecker
-            extract_tags(tags)
+            sanitized_tag_strings.append(self.extract_tag_name(tags))
 
         # current list of tag strings
         current_tag_strings = self.get_tags()
@@ -864,6 +869,9 @@ class NetBoxObject:
         removed_tags = list()
 
         for tag_name in sanitized_tag_strings:
+
+            if tag_name is None:
+                continue
 
             # add tag
             if tag_name not in current_tag_strings and remove is False:

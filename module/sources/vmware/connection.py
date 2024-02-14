@@ -679,13 +679,18 @@ class VMWareHandler(SourceBase):
                 # noinspection PyBroadException
                 try:
                     tag_name = self.tag_session.tagging.Tag.get(tag_id).name
-                    tag_description = f"{primary_tag_name}: "\
-                                      f"{self.tag_session.tagging.Tag.get(tag_id).description}"
+                    tag_description = self.tag_session.tagging.Tag.get(tag_id).description
                 except Exception as e:
                     log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
                     continue
 
                 if tag_name is not None:
+
+                    if tag_description is not None and len(f"{tag_description}") > 0:
+                        tag_description = f"{primary_tag_name}: {tag_description}"
+                    else:
+                        tag_description = primary_tag_name
+
                     tag_list.append(self.inventory.add_update_object(NBTag, data={
                         "name": tag_name,
                         "description": tag_description
@@ -1092,12 +1097,24 @@ class VMWareHandler(SourceBase):
         role_name = self.get_object_relation(object_name,
                                              "host_role_relation" if object_type == NBDevice else "vm_role_relation")
 
+        # take care of object role in NetBox
         if object_type == NBDevice:
             if role_name is None:
                 role_name = "Server"
             device_vm_object.update(data={"device_role": {"name": role_name}})
         if object_type == NBVM and role_name is not None:
             device_vm_object.update(data={"role": {"name": role_name}})
+
+        # verify if source tags have been removed from object.
+        new_object_tags = list(map(NetBoxObject.extract_tag_name, object_data.get("tags", list())))
+
+        for object_tag in device_vm_object.data.get("tags", list()):
+
+            if not f'{object_tag.data.get("description")}'.startswith(primary_tag_name):
+                continue
+
+            if NetBoxObject.extract_tag_name(object_tag) not in new_object_tags:
+                device_vm_object.remove_tags(object_tag)
 
         # update VM disk data information
         if version.parse(self.inventory.netbox_api_version) >= version.parse("3.7.0") and \
@@ -2167,8 +2184,8 @@ class VMWareHandler(SourceBase):
         # Add adaption for added virtual disks in NetBox 3.7.0
         if version.parse(self.inventory.netbox_api_version) < version.parse("3.7.0"):
             vm_data["disk"] = int(sum([getattr(comp, "capacityInKB", 0) for comp in hardware_devices
-                       if isinstance(comp, vim.vm.device.VirtualDisk)
-                        ]) / 1024 / 1024)
+                                       if isinstance(comp, vim.vm.device.VirtualDisk)
+                                       ]) / 1024 / 1024)
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
