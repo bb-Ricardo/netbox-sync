@@ -68,7 +68,7 @@ class CheckRedfishConfig(ConfigBase):
                          bool,
                          description="""define if existing interface attributes are overwritten with data discovered
                          via check_redfish if False only data which is not preset in NetBox will be added""",
-                         default_value=True),
+                         default_value=False),
 
             ConfigOption(**config_option_ip_tenant_inheritance_order_definition),
         ]
