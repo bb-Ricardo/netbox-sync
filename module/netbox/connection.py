@@ -902,7 +902,7 @@ class NetBoxHandler:
             if tag_tagged_items is None or tag_tagged_items != 0:
                 continue
 
-            log.info(f"Deleting unused tag {this_tag.get_display_name()}")
+            log.info(f"Deleting unused tag '{this_tag.get_display_name()}'")
             self.request(NBTag, req_type="DELETE", nb_id=this_tag.nb_id)
 
 # EOF
