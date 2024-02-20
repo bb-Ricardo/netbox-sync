@@ -39,6 +39,7 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * aiodns==2.0.0
 * setuptools>=62.00.0
 * pyyaml==6.0
+* openstack
 
 ### Environment
 * NetBox >= 2.9
