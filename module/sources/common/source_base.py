@@ -770,7 +770,7 @@ class SourceBase:
     def add_update_custom_field(self, data) -> NBCustomField:
         """
         Adds/updates a NBCustomField object with data.
-        Update will only update the 'content_types' attribute.
+        Update will only update the 'object_types' attribute.
 
         Parameters
         ----------
@@ -792,7 +792,7 @@ class SourceBase:
         if custom_field is None:
             custom_field = self.inventory.add_object(NBCustomField, data=data, source=self)
         else:
-            custom_field.update(data={"content_types": data.get("content_types")}, source=self)
+            custom_field.update(data={"object_types": data.get("object_types")}, source=self)
 
         return custom_field
 
