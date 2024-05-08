@@ -472,7 +472,10 @@ class NetBoxHandler:
 
                 # request a brief list of existing objects
                 log.debug(f"Requesting a brief list of {nb_object_class.name}s from NetBox")
-                brief_nb_data = self.request(nb_object_class, params={"brief": 1, "limit": 500})
+                brief_params = {"brief": 1, "limit": 500}
+                if version.parse(self.inventory.netbox_api_version) >= version.parse("4.0"):
+                    brief_params["fields"] = "id"
+                brief_nb_data = self.request(nb_object_class, params=brief_params)
                 log.debug("NetBox returned %d results." % len(brief_nb_data.get("results", list())))
 
                 log.debug(f"Requesting the last updates since {latest_update} of {nb_object_class.name}s from NetBox")
