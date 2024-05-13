@@ -1183,6 +1183,11 @@ class NBCustomField(NetBoxObject):
             append to existing object_types and don't delete any
         """
 
+        # Keep support for NetBox < 4.0
+        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
+            if data.get("content_types") is not None:
+                data["object_types"] = data.pop("content_types")
+
         # get current content types
         current_object_types = list()
         for object_type in grab(self, "data.object_types", fallback=list()):
@@ -1204,8 +1209,7 @@ class NBCustomField(NetBoxObject):
         # Keep support for NetBox < 4.0
         if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
             if data.get("object_types") is not None:
-                data["content_types"] = data.get("object_types")
-                del data["object_types"]
+                data["content_types"] = data.pop("object_types")
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
