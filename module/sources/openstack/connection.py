@@ -1057,12 +1057,18 @@ class OpenStackHandler(SourceBase):
         # assign vm_tenant_relation
         tenant_name = self.get_object_relation(name, "vm_tenant_relation")
 
+        # is the data incorrect or mismatched? DATA IS INCORRECT. Does not include memory, vcpus.
+        # quiet the error from vcpu not being > 0.010...
+        cpu = obj.flavor["vcpus"]
+        if cpu == 0:
+            cpu = 1
+
         vm_data = {
             "name": name,
             "cluster": nb_cluster_object,
             "status": status,
             "memory": obj.flavor["ram"],
-            "vcpus": obj.flavor["vcpus"],
+            "vcpus": cpu,
             "disk": disk
         }
 
