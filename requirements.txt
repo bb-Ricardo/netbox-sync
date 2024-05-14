@@ -2,7 +2,7 @@ packaging
 urllib3==1.26.18
 wheel
 requests==2.31.0
-pyvmomi==7.0.3
+pyvmomi>=7.0.3
 aiodns==3.0.0
 setuptools>=62.00.0
 pyyaml
