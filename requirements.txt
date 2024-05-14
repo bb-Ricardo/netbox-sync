@@ -1,10 +1,9 @@
 packaging
-urllib3==1.26.18
+urllib3==2.2.1
 wheel
 requests==2.31.0
-pyvmomi>=7.0.3
+pyvmomi==8.0.2.0.1
 aiodns==3.0.0
-setuptools>=62.00.0
-pyyaml
+pyyaml==6.0.1
 openstacksdk
 ovirt-engine-sdk-python
