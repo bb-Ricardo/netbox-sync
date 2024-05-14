@@ -32,13 +32,12 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 ### Software
 * python >= 3.6
 * packaging
-* urllib3==1.26.9
+* urllib3==2.2.1
 * wheel
-* requests==2.27.1
-* pyvmomi==7.0.3
-* aiodns==2.0.0
-* setuptools>=62.00.0
-* pyyaml==6.0
+* requests==2.31.0
+* pyvmomi==8.0.2.0.1
+* aiodns==3.0.0
+* pyyaml==6.0.1
 
 ### Environment
 * NetBox >= 2.9
