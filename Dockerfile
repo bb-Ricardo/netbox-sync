@@ -1,4 +1,4 @@
-FROM python:3.9-slim-bookworm AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 COPY requirements.txt .
 
@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && \
     /opt/netbox-sync/venv/bin/pip install -r requirements.txt && \
     /opt/netbox-sync/venv/bin/pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 
-FROM python:3.9-slim-bookworm AS netbox-sync
+FROM python:3.11-slim-bookworm AS netbox-sync
 
 # Copy installed packages
 COPY --from=builder /opt/netbox-sync/venv /opt/netbox-sync/venv
