@@ -1152,7 +1152,7 @@ class NBCustomField(NetBoxObject):
     primary_key = "name"
     prune = False
     # used by this software
-    valid_content_types = [
+    valid_object_types = [
         "dcim.device",
         "dcim.interface",
         "dcim.inventoryitem",
@@ -1164,6 +1164,8 @@ class NBCustomField(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
+            "object_types": list,
+            # field name (object_types) for NetBox < 4.0.0
             "content_types": list,
             "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect"],
             "name": 50,
@@ -1178,29 +1180,43 @@ class NBCustomField(NetBoxObject):
     def update(self, data=None, read_from_netbox=False, source=None):
         """
             handle content types properly
-            append to existing content_types and don't delete any
+            append to existing object_types and don't delete any
         """
 
+        # Keep support for NetBox < 4.0
+        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
+            if data.get("content_types") is not None:
+                data["object_types"] = data.pop("content_types")
+
         # get current content types
-        current_content_types = list()
-        for content_type in grab(self, "data.content_types", fallback=list()):
-            current_content_types.append(content_type)
+        current_object_types = list()
+        for object_type in grab(self, "data.object_types", fallback=list()):
+            current_object_types.append(object_type)
 
-        if isinstance(data.get("content_types"), str):
-            data["content_types"] = [data.get("content_types")]
+        if isinstance(data.get("object_types"), str):
+            data["object_types"] = [data.get("object_types")]
 
-        for content_type in data.get("content_types"):
-            if content_type not in self.valid_content_types and read_from_netbox is False:
-                log.error(f"Invalid content type '{content_type}' for {self.name}")
+        for object_type in data.get("object_types"):
+            if object_type not in self.valid_object_types and read_from_netbox is False:
+                log.error(f"Invalid content type '{object_type}' for {self.name}")
                 continue
 
-            if content_type not in current_content_types:
-                current_content_types.append(content_type)
+            if object_type not in current_object_types:
+                current_object_types.append(object_type)
 
-        data["content_types"] = current_content_types
+        data["object_types"] = current_object_types
+
+        # Keep support for NetBox < 4.0
+        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
+            if data.get("object_types") is not None:
+                data["content_types"] = data.pop("object_types")
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
+        if isinstance(grab(self, "data.object_types"), str):
+            self.data["object_types"] = [grab(self, "data.object_types")]
+
+        # Keep support for NetBox < 4.0
         if isinstance(grab(self, "data.content_types"), str):
             self.data["content_types"] = [grab(self, "data.content_types")]
 

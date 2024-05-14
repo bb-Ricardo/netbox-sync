@@ -33,7 +33,7 @@ unset DOCKER_TLS_VERIFY
 unset DOCKER_HOST
 unset DOCKER_CERT_PATH
 
-find . -name "__pycache__" -delete
+find module -type d -name "__pycache__" -exec rm -rf {} \;
 docker --config ./docker-tmp login
 docker --config ./docker-tmp buildx create --use
 if [[ $FINAL == true ]]; then

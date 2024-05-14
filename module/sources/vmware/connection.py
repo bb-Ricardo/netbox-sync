@@ -779,16 +779,16 @@ class VMWareHandler(SourceBase):
             custom_value = grab(obj, "customValue", fallback=list())
 
         if grab(obj, "_wsdlName") == "VirtualMachine":
-            content_type = "virtualization.virtualmachine"
+            object_type = "virtualization.virtualmachine"
             custom_object_attributes = self.settings.vm_custom_object_attributes or list()
             object_attribute_prefix = "vm"
         else:
-            content_type = "dcim.device"
+            object_type = "dcim.device"
             custom_object_attributes = self.settings.host_custom_object_attributes or list()
             object_attribute_prefix = "host"
 
         # add basic host data to device
-        if content_type == "dcim.device":
+        if object_type == "dcim.device":
             num_cpu_cores = grab(obj, "summary.hardware.numCpuCores")
             cpu_model = grab(obj, "summary.hardware.cpuModel")
             memory_size = grab(obj, "summary.hardware.memorySize")
@@ -797,7 +797,7 @@ class VMWareHandler(SourceBase):
                 custom_field = self.add_update_custom_field({
                     "name": "vcsa_host_cpu_cores",
                     "label": "Physical CPU Cores",
-                    "content_types": [content_type],
+                    "object_types": [object_type],
                     "type": "text",
                     "description": f"vCenter '{self.name}' reported Host CPU cores"
                 })
@@ -808,7 +808,7 @@ class VMWareHandler(SourceBase):
                 custom_field = self.add_update_custom_field({
                     "name": "vcsa_host_memory",
                     "label": "Memory",
-                    "content_types": [content_type],
+                    "object_types": [object_type],
                     "type": "text",
                     "description": f"vCenter '{self.name}' reported Memory"
                 })
@@ -846,7 +846,7 @@ class VMWareHandler(SourceBase):
             custom_field = self.add_update_custom_field({
                 "name": f"vcsa_{label}",
                 "label": label,
-                "content_types": [content_type],
+                "object_types": [object_type],
                 "type": "text",
                 "description": f"vCenter '{self.name}' synced custom attribute '{label}'"
             })
@@ -883,7 +883,7 @@ class VMWareHandler(SourceBase):
             custom_field = self.add_update_custom_field({
                 "name": f"vcsa_{object_attribute_prefix}_{custom_object_attribute}",
                 "label": custom_object_attribute,
-                "content_types": [content_type],
+                "object_types": [object_type],
                 "type": custom_field_type,
                 "description": f"vCenter '{self.name}' synced object attribute '{custom_object_attribute}'"
             })
@@ -1321,7 +1321,7 @@ class VMWareHandler(SourceBase):
             custom_field = self.add_update_custom_field({
                 "name": f"vcsa_{label}",
                 "label": label,
-                "content_types": ["virtualization.clustergroup"],
+                "object_types": ["virtualization.clustergroup"],
                 "type": "text",
                 "description": f"vCenter '{self.name}' synced custom attribute '{label}'"
             })

@@ -248,7 +248,7 @@ class CheckRedfish(SourceBase):
                 self.add_update_custom_field({
                     "name": "service_tag",
                     "label": "Service Tag",
-                    "content_types": [
+                    "object_types": [
                         "dcim.device"
                     ],
                     "type": "text",
@@ -1040,7 +1040,7 @@ class CheckRedfish(SourceBase):
         self.add_update_custom_field({
             "name": "firmware",
             "label": "Firmware",
-            "content_types": [
+            "object_types": [
                 "dcim.inventoryitem",
                 "dcim.powerport"
             ],
@@ -1052,7 +1052,7 @@ class CheckRedfish(SourceBase):
         self.add_update_custom_field({
             "name": "inventory_type",
             "label": "Type",
-            "content_types": ["dcim.inventoryitem"],
+            "object_types": ["dcim.inventoryitem"],
             "type": "text",
             "description": "Describes the type of inventory item"
         })
@@ -1061,7 +1061,7 @@ class CheckRedfish(SourceBase):
         self.add_update_custom_field({
             "name": "inventory_size",
             "label": "Size",
-            "content_types": ["dcim.inventoryitem"],
+            "object_types": ["dcim.inventoryitem"],
             "type": "text",
             "description": "Describes the size of the inventory item if applicable"
         })
@@ -1070,7 +1070,7 @@ class CheckRedfish(SourceBase):
         self.add_update_custom_field({
             "name": "inventory_speed",
             "label": "Speed",
-            "content_types": ["dcim.inventoryitem"],
+            "object_types": ["dcim.inventoryitem"],
             "type": "text",
             "description": "Describes the speed of the inventory item if applicable"
         })
@@ -1079,7 +1079,7 @@ class CheckRedfish(SourceBase):
         self.add_update_custom_field({
             "name": "health",
             "label": "Health",
-            "content_types": [
+            "object_types": [
                 "dcim.inventoryitem",
                 "dcim.powerport",
                 "dcim.device"
