@@ -437,7 +437,7 @@ class CheckRedfish(SourceBase):
             items.append({
                 "inventory_type": "DIMM",
                 "description": description,
-                "full_name": name,
+                "full_name": name or "None",
                 "serial": get_string_or_none(grab(memory, "serial")),
                 "manufacturer": get_string_or_none(grab(memory, "manufacturer")),
                 "part_number": get_string_or_none(grab(memory, "part_number")),
@@ -552,7 +552,7 @@ class CheckRedfish(SourceBase):
                 "inventory_type": "Physical Drive",
                 "description": description,
                 "manufacturer": get_string_or_none(grab(pd, "manufacturer")),
-                "full_name": name,
+                "full_name": name or "None",
                 "serial": serial,
                 "part_number": get_string_or_none(grab(pd, "part_number")),
                 "firmware": firmware,
@@ -578,7 +578,7 @@ class CheckRedfish(SourceBase):
             physical_drive_ids = grab(sc, "physical_drive_ids", fallback=list())
             cache_size_in_mb = grab(sc, "cache_size_in_mb")
 
-            if name.lower().startswith("hp"):
+            if name.lower().startswith("hp") and model is not None:
                 name = model
 
             if location is not None and location not in name:
@@ -598,7 +598,7 @@ class CheckRedfish(SourceBase):
                 "inventory_type": "Storage Controller",
                 "description": description,
                 "manufacturer": get_string_or_none(grab(sc, "manufacturer")),
-                "full_name": name,
+                "full_name": name or "None",
                 "serial": get_string_or_none(grab(sc, "serial")),
                 "firmware": get_string_or_none(grab(sc, "firmware")),
                 "health": get_string_or_none(grab(sc, "health_status")),
@@ -633,7 +633,7 @@ class CheckRedfish(SourceBase):
             items.append({
                 "inventory_type": "Storage Enclosure",
                 "manufacturer": get_string_or_none(grab(se, "manufacturer")),
-                "full_name": name,
+                "full_name": name or "None",
                 "serial": get_string_or_none(grab(se, "serial")),
                 "firmware": get_string_or_none(grab(se, "firmware")),
                 "health": get_string_or_none(grab(se, "health_status")),
@@ -663,7 +663,8 @@ class CheckRedfish(SourceBase):
                 adapter_name = adapter_name.replace("Network Adapter View", "")
             if adapter_name.startswith("Network Adapter"):
                 adapter_name = adapter_name.replace("Network Adapter", "")
-            adapter_name = adapter_name.strip()
+            if adapter_name is not None:
+                adapter_name = adapter_name.strip()
 
             if adapter_id != adapter_name:
                 if len(adapter_name) == 0:
@@ -677,7 +678,7 @@ class CheckRedfish(SourceBase):
                 elif adapter_name.startswith("HP"):
                     manufacturer = "HP"
 
-            name = adapter_name
+            name = adapter_name or "None"
             size = None
             if model is not None:
                 name += f" - {model}"
