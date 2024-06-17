@@ -1145,7 +1145,10 @@ class OVirtHandler(SourceBase):
 
         site_name = nb_cluster_object.get_site_name()
         # first check against vm_platform_relation
-        platform = obj.os.type
+        if hasattr(obj, 'guest_operating_system') and obj.guest_operating_system:
+          platform = f"{obj.guest_operating_system.distribution} {obj.guest_operating_system.version.full_version}"
+        else:
+          platform = obj.os.type
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
