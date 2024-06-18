@@ -997,7 +997,7 @@ class OVirtHandler(SourceBase):
 
             mac_address = None
             if nic.mac:
-                mac_address = nic.mac.address
+                mac_address = normalize_mac_address(grab(nic, "mac.address"))
             if nic.base_interface is None and nic.bonding is None:
                 # Physical Interface
                 pnic_data = {
