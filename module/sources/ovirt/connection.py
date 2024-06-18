@@ -1096,11 +1096,6 @@ class OVirtHandler(SourceBase):
         # get VM power state
         status = "active" if obj.status == types.VmStatus.UP else "offline"
 
-        # ignore offline VMs during first run
-        if self.parsing_vms_the_first_time is True and status == "offline":
-            log.debug2(f"Ignoring {status} VM '{name}' on first run")
-            return
-
         # add to processed VMs
         self.processed_vm_uuid.append(vm_uuid)
 
@@ -1112,7 +1107,7 @@ class OVirtHandler(SourceBase):
         else:
             group = grab(nb_cluster_object, "data.group")
 
-        if None in [parent_host, nb_cluster_object, group]:
+        if None in [nb_cluster_object, group]:
             log.error(f"Requesting host or cluster for Virtual Machine '{name}' failed. Skipping.")
             return
 
