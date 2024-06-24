@@ -997,7 +997,7 @@ class OVirtHandler(SourceBase):
 
             mac_address = None
             if nic.mac:
-                mac_address = nic.mac.address
+                mac_address = normalize_mac_address(grab(nic, "mac.address"))
             if nic.base_interface is None and nic.bonding is None:
                 # Physical Interface
                 pnic_data = {
@@ -1096,11 +1096,6 @@ class OVirtHandler(SourceBase):
         # get VM power state
         status = "active" if obj.status == types.VmStatus.UP else "offline"
 
-        # ignore offline VMs during first run
-        if self.parsing_vms_the_first_time is True and status == "offline":
-            log.debug2(f"Ignoring {status} VM '{name}' on first run")
-            return
-
         # add to processed VMs
         self.processed_vm_uuid.append(vm_uuid)
 
@@ -1112,7 +1107,7 @@ class OVirtHandler(SourceBase):
         else:
             group = grab(nb_cluster_object, "data.group")
 
-        if None in [parent_host, nb_cluster_object, group]:
+        if None in [nb_cluster_object, group]:
             log.error(f"Requesting host or cluster for Virtual Machine '{name}' failed. Skipping.")
             return
 
@@ -1145,7 +1140,10 @@ class OVirtHandler(SourceBase):
 
         site_name = nb_cluster_object.get_site_name()
         # first check against vm_platform_relation
-        platform = obj.os.type
+        if hasattr(obj, 'guest_operating_system') and obj.guest_operating_system:
+          platform = f"{obj.guest_operating_system.distribution} {obj.guest_operating_system.version.full_version}"
+        else:
+          platform = obj.os.type
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
