@@ -397,7 +397,7 @@ class OpenStackHandler(SourceBase):
 
             return False
 
-      if object_type not in [NBDevice, NBVM]:
+        if object_type not in [NBDevice, NBVM]:
             raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
 
         if primary_ip4 is None and primary_ip6 is None:
