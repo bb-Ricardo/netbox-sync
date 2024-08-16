@@ -807,8 +807,11 @@ class OpenStackHandler(SourceBase):
         self.add_object_to_cache(NBCluster, name, cluster_object)
 
         self.cluster_host_map[name] = list()
-        for host in obj.hosts:
-            self.cluster_host_map[name].append(host)
+        log.debug2(f"Found an existing host where 'name' matches (NetBox id: {obj.hosts})")
+        # trap for a cluster with no hosts
+        if obj.hosts is not None:
+            for host in obj.hosts:
+                self.cluster_host_map[name].append(host)
 
         self.permitted_clusters[name] = site_name
 
