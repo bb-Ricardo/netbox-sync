@@ -1184,30 +1184,51 @@ class NBCustomField(NetBoxObject):
         """
 
         # Keep support for NetBox < 4.0
-        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
-            if data.get("content_types") is not None:
-                data["object_types"] = data.pop("content_types")
-
-        # get current content types
-        current_object_types = list()
-        for object_type in grab(self, "data.object_types", fallback=list()):
-            current_object_types.append(object_type)
-
-        if isinstance(data.get("object_types"), str):
-            data["object_types"] = [data.get("object_types")]
-
-        for object_type in data.get("object_types"):
-            if object_type not in self.valid_object_types and read_from_netbox is False:
-                log.error(f"Invalid content type '{object_type}' for {self.name}")
-                continue
-
-            if object_type not in current_object_types:
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.1.0"):
+            if data.get("object_types") is not None:
+                # get current content types
+                current_object_types = list()
+                for object_type in grab(self, "data.object_types", fallback=list()):
+                    current_object_types.append(object_type)
+        
+                if isinstance(data.get("object_types"), str):
+                    data["object_types"] = [data.get("object_types")]
+        
+                for object_type in data.get("object_types"):
+                    if object_type not in self.valid_object_types and read_from_netbox is False:
+                        log.error(f"Invalid object type '{object_type}' for {self.name}")
+                        continue
+        
+                    if object_type not in current_object_types:
+                        current_object_types.append(object_type)
+        
+                data["object_types"] = current_object_types
+        else:
+            # Поддержка для NetBox < 4.0
+            if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
+                if data.get("content_types") is not None:
+                    data["object_types"] = data.pop("content_types")
+        
+            # get current content types
+            current_object_types = list()
+            for object_type in grab(self, "data.object_types", fallback=list()):
                 current_object_types.append(object_type)
-
-        data["object_types"] = current_object_types
+        
+            if isinstance(data.get("object_types"), str):
+                data["object_types"] = [data.get("object_types")]
+        
+            for object_type in data.get("object_types"):
+                if object_type not in self.valid_object_types and read_from_netbox is False:
+                    log.error(f"Invalid content type '{object_type}' for {self.name}")
+                    continue
+        
+                if object_type not in current_object_types:
+                    current_object_types.append(object_type)
+        
+            data["object_types"] = current_object_types
 
         # Keep support for NetBox < 4.0
-        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
+        if version.parse(self.inventory.netbox_api_version) < version.parse("4.1.0"):
             if data.get("object_types") is not None:
                 data["content_types"] = data.pop("object_types")
 
