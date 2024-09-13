@@ -2261,15 +2261,19 @@ class VMWareHandler(SourceBase):
                 if grab(vm_device_backing, "fileName") is not None:
                     vm_device_description.append(grab(vm_device_backing, "fileName"))
 
-                disk_size = grab(vm_device, "capacityInKB", fallback=0)
-                disk_size_in_gb = int(disk_size / 1024 / 1024)
-                if disk_size_in_gb < 1:
-                    vm_device_description.append(f"Size: {int(disk_size / 1024)} MB")
-                    disk_size_in_gb = 1
+                disk_size_in_kb = grab(vm_device, "capacityInKB", fallback=0)
+                if version.parse(self.inventory.netbox_api_version) < version.parse("4.1.0"):
+                    disk_size = int(disk_size_in_kb / 1024 / 1024)
+                    if disk_size < 1:
+                        vm_device_description.append(f"Size: {int(disk_size_in_kb / 1024)} MB")
+                        disk_size = 1
+                # since NetBox 4.1.0 disk size is represented in MB
+                else:
+                    disk_size = int(disk_size_in_kb / 1024)
 
                 disk_data.append({
                     "name": grab(vm_device, "deviceInfo.label"),
-                    "size": disk_size_in_gb,
+                    "size": disk_size,
                     "description": " / ".join(vm_device_description)
                 })
 
