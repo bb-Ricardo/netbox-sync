@@ -1607,7 +1607,10 @@ class VMWareHandler(SourceBase):
         model = get_string_or_none(grab(obj, "summary.hardware.model"))
         product_name = get_string_or_none(grab(obj, "summary.config.product.name"))
         product_version = get_string_or_none(grab(obj, "summary.config.product.version"))
+
+        # collect platform
         platform = f"{product_name} {product_version}"
+        platform = self.get_object_relation(platform, "host_platform_relation", fallback=platform)
 
         # if the device vendor/model cannot be retrieved (due to problem on the host),
         # set a dummy value so the host still gets synced
