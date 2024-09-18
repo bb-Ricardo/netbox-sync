@@ -1062,9 +1062,11 @@ class OpenStackHandler(SourceBase):
 
         # is the data incorrect or mismatched? DATA IS INCORRECT. Does not include memory, vcpus.
         # quiet the error from vcpu not being > 0.010...
+        # Log the issue. May not be quite right to say error but...
         cpu = obj.flavor["vcpus"]
         if cpu == 0:
             cpu = 1
+            log.error(f"Get memory and vcpus from '{name}' showed 0 for cpu.")
 
         vm_data = {
             "name": name,
