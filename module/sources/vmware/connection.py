@@ -2168,11 +2168,17 @@ class VMWareHandler(SourceBase):
         # get vCenter tags
         vm_tags.extend(self.collect_object_tags(obj))
 
+        # vm memory depending on setting
+        vm_memory = grab(obj, "config.hardware.memoryMB", fallback=0)
+
+        if self.settings.vm_disk_and_ram_in_decimal is True:
+            vm_memory = int(vm_memory / 1024 * 1000)
+
         vm_data = {
             "name": name,
             "cluster": nb_cluster_object,
             "status": status,
-            "memory": grab(obj, "config.hardware.memoryMB"),
+            "memory": vm_memory,
             "vcpus": grab(obj, "config.hardware.numCPU")
         }
 
@@ -2270,6 +2276,8 @@ class VMWareHandler(SourceBase):
                 # since NetBox 4.1.0 disk size is represented in MB
                 else:
                     disk_size = int(disk_size_in_kb / 1024)
+                    if self.settings.vm_disk_and_ram_in_decimal:
+                        disk_size = int(disk_size / 1024 * 1000)
 
                 disk_data.append({
                     "name": grab(vm_device, "deviceInfo.label"),
