@@ -374,6 +374,14 @@ class VMWareConfig(ConfigBase):
                          """,
                          config_example="VB_LAST_BACKUP, VB_LAST_BACKUP2"
                          ),
+            ConfigOption("vm_disk_and_ram_in_decimal",
+                         bool,
+                         description="""In NetBox version 4.1.0 and newer the VM disk and RAM values are displayed
+                         in power of 10 instead of power of 2. If this values is set to true 4GB of RAM will be
+                         set to a value of 4000 megabyte. If set to false 4GB of RAM will be reported as 4096MB.
+                         The same behavior also applies for VM disk sizes.""",
+                         default_value=True
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
