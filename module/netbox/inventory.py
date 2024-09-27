@@ -152,6 +152,33 @@ class NetBoxInventory:
 
         return None
 
+    def slug_used(self, object_type: NetBoxObject, slug: str) -> bool:
+        """
+        Determine if a slug for an object_tpe is already used
+
+        Parameters
+        ----------
+        object_type: NetBoxObject subclass
+            object type to search
+        slug: str
+            slug which needs to be found
+
+        Returns
+        -------
+        (bool): if slug has been used for this object type
+        """
+
+        if object_type not in NetBoxObject.__subclasses__():
+            raise AttributeError("'%s' object must be a sub class of '%s'." %
+                                 (object_type.__name__, NetBoxObject.__name__))
+
+        if "slug" in object_type.data_model.keys():
+            for this_object in self.get_all_items(object_type):
+                if this_object.data.get("slug") == slug:
+                    return True
+
+        return False
+
     def add_object(self, object_type, data=None, read_from_netbox=False, source=None):
         """
         Adds a new object to the inventory.

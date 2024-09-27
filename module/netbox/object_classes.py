@@ -408,6 +408,37 @@ class NetBoxObject:
         # Enforce max length
         return text[0:max_len]
 
+    def get_uniq_slug(self, text=None, max_len=50)-> str:
+        """
+        return an uniq slug. If the default slug is already used try to
+        append a number until a slug is found which has not been used.
+
+        Parameters
+        ----------
+        text: str
+            name to format into a NetBox slug
+        max_len: int
+            maximum possible length of slug
+
+        Returns
+        -------
+        (str): return the slug
+        """
+
+        slug = self.format_slug(text=text, max_len=max_len)
+
+        if self.inventory.slug_used(self.__class__, slug) is False:
+            return slug
+
+        for x in range(1,20):
+            new_slug = f"{slug}-{x}"
+            if self.inventory.slug_used(self.__class__, new_slug) is False and len(new_slug) <= max_len:
+                log.info(f"Slug '{slug}' for {self.name} '{text}' has been used. "
+                         f"Assignin slug '{new_slug}'")
+                return new_slug
+
+        raise ValueError(f"Unable to find uniq slug for {self.name} '{text}'")
+
     # noinspection PyAttributeOutsideInit
     def update(self, data=None, read_from_netbox=False, source=None):
         """
@@ -436,7 +467,7 @@ class NetBoxObject:
         if data.get("id") is not None:
             self.nb_id = data.get("id")
 
-        # skip item as it's missing it's primary key
+        # skip item as it's missing its primary key
         if data.get(self.primary_key) is None and \
                 (read_from_netbox is True or self.data.get(self.primary_key) is None):
 
@@ -491,7 +522,7 @@ class NetBoxObject:
                 value = value[0:defined_value_type]
 
                 if key == "slug":
-                    value = self.format_slug(text=value, max_len=defined_value_type)
+                    value = self.get_uniq_slug(text=value, max_len=defined_value_type)
 
             if isinstance(defined_value_type, list):
 
@@ -546,9 +577,9 @@ class NetBoxObject:
 
             # allows an empty site for netbox objects where a site is not mandatory
             # required for clusters and sub-objects without site reference
-            if isinstance(self, (NBCluster, NBVM, NBVLAN)) and \
-                    key == "site" and \
-                    "name" in value and value.get("name") is None:
+            if (isinstance(self, (NBCluster, NBVM, NBVLAN)) and
+                    key == "site" and
+                    grab(value, "name") is None):
                 parsed_data[key] = None
                 continue
 
@@ -572,8 +603,8 @@ class NetBoxObject:
                 parsed_data.get(self.primary_key) is not None and \
                 self.data.get("slug") in [None, ""]:
 
-            parsed_data["slug"] = self.format_slug(text=parsed_data.get(self.primary_key),
-                                                   max_len=self.data_model.get("slug"))
+            parsed_data["slug"] = self.get_uniq_slug(text=parsed_data.get(self.primary_key),
+                                                     max_len=self.data_model.get("slug"))
 
         # update all data items
         data_updated = False
@@ -1044,7 +1075,7 @@ class NetBoxObject:
             return manufacturer_data
 
         manufacturer_object = self.inventory.get_by_data(NBManufacturer, {
-            "slug": self.format_slug(sanitized_name)
+            "slug": self.get_uniq_slug(sanitized_name)
         })
         if manufacturer_object is None:
             manufacturer_object = self.inventory.add_update_object(NBManufacturer, {
