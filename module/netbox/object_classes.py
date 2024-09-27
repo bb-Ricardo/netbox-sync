@@ -1196,6 +1196,9 @@ class NBCustomField(NetBoxObject):
         if isinstance(data.get("object_types"), str):
             data["object_types"] = [data.get("object_types")]
 
+        elif data.get("object_types") is None:
+            data["object_types"] = []
+
         for object_type in data.get("object_types"):
             if object_type not in self.valid_object_types and read_from_netbox is False:
                 log.error(f"Invalid content type '{object_type}' for {self.name}")
