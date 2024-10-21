@@ -2499,6 +2499,26 @@ class VMWareHandler(SourceBase):
 
                 nic_data[int_full_name] = vm_nic_data
 
+        # if VM has only one IPv6 on all interfaces, use it as primary IPv6 address
+        if vm_primary_ip6 is None or True:
+            all_ips = [y for xs in nic_ips.values() for y in xs]
+            potential_primary_ipv6_list = list()
+
+            for ip in all_ips:
+                # noinspection PyBroadException
+                try:
+                    ip_address_object = ip_interface(ip)
+                except Exception:
+                    continue
+
+                if ip_address_object.version == 6:
+                    potential_primary_ipv6_list.append(ip_address_object)
+
+            if len(potential_primary_ipv6_list) == 1:
+                log.debug(f"Found one IPv6 '{potential_primary_ipv6_list[0]}' address on all interfaces of "
+                          f"VM '{name}', using it as primary IPv6.")
+                vm_primary_ip6 = potential_primary_ipv6_list[0]
+
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
                                         nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6,
