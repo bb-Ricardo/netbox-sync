@@ -609,17 +609,15 @@ class VMWareHandler(SourceBase):
         def _matches_device_primary_ip(device_primary_ip, ip_needle):
 
             ip = None
+            #log.debug3(f"{device_primary_ip} and {ip_needle}")
             if device_primary_ip is not None and ip_needle is not None:
                 if isinstance(device_primary_ip, dict):
-                    ip = grab(device_primary_ip, "address")
-
-                elif isinstance(device_primary_ip, int):
-                    ip = self.inventory.get_by_id(NBIPAddress, nb_id=device_primary_ip)
-                    ip = grab(ip, "data.address")
-
-                if ip is not None and ip.split("/")[0] == ip_needle:
+                    ip = device_primary_ip.get("address")  # Access the 'address' key directly
+                elif isinstance(device_primary_ip, str):  
+                    ip = device_primary_ip.split("/")[0]  # Use it directly if it's a string
+                #log.debug(f"Compare {ip} with {ip_needle}")
+                if ip is not None and ip == ip_needle:  # Compare directly without splitting
                     return True
-
             return False
 
         if object_type not in [NBDevice, NBVM]:
@@ -630,18 +628,19 @@ class VMWareHandler(SourceBase):
 
         if primary_ip4 is not None:
             primary_ip4 = str(primary_ip4).split("/")[0]
-
+            #log.debug3(f"Using {primary_ip4} as IP")
         if primary_ip6 is not None:
             primary_ip6 = str(primary_ip6).split("/")[0]
 
         for device in self.inventory.get_all_items(object_type):
-
-            if _matches_device_primary_ip(grab(device, "data.primary_ip4"), primary_ip4) is True:
+            #debugip_address = grab(device, "data.primary_ip.address")
+            #log.debug3(f"debug IP grab {debugip_address} ip4 {primary_ip4}")
+            if _matches_device_primary_ip(grab(device, "data.primary_ip.address"), primary_ip4) is True:
                 log.debug2(f"Found existing host '{device.get_display_name()}' "
                            f"based on the primary IPv4 '{primary_ip4}'")
                 return device
 
-            if _matches_device_primary_ip(grab(device, "data.primary_ip6"), primary_ip6) is True:
+            if _matches_device_primary_ip(grab(device, "data.primary_ip.address"), primary_ip6) is True:
                 log.debug2(f"Found existing host '{device.get_display_name()}' "
                            f"based on the primary IPv6 '{primary_ip6}'")
                 return device
