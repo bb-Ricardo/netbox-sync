@@ -1,5 +1,5 @@
 packaging
-urllib3==2.2.1
+urllib3==2.2.2
 wheel
 requests==2.32.3
 pyvmomi==8.0.2.0.1
