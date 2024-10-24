@@ -82,6 +82,22 @@ The `vsphere-automation-sdk` must be installed if tags should be synced from vCe
 pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
 ```
 
+### Openstack support (if necessary)
+The `openstacksdk` must be installed to use openstack as a source
+
+* assuming we are still in an activated virtual env
+```shell
+pip install --upgrade openstacksdk
+```
+
+### Ovirt support (if necessary)
+The `ovirt-engine-sdk-python` must be installed to use ovirt as a source
+
+* assuming we are still in an activated virtual env
+```shell
+pip install --upgrade ovirt-engine-sdk-python
+```
+
 ## NetBox API token
 In order to updated data in NetBox you need a NetBox API token.
 * API token with all permissions (read, write) except:

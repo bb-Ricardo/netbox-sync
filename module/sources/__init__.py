@@ -9,6 +9,8 @@
 
 # define all available sources here
 from module.sources.vmware.connection import VMWareHandler
+from module.sources.openstack.connection import OpenStackHandler
+from module.sources.ovirt.connection import OVirtHandler
 from module.sources.check_redfish.import_inventory import CheckRedfish
 
 from module.common.logging import get_logger
@@ -18,7 +20,7 @@ from module.config.base import ConfigOptions
 from module.config import source_config_section_name
 
 # list of valid sources
-valid_sources = [VMWareHandler, CheckRedfish]
+valid_sources = [VMWareHandler, OpenStackHandler, OVirtHandler, CheckRedfish]
 
 
 def validate_source(source_class_object=None, state="pre"):
@@ -31,7 +33,6 @@ def validate_source(source_class_object=None, state="pre"):
     Parameters
     ----------
     source_class_object: Source handler class/object
-        class/object to investigate
     state: str
         pre if validating a class, post if validating a initialized object
 
