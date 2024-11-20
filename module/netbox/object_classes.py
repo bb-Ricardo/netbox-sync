@@ -60,7 +60,7 @@ class NetBoxInterfaceType:
         "400gbase-x-osfp":   400_000
     }
 
-    # assign common types for a interface speed value
+    # assign common types for an interface speed value
     common_types = {
         100:     "100base-tx",
         1_000:   "1000base-t",
@@ -99,14 +99,14 @@ class NetBoxInterfaceType:
         Returns
         -------
         valid_interface_types: list
-            list with valid types
+            a list with valid types
         """
 
         return list(self.valid_types.keys())
 
     def get_common_type(self) -> str:
         """
-        return a interface type from the common type list
+        return an interface type from the common type list
 
         Returns
         -------
@@ -160,7 +160,7 @@ class NetBoxInterfaceType:
         Returns
         -------
         human_speed: str
-            human readable string of interface speed
+            human-readable string of interface speed
         """
 
         if self.detected_speed == 0:
@@ -215,7 +215,7 @@ class NetBoxObject:
     """
     Base class for all NetBox object types. Implements all methods used on a NetBox object.
 
-    Sub classes need to have following attributes:
+    subclasses need to have the following attributes:
         name:
             name of the object type (i.e. "virtual machine")
         api_path:
@@ -244,14 +244,14 @@ class NetBoxObject:
             can be a string with an undefined length
         bool (class):
             attribute must be True or False
-        NetBoxObject sub class:
+        NetBoxObject subclass:
             value of this key is a reference to another NetBoxObject of exact defined type
         list (instance):
-            value can be one of the predefined values in that list
-        list of NetBoxObject sub classes:
+            value can be one of the predefined values in that list.
+        list of NetBoxObject subclasses:
             value must be an instance of predefined netBoxObject classes in list
-        NBObjectList sub class:
-            value mast be the defined sub class of NBObjectList
+        NBObjectList subclass:
+            value mast be the defined subclass of NBObjectList
 
 
     """
@@ -434,7 +434,7 @@ class NetBoxObject:
             new_slug = f"{slug}-{x}"
             if self.inventory.slug_used(self.__class__, new_slug) is False and len(new_slug) <= max_len:
                 log.info(f"Slug '{slug}' for {self.name} '{text}' has been used. "
-                         f"Assignin slug '{new_slug}'")
+                         f"Assigning slug '{new_slug}'")
                 return new_slug
 
         raise ValueError(f"Unable to find uniq slug for {self.name} '{text}'")
@@ -750,7 +750,7 @@ class NetBoxObject:
 
     def resolve_relations(self):
         """
-        Resolve object relations for this object. Substitute a dict of data with a id with the instantiated
+        Resolve object relations for this object. Substitute a dict of data with an id with the instantiated
         reference of this object
         """
 
@@ -810,11 +810,11 @@ class NetBoxObject:
 
     def get_dependencies(self):
         """
-        returns a list of NetBoxObject sub classes this object depends on
+        returns a list of NetBoxObject subclasses this object depends on
 
         Returns
         -------
-        list: of NetBoxObject sub classes
+        list: of NetBoxObject subclasses
         """
 
         r = [x for x in self.data_model.values() if x in NetBoxObject.__subclasses__()]
@@ -1168,7 +1168,7 @@ class NBObjectList(list):
     Base class of listed NetBox objects. Extends list(). Currently used for tags and untagged VLANs
 
     Mandatory attributes:
-        member_type: NetBoxObject sub class
+        member_type: NetBoxObject subclass
             defines the type objects contained in this type of list
     """
 

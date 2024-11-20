@@ -23,7 +23,7 @@ def parse_command_line(self_description=None):
     Parameters
     ----------
     self_description: str
-        short self description of this program
+        short self-description of this program
 
     Returns
     -------

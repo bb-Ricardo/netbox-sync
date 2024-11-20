@@ -51,9 +51,9 @@ def perform_ptr_lookups(ips, dns_servers=None):
     Parameters
     ----------
     ips: list
-        list of IP addresses to look up
+        a list of IP addresses to look up
     dns_servers: list
-        list of DNS servers to use to look up list of IP addresses
+        a list of DNS servers to use to look up list of IP addresses
 
     Returns
     -------

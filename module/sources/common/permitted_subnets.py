@@ -16,7 +16,7 @@ log = get_logger()
 
 class PermittedSubnets:
     """
-    initializes and verifies if an IP address is part of an permitted subnet
+    initializes and verifies if an IP address is part of a permitted subnet
     """
 
     def __init__(self, config_string: str):
