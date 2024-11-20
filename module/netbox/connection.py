@@ -928,7 +928,7 @@ class NetBoxHandler:
             if tag_description is None or not tag_description.startswith(self.primary_tag):
                 continue
 
-            if tag_tagged_items is None or tag_tagged_items != 0:
+            if tag_tagged_items is None or tag_tagged_items != 0 or this_tag.used is True:
                 continue
 
             log.info(f"Deleting unused tag '{this_tag.get_display_name()}'")

@@ -909,6 +909,10 @@ class NetBoxObject:
 
                 tag = self.inventory.add_update_object(NBTag, data={"name": tag_name})
 
+                # mark tag as used in order to not delete newly used tags
+                if isinstance(tag, NBTag):
+                    tag.used = True
+
                 new_tags.append(tag)
 
             if tag_name in current_tag_strings and remove is True:
@@ -940,7 +944,7 @@ class NetBoxObject:
 
         Parameters
         ----------
-        tags: (str, list, dict, NBTag)
+        tags: str, list, dict, NBTag
             tags to parse and add/remove to/from current list of object tags
         remove: bool
             True if tags shall be removed, otherwise they will be added
@@ -1269,6 +1273,7 @@ class NBTag(NetBoxObject):
             "description": 200,
             "tagged_items": int
         }
+        self.used = False
         super().__init__(*args, **kwargs)
 
 
