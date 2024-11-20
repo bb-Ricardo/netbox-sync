@@ -60,7 +60,7 @@ class SourceBase:
                 MAC address of interfaces match exactly, type of interface does not matter
 
             If there are interfaces which don't match at all then the unmatched interfaces will be
-            matched 1:1. Sort both lists (unmatched current interfaces, unmatched new new interfaces)
+            matched 1:1. Sort both lists (unmatched current interfaces, unmatched new interfaces)
             by name and assign them each other.
 
                 eth0 > vNIC 1
@@ -80,7 +80,7 @@ class SourceBase:
         Returns
         -------
         dict: {"$interface_name": associated_interface_object}
-            if no current current interface was left to match "None" will be returned instead of
+            if no current interface was left to match "None" will be returned instead of
             a matching interface object
         """
 
@@ -159,7 +159,7 @@ class SourceBase:
                 if grab(matching_int, "data.name") in current_object_interface_names:
                     current_object_interface_names.remove(grab(matching_int, "data.name"))
 
-            # no match found, we match the left overs just by #1 -> #1, #2 -> #2, ...
+            # no match found, we match the leftovers just by #1 -> #1, #2 -> #2, ...
             else:
                 unmatched_interface_names.append(int_name)
 
@@ -182,7 +182,7 @@ class SourceBase:
 
     def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None):
         """
-        This is a lazy approach to find longest matching prefix to an IP address.
+        This is a lazy approach to find the longest matching prefix to an IP address.
         If site_name is set only IP prefixes from that site are matched.
 
         Parameters
@@ -254,7 +254,7 @@ class SourceBase:
         interface_data: dict
             dictionary with interface attributes to add to this interface
         interface_ips: list
-            list of ip addresses which are assigned to this interface
+            a list of ip addresses which are assigned to this interface
         vmware_object: (vim.HostSystem, vim.VirtualMachine)
             object to add to list of objects to reevaluate
 
@@ -618,7 +618,7 @@ class SourceBase:
         Returns
         -------
         data_to_update: dict
-            dict with data to append/patch
+            A dict with data to append/patch
         """
 
         if overwrite is True:
@@ -644,7 +644,7 @@ class SourceBase:
         Parameters
         ----------
         vlan_data: dict
-            dict with NBVLAN data attributes
+            A dict with NBVLAN data attributes
         vlan_site: str
             name of site the VLAN could be present
 

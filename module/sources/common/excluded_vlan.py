@@ -46,6 +46,7 @@ class ExcludedVLAN:
             return True
 
         # string or regex matches
+        # noinspection PyBroadException
         try:
             if ([self.site, site_name]).count(None) == 0 and re.search(f"^{self.site}$", site_name):
                 log.debug2(f"VLAN exclude site name '{site_name}' matches '{self.site}'")

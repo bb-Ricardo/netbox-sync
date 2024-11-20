@@ -895,7 +895,7 @@ class CheckRedfish(SourceBase):
         Parameters
         ----------
         items: list
-            list of items to update
+            a list of items to update
 
         Returns
         -------
@@ -974,7 +974,7 @@ class CheckRedfish(SourceBase):
         Parameters
         ----------
         item_data: dict
-            dict with data for item to update
+            a dict with data for item to update
         inventory_object: NBInventoryItem, None
             the NetBox inventory item to update.
 

@@ -33,7 +33,7 @@ def validate_source(source_class_object=None, state="pre"):
     source_class_object: Source handler class/object
         class/object to investigate
     state: str
-        pre if validating a class, post if validating a initialized object
+        pre if validating a class, post if validating an initialized object
 
     """
 
@@ -70,7 +70,7 @@ def validate_source(source_class_object=None, state="pre"):
 def instantiate_sources():
     """
     Instantiate a source handler and add necessary attributes. Also
-    validate source handler pre and post initialization.
+    validate source handler on pre- and post-initialization.
 
     Returns
     -------
