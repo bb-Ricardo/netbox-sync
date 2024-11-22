@@ -19,6 +19,7 @@ from module.netbox.object_classes import (
     NBVRF,
     NBVLAN,
     NBVLANList,
+    NBVLANGroup,
     NBPrefix,
     NBManufacturer,
     NBDeviceType,

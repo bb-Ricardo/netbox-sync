@@ -1013,12 +1013,13 @@ class NetBoxObject:
 
         Parameters
         ----------
-        vlans: list of (dict, NBVLAN)
+        vlans: list of (dict or NBVLAN)
             list of VLANs that should be in the returned list
 
         Returns
         -------
-        NBVLANList: of parsed VLANs
+        NBVLANList
+            of parsed VLANs
         """
 
         if vlans is None or NBVLANList not in self.data_model.values():
@@ -1361,7 +1362,8 @@ class NBVLAN(NetBoxObject):
             "site": NBSite,
             "description": 200,
             "tenant": NBTenant,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "group": NBVLANGroup
         }
         super().__init__(*args, **kwargs)
 
@@ -1402,6 +1404,20 @@ class NBVLAN(NetBoxObject):
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
+class NBVLANGroup(NetBoxObject):
+    name = "VLANGroup"
+    api_path = "ipam/vlan-groups"
+    primary_key = "name"
+    prune = False
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "description": 200,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 class NBVLANList(NBObjectList):
     member_type = NBVLAN

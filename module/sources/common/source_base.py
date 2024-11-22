@@ -15,7 +15,7 @@ from typing import List
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
-from module.sources.common.excluded_vlan import ExcludedVLANName, ExcludedVLANID
+from module.sources.common.handle_vlan import FilterVLANByName, FilterVLANByID
 
 log = get_logger()
 
@@ -247,27 +247,26 @@ class SourceBase:
 
         Parameters
         ----------
-        interface_object: NBVMInterface, NBInterface, None
+        interface_object: NBVMInterface | NBInterface | None
             object handle of the current interface (if existent, otherwise None)
-        device_object: NBVM, NBDevice
+        device_object: NBVM | NBDevice
             device object handle this interface belongs to
         interface_data: dict
             dictionary with interface attributes to add to this interface
         interface_ips: list
             a list of ip addresses which are assigned to this interface
-        vmware_object: (vim.HostSystem, vim.VirtualMachine)
+        vmware_object: vim.HostSystem | vim.VirtualMachine
             object to add to list of objects to reevaluate
 
         Returns
         -------
-        objects: tuple((NBVMInterface, NBInterface), list)
+        objects:
+            tuple of NBVMInterface | NBInterface and list
             tuple with interface object that was added/updated and a list of ip address objects which were
             added to this interface
         """
 
-        ip_tenant_inheritance_order = None
-        if "ip_tenant_inheritance_order" in self.settings:
-            ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
+        ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
 
         if not isinstance(interface_data, dict):
             log.error(f"Attribute 'interface_data' must be a dict() got {type(interface_data)}.")
@@ -572,7 +571,7 @@ class SourceBase:
                            f"untagged interface VLAN.")
 
             if matching_untagged_vlan is not None:
-                vlan_interface_data["untagged_vlan"] = matching_untagged_vlan
+                vlan_interface_data["untagged_vlan"] = self.add_vlan_group(matching_untagged_vlan, site_name)
                 if grab(interface_object, "data.mode") is None:
                     vlan_interface_data["mode"] = "access"
 
@@ -591,7 +590,7 @@ class SourceBase:
                     matching_tagged_vlan = None
 
             if matching_tagged_vlan is not None:
-                compiled_tagged_vlans.append(matching_tagged_vlan)
+                compiled_tagged_vlans.append(self.add_vlan_group(matching_tagged_vlan, site_name))
 
         if len(compiled_tagged_vlans) > 0:
             vlan_interface_data["tagged_vlans"] = compiled_tagged_vlans
@@ -633,12 +632,70 @@ class SourceBase:
 
         return data_to_update
 
+    def add_vlan_group(self, vlan_data, vlan_site) -> NBVLAN | dict:
+        """
+        This function will try to find a matching VLAN group according to the settings.
+        Name matching will take precedence over ID matching. First match wins.
+
+        If nothing matches the input data from 'vlan_data' will be returned
+
+        Parameters
+        ----------
+        vlan_data: dict | NBVLAN
+            A dict or NBVLAN object
+        vlan_site: str | None
+            name of site for the VLAN
+
+        Returns
+        -------
+        NBVLAN | dict: the input vlan_data enriched with VLAN group if a match was found
+
+        """
+
+        # get VLAN details
+        if isinstance(vlan_data, NBVLAN):
+            vlan_name = grab(vlan_data, "data.name")
+            vlan_id = grab(vlan_data, "data.vid")
+        elif isinstance(vlan_data, dict):
+            vlan_name = vlan_data.get("name")
+            vlan_id = vlan_data.get("vid")
+        else:
+            return vlan_data
+
+        # check existing Devices for matches
+        log.debug2(f"Trying to find a matching VLAN Group based on the VLAN name '{vlan_name}' and VLAN ID '{vlan_id}'")
+
+        vlan_group = None
+        for vlan_filter, vlan_group_name in self.settings.vlan_group_relation_by_name or list():
+            if vlan_filter.matches(vlan_name, vlan_site):
+                vlan_group = self.inventory.get_by_data(NBVLANGroup, data={"name": vlan_group_name})
+                break
+
+        if vlan_group is None:
+            for vlan_filter, vlan_group_name in self.settings.vlan_group_relation_by_id or list():
+                if vlan_filter.matches(vlan_id, vlan_site):
+                    vlan_group = self.inventory.get_by_data(NBVLANGroup, data={"name": vlan_group_name})
+                    break
+
+        if vlan_group is not None:
+            log.debug2(f"Found matching VLAN group '{vlan_group.get_display_name()}'")
+            if isinstance(vlan_data, NBVLAN):
+                vlan_data.update(data={"group": vlan_group})
+            elif isinstance(vlan_data, dict):
+                vlan_data["group"] = vlan_group
+        else:
+            log.debug2("No matching VLAN group found")
+
+        print(vlan_data)
+
+        return vlan_data
+
     def get_vlan_object_if_exists(self, vlan_data=None, vlan_site=None):
         """
         This function will try to find a matching VLAN object based on 'vlan_data'
         Will return matching objects in following order:
-            * exact match: VLAN id and site match
-            * global match: VLAN id matches but the VLAN has no site assigned
+            * exact match: VLAN ID and site match
+            * global match: VLAN ID matches but the VLAN has no site assigned
         If nothing matches the input data from 'vlan_data' will be returned
 
         Parameters
@@ -664,10 +721,10 @@ class SourceBase:
             raise ValueError("Value of 'vlan_data' needs to be a dict.")
 
         # check existing Devices for matches
-        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN id '{vlan_data.get('vid')}'")
+        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN ID '{vlan_data.get('vid')}'")
 
         if vlan_data.get("vid") is None:
-            log.debug("No VLAN id set in vlan_data while trying to find matching VLAN.")
+            log.debug("No VLAN ID set in vlan_data while trying to find matching VLAN.")
             return vlan_data
 
         if vlan_site is None:
@@ -703,7 +760,7 @@ class SourceBase:
                         vlan_object_without_site.get_display_name(including_second_key=True)))
 
         else:
-            log.debug2("No matching existing VLAN found for this VLAN id.")
+            log.debug2("No matching existing VLAN found for this VLAN ID.")
 
         return return_data
 
@@ -724,17 +781,6 @@ class SourceBase:
 
         """
 
-        # get config data
-        disable_vlan_sync = False
-        vlan_sync_exclude_by_name: List[ExcludedVLANName] = list()
-        vlan_sync_exclude_by_id: List[ExcludedVLANID] = list()
-        if "disable_vlan_sync" in self.settings:
-            disable_vlan_sync = self.settings.disable_vlan_sync
-        if "vlan_sync_exclude_by_name" in self.settings:
-            vlan_sync_exclude_by_name = self.settings.vlan_sync_exclude_by_name
-        if "vlan_sync_exclude_by_id" in self.settings:
-            vlan_sync_exclude_by_id = self.settings.vlan_sync_exclude_by_id
-
         # VLAN is already an existing NetBox VLAN, then it can be reused
         if isinstance(vlan_data, NetBoxObject):
             return True
@@ -742,7 +788,7 @@ class SourceBase:
         if vlan_data is None:
             return False
 
-        if disable_vlan_sync is True:
+        if self.settings.disable_vlan_sync is True:
             return False
 
         # get VLAN details
@@ -757,11 +803,11 @@ class SourceBase:
             log.warning(f"Skipping sync of invalid VLAN '{vlan_name}' ID: '{vlan_id}'")
             return False
 
-        for excluded_vlan in vlan_sync_exclude_by_name or list():
+        for excluded_vlan in self.settings.vlan_sync_exclude_by_name or list():
             if excluded_vlan.matches(vlan_name, site_name):
                 return False
 
-        for excluded_vlan in vlan_sync_exclude_by_id or list():
+        for excluded_vlan in self.settings.vlan_sync_exclude_by_id or list():
             if excluded_vlan.matches(vlan_id, site_name):
                 return False
 
