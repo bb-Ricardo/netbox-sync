@@ -71,6 +71,7 @@ class VMWareHandler(SourceBase):
         NBTenant,
         NBVRF,
         NBVLAN,
+        NBVLANGroup,
         NBCustomField,
         NBVirtualDisk
     ]

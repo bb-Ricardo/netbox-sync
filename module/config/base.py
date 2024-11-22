@@ -30,6 +30,10 @@ class ConfigOptions:
     def __contains__(self, key):
         return key in self.__dict__
 
+    def __getattr__(self, item):
+        if item in self:
+            return getattr(self, item)
+        return None
 
 class ConfigBase:
     """

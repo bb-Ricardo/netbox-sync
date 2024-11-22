@@ -17,7 +17,7 @@ from module.config.option import ConfigOption
 from module.config.group import ConfigOptionGroup
 from module.sources.common.config import *
 from module.sources.common.permitted_subnets import PermittedSubnets
-from module.sources.common.excluded_vlan import ExcludedVLANID, ExcludedVLANName
+from module.sources.common.handle_vlan import FilterVLANByID, FilterVLANByName
 from module.common.logging import get_logger
 from module.common.support import normalize_mac_address
 
@@ -321,7 +321,22 @@ class VMWareConfig(ConfigBase):
                                   ConfigOption("vlan_sync_exclude_by_id",
                                                str,
                                                config_example="Frankfurt/25, 1023-1042"),
+                                  ConfigOption("vlan_group_relation_by_name",
+                                               str,
+                                               description="""adds a relation to assign VLAN groups to matching VLANs
+                                               by name. Same matching rules as the exclude_by_name option uses are applied.
+                                               If name and id relations are defined, the name relation takes precedence.
+                                               Fist match wins.""",
+                                               config_example="London/Vlan_.* = VLAN Group 1, Tokio/Vlan_.* = VLAN Group 2"),
+                                  ConfigOption("vlan_group_relation_by_id",
+                                               str,
+                                               description="""adds a relation to assign VLAN groups to matching VLANs by ID.
+                                               Same matching rules as the exclude_by_id option uses are applied.
+                                               Fist match wins.
+                                               """,
+                                               config_example="1023-1042 = VLAN Group 1, Tokio/2342 = VLAN Group 2")
                               ]),
+
             ConfigOption("track_vm_host",
                          bool,
                          description="""enabling this option will add the ESXi host
@@ -430,7 +445,7 @@ class VMWareConfig(ConfigBase):
 
                 continue
 
-            if "relation" in option.key:
+            if "relation" in option.key and "vlan_group_relation" not in option.key:
 
                 relation_data = list()
 
@@ -549,35 +564,57 @@ class VMWareConfig(ConfigBase):
 
                 continue
 
-            if option.key == "vlan_sync_exclude_by_name":
+            if option.key in [ "vlan_sync_exclude_by_name", "vlan_sync_exclude_by_id",
+                               "vlan_group_relation_by_name", "vlan_group_relation_by_id" ]:
+
+                if option.key == "vlan_sync_exclude_by_name":
+                    filter_class = FilterVLANByName
+                    filter_type = "exclude"
+                elif option.key == "vlan_group_relation_by_name":
+                    filter_class = FilterVLANByName
+                    filter_type = "group relation"
+                elif option.key == "vlan_sync_exclude_by_id":
+                    filter_class = FilterVLANByID
+                    filter_type = "exclude"
+                elif option.key == "vlan_group_relation_by_id":
+                    filter_class = FilterVLANByID
+                    filter_type = "group relation"
+                else:
+                    raise ValueError(f"unhandled config option {option.key}")
 
                 value_list = list()
 
-                for excluded_vlan in quoted_split(option.value) or list():
+                for single_option_value in quoted_split(option.value) or list():
 
-                    excluded_vlan_object = ExcludedVLANName(excluded_vlan)
+                    relation_name = None
+                    object_name = single_option_value.split("=")[0].strip(' "')
 
-                    if not excluded_vlan_object.is_valid():
+                    if "relation" in option.key:
+
+                        if "=" not in single_option_value:
+                            log.error(f"Config option '{option.key}' malformed, got {single_option_value} but "
+                                      f"needs key = value relation.")
+                            self.set_validation_failed()
+                            continue
+
+                        relation_name = single_option_value.split("=")[1].strip(' "')
+
+                        if relation_name is not None and len(relation_name) == 0:
+                            log.error(f"Config option '{option.key}' malformed, got '{object_name}' as "
+                                      f"object name and relation name was empty.")
+                            self.set_validation_failed()
+                            continue
+
+                    vlan_filter = filter_class(object_name, filter_type)
+
+                    if not vlan_filter.is_valid():
                         self.set_validation_failed()
                         continue
 
-                    value_list.append(excluded_vlan_object)
-
-                option.set_value(value_list)
-
-            if option.key == "vlan_sync_exclude_by_id":
-
-                value_list = list()
-
-                for excluded_vlan in quoted_split(option.value) or list():
-
-                    excluded_vlan_object = ExcludedVLANID(excluded_vlan)
-
-                    if not excluded_vlan_object.is_valid():
-                        self.set_validation_failed()
-                        continue
-
-                    value_list.append(excluded_vlan_object)
+                    if "relation" in option.key:
+                        value_list.append((vlan_filter, relation_name))
+                    else:
+                        value_list.append(vlan_filter)
 
                 option.set_value(value_list)
 
