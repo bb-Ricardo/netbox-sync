@@ -23,7 +23,7 @@ class VLANFilter:
 
         if vlan is None or len(f"{vlan}") == 0:
             self._validation_failed = True
-            log.error(f"submitted VLAN {self.filter_type} string for VLAN was '{"'None'" if vlan is None else "empty" }'")
+            log.error(f"submitted VLAN {self.filter_type} string for VLAN was " + "'None'" if vlan is None else "empty")
             return
 
         vlan_split = [x.replace('\\', "") for x in re.split(r'(?<!\\)/', vlan)]
@@ -64,7 +64,7 @@ class FilterVLANByName(VLANFilter):
     initializes and verifies if a VLAN matches by name
     """
 
-    def __init__(self, vlan, filter_type):
+    def __init__(self, vlan, filter_type="exclude"):
 
         super().__init__(vlan, filter_type)
 
@@ -97,7 +97,7 @@ class FilterVLANByID(VLANFilter):
     initializes and verifies if a VLAN matches by ID
     """
 
-    def __init__(self, vlan, filter_type):
+    def __init__(self, vlan, filter_type="exclude"):
 
         super().__init__(vlan, filter_type)
 
