@@ -197,6 +197,10 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="Attempt to collect asset tags from vCenter hosts",
                          default_value=True),
+            ConfigOption("collect_hardware_serial",
+                         bool,
+                         description="Attempt to collect serials from vCenter hosts",
+                         default_value=True),
             ConfigOption("dns_name_lookup",
                          bool,
                          description="""Perform a reverse lookup for all collected IP addresses.
