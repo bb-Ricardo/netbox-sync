@@ -1637,7 +1637,7 @@ class VMWareHandler(SourceBase):
         serial = None
 
         for serial_num_key in ["SerialNumberTag", "ServiceTag", "EnclosureSerialNumberTag"]:
-            if serial_num_key in identifier_dict.keys():
+            if serial_num_key in identifier_dict.keys() and self.settings.collect_hardware_serial is True:
                 log.debug2(f"Found {serial_num_key}: {get_string_or_none(identifier_dict.get(serial_num_key))}")
                 if serial is None:
                     serial = get_string_or_none(identifier_dict.get(serial_num_key))
