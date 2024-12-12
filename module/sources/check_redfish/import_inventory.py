@@ -270,7 +270,7 @@ class CheckRedfish(SourceBase):
             if grab(ps, "data.device") == self.device_object:
                 current_ps.append(ps)
 
-        current_ps.sort(key=lambda x: grab(x, "data.name"))
+        current_ps.sort(key=lambda x: grab(x, "data.name") or "")
 
         ps_index = 1
         ps_items = list()
@@ -944,7 +944,7 @@ class CheckRedfish(SourceBase):
                 unmatched_inventory_items.append(item)
 
         # sort unmatched items by full_name
-        unmatched_inventory_items.sort(key=lambda x: x.get("full_name"))
+        unmatched_inventory_items.sort(key=lambda x: x.get("full_name") or "")
 
         # iterate over current NetBox inventory items
         # if name did not match try to assign unmatched items in alphabetical order
