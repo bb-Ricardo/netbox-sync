@@ -147,15 +147,16 @@ class VMWareConfig(ConfigBase):
                                              config_example="Cluster_NYC.* = Customer A"),
                                 ConfigOption("host_tenant_relation", str, config_example="esxi300.* = Infrastructure"),
                                 ConfigOption("vm_tenant_relation", str, config_example="grafana.* = Infrastructure"),
-                                ConfigOption("vm_platform_relation",
+                                ConfigOption("host_platform_relation",
                                              str,
                                              description="""\
                                              This option defines custom platforms if the VMWare created platforms are not suitable.
                                              Pretty much a mapping of VMWare platform name to your own platform name.
                                              This is done with a comma separated key = value list.
-                                               key: defines a VMWare returned platform name
+                                               key: defines a VMWare returned platform name as regex
                                                value: defines the desired NetBox platform name""",
-                                             config_example="centos-7.* = centos7, microsoft-windows-server-2016.* = Windows2016"),
+                                             config_example="VMware ESXi 7.0.3 = VMware ESXi 7.0 Update 3o"),
+                                ConfigOption("vm_platform_relation", str, config_example="centos-7.* = centos7, microsoft-windows-server-2016.* = Windows2016"),
                                 ConfigOption("host_role_relation",
                                              str,
                                              description="""\
@@ -372,6 +373,14 @@ class VMWareConfig(ConfigBase):
                          from sync. Any custom attribute with a matching attribute key will be excluded from sync.
                          """,
                          config_example="VB_LAST_BACKUP, VB_LAST_BACKUP2"
+                         ),
+            ConfigOption("vm_disk_and_ram_in_decimal",
+                         bool,
+                         description="""In NetBox version 4.1.0 and newer the VM disk and RAM values are displayed
+                         in power of 10 instead of power of 2. If this values is set to true 4GB of RAM will be
+                         set to a value of 4000 megabyte. If set to false 4GB of RAM will be reported as 4096MB.
+                         The same behavior also applies for VM disk sizes.""",
+                         default_value=True
                          ),
 
             # removed settings

@@ -102,7 +102,7 @@ class NetBoxHandler:
     def setup_caching(self):
         """
         Validate if all requirements are met to cache NetBox data.
-        If a condition fails, caching is switched of.
+        If a condition fails, caching is switched off.
         """
 
         if self.settings.use_caching is False:
@@ -386,6 +386,25 @@ class NetBoxHandler:
         if netbox_objects_to_query is None:
             raise AttributeError(f"Attribute netbox_objects_to_query is: '{netbox_objects_to_query}'")
 
+        # try to read cached file witch stores the NetBox version the cache was build upon
+        cache_tainted = True
+        cached_version_file_name = f"{self.cache_directory}{os.sep}cached_version"
+        cached_version = None
+        # noinspection PyBroadException
+        try:
+            with open(cached_version_file_name) as file:
+                cached_version = version.parse(file.read())
+        except Exception:
+            pass
+
+        if cached_version is not None and cached_version == version.parse(self.inventory.netbox_api_version):
+            cache_tainted = False
+        else:
+            if cached_version is not None:
+                log.info(f"Cache was build for NetBox version {cached_version} "
+                         f"which does not match discovered NetBox version {self.inventory.netbox_api_version}. "
+                         f"Rebuilding cache.")
+
         # query all dependencies
         for nb_object_class in netbox_objects_to_query:
 
@@ -420,7 +439,7 @@ class NetBoxHandler:
                     cache_this_class = False
 
             # read data from cache file
-            if cache_this_class is True:
+            if cache_this_class is True and cache_tainted is False:
                 # noinspection PyBroadException
                 try:
                     cached_nb_data = pickle.load(open(cache_file, "rb"))
@@ -522,6 +541,13 @@ class NetBoxHandler:
 
             # mark this object class as retrieved
             self.resolved_dependencies.add(nb_object_class)
+
+        # noinspection PyBroadException
+        try:
+            with open(cached_version_file_name, "w") as file:
+                file.write(self.inventory.netbox_api_version)
+        except Exception:
+            pass
 
     def initialize_basic_data(self):
         """

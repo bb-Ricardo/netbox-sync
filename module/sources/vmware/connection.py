@@ -1607,7 +1607,10 @@ class VMWareHandler(SourceBase):
         model = get_string_or_none(grab(obj, "summary.hardware.model"))
         product_name = get_string_or_none(grab(obj, "summary.config.product.name"))
         product_version = get_string_or_none(grab(obj, "summary.config.product.version"))
+
+        # collect platform
         platform = f"{product_name} {product_version}"
+        platform = self.get_object_relation(platform, "host_platform_relation", fallback=platform)
 
         # if the device vendor/model cannot be retrieved (due to problem on the host),
         # set a dummy value so the host still gets synced
@@ -2165,11 +2168,17 @@ class VMWareHandler(SourceBase):
         # get vCenter tags
         vm_tags.extend(self.collect_object_tags(obj))
 
+        # vm memory depending on setting
+        vm_memory = grab(obj, "config.hardware.memoryMB", fallback=0)
+
+        if self.settings.vm_disk_and_ram_in_decimal is True:
+            vm_memory = int(vm_memory / 1024 * 1000)
+
         vm_data = {
             "name": name,
             "cluster": nb_cluster_object,
             "status": status,
-            "memory": grab(obj, "config.hardware.memoryMB"),
+            "memory": vm_memory,
             "vcpus": grab(obj, "config.hardware.numCPU")
         }
 
@@ -2258,15 +2267,21 @@ class VMWareHandler(SourceBase):
                 if grab(vm_device_backing, "fileName") is not None:
                     vm_device_description.append(grab(vm_device_backing, "fileName"))
 
-                disk_size = grab(vm_device, "capacityInKB", fallback=0)
-                disk_size_in_gb = int(disk_size / 1024 / 1024)
-                if disk_size_in_gb < 1:
-                    vm_device_description.append(f"Size: {int(disk_size / 1024)} MB")
-                    disk_size_in_gb = 1
+                disk_size_in_kb = grab(vm_device, "capacityInKB", fallback=0)
+                if version.parse(self.inventory.netbox_api_version) < version.parse("4.1.0"):
+                    disk_size = int(disk_size_in_kb / 1024 / 1024)
+                    if disk_size < 1:
+                        vm_device_description.append(f"Size: {int(disk_size_in_kb / 1024)} MB")
+                        disk_size = 1
+                # since NetBox 4.1.0 disk size is represented in MB
+                else:
+                    disk_size = int(disk_size_in_kb / 1024)
+                    if self.settings.vm_disk_and_ram_in_decimal:
+                        disk_size = int(disk_size / 1024 * 1000)
 
                 disk_data.append({
                     "name": grab(vm_device, "deviceInfo.label"),
-                    "size": disk_size_in_gb,
+                    "size": disk_size,
                     "description": " / ".join(vm_device_description)
                 })
 
@@ -2483,6 +2498,26 @@ class VMWareHandler(SourceBase):
                     continue
 
                 nic_data[int_full_name] = vm_nic_data
+
+        # if VM has only one IPv6 on all interfaces, use it as primary IPv6 address
+        if vm_primary_ip6 is None or True:
+            all_ips = [y for xs in nic_ips.values() for y in xs]
+            potential_primary_ipv6_list = list()
+
+            for ip in all_ips:
+                # noinspection PyBroadException
+                try:
+                    ip_address_object = ip_interface(ip)
+                except Exception:
+                    continue
+
+                if ip_address_object.version == 6:
+                    potential_primary_ipv6_list.append(ip_address_object)
+
+            if len(potential_primary_ipv6_list) == 1:
+                log.debug(f"Found one IPv6 '{potential_primary_ipv6_list[0]}' address on all interfaces of "
+                          f"VM '{name}', using it as primary IPv6.")
+                vm_primary_ip6 = potential_primary_ipv6_list[0]
 
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
