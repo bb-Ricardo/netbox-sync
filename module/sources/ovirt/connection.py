@@ -1151,7 +1151,8 @@ class OVirtHandler(SourceBase):
         disk = 0
         for disk_attachment in obj.disk_attachments:
             disk_object = self.disk_cache[disk_attachment.disk.id]
-            disk += int(disk_object.provisioned_size)
+            if disk_object.provisioned_size is not None:
+                disk += int(disk_object.provisioned_size)
 
         annotation = None
         if self.settings.skip_vm_comments is False:
