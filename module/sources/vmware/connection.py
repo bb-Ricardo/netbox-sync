@@ -2176,7 +2176,6 @@ class VMWareHandler(SourceBase):
 
         vm_data = {
             "name": name,
-            "serial": vm_uuid,
             "cluster": nb_cluster_object,
             "status": status,
             "memory": vm_memory,
@@ -2196,6 +2195,10 @@ class VMWareHandler(SourceBase):
             vm_data["disk"] = int(sum([getattr(comp, "capacityInKB", 0) for comp in hardware_devices
                                        if isinstance(comp, vim.vm.device.VirtualDisk)
                                        ]) / 1024 / 1024)
+
+        # Add adaptation for the new 'serial' field in NetBox 4.1.0 VM model
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.1.0"):
+            vm_data["serial"] = vm_uuid
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
