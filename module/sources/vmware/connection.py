@@ -2176,6 +2176,7 @@ class VMWareHandler(SourceBase):
 
         vm_data = {
             "name": name,
+            "serial": vm_uuid,
             "cluster": nb_cluster_object,
             "status": status,
             "memory": vm_memory,

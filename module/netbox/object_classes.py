@@ -1624,6 +1624,7 @@ class NBVM(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "name": 64,
+            "serial": 50,
             "status": ["offline", "active", "planned", "staged", "failed", "decommissioning"],
             "cluster": NBCluster,
             "role": NBDeviceRole,
