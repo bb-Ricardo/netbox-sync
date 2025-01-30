@@ -2197,6 +2197,10 @@ class VMWareHandler(SourceBase):
                                        if isinstance(comp, vim.vm.device.VirtualDisk)
                                        ]) / 1024 / 1024)
 
+        # Add adaptation for the new 'serial' field in NetBox 4.1.0 VM model
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.1.0"):
+            vm_data["serial"] = vm_uuid
+
         if platform is not None:
             vm_data["platform"] = {"name": platform}
         if annotation is not None:
