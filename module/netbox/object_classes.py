@@ -1687,6 +1687,7 @@ class NBVMInterface(NetBoxObject):
             "virtual_machine": NBVM,
             "enabled": bool,
             "mac_address": str,
+            "primary_mac_address": NBMACAddress,
             "mtu": int,
             "mode": ["access", "tagged", "tagged-all"],
             "untagged_vlan": NBVLAN,
@@ -1722,6 +1723,7 @@ class NBInterface(NetBoxObject):
             "type": NetBoxInterfaceType().get_netbox_type_list(),
             "enabled": bool,
             "mac_address": str,
+            "primary_mac_address": NBMACAddress,
             "wwn": str,
             "mgmt_only": bool,
             "mtu": int,
@@ -1907,6 +1909,116 @@ class NBIPAddress(NetBoxObject):
             o_device.unset_attribute("primary_ip4")
         if grab(o_device, "data.primary_ip6") is self:
             o_device.unset_attribute("primary_ip6")
+
+        if o_id is not None:
+            self.unset_attribute("assigned_object_id")
+        if o_type is not None:
+            self.unset_attribute("assigned_object_type")
+
+class NBMACAddress(NetBoxObject):
+    name = "MAC address"
+    api_path = "dcim/mac-addresses"
+    primary_key = "mac_address"
+    prune = True
+    min_netbox_version = "4.2"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "mac_address": str,
+            "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
+            "assigned_object_id": [NBInterface, NBVMInterface],
+            "description": 200,
+            "tags": NBTagList,
+        }
+
+        # add relation between two attributes
+        self.data_model_relation = {
+            "dcim.interface": NBInterface,
+            "virtualization.vminterface": NBVMInterface,
+            NBInterface: "dcim.interface",
+            NBVMInterface: "virtualization.vminterface",
+        }
+        super().__init__(*args, **kwargs)
+
+    def resolve_relations(self):
+
+        o_id = self.data.get("assigned_object_id")
+        o_type = self.data.get("assigned_object_type")
+
+        # this needs special treatment as the object type depends on a second model key
+        if o_type is not None and o_type not in self.data_model.get("assigned_object_type"):
+
+            log.error(f"Attribute 'assigned_object_type' for '{self.get_display_name()}' invalid: {o_type}")
+            do_error_exit(f"Error while resolving relations for {self.get_display_name()}")
+
+        if isinstance(o_id, int) and o_type is not None:
+            self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+
+        super().resolve_relations()
+
+
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        object_type = data.get("assigned_object_type")
+        assigned_object = data.get("assigned_object_id")
+
+        # we got an object data structure where we have to find the object
+        if read_from_netbox is False and assigned_object is not None:
+
+            if not isinstance(assigned_object, NetBoxObject):
+
+                data["assigned_object_id"] = \
+                    self.inventory.add_update_object(self.data_model_relation.get(object_type), data=assigned_object)
+
+            else:
+                # noinspection PyTypeChecker
+                data["assigned_object_type"] = self.data_model_relation.get(type(assigned_object))
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+        # we need to tell NetBox which object type this is meant to be
+        if "assigned_object_id" in self.updated_items:
+            self.updated_items.append("assigned_object_type")
+
+        # if ip association has been removed we also need to get rid of object type
+        if "assigned_object_type" in self.updated_items and self.data.get("assigned_object_id") is None \
+                and "assigned_object_type" in self.updated_items:
+            self.updated_items.remove("assigned_object_type")
+
+    def get_interface(self):
+        o_id = self.data.get("assigned_object_id")
+        o_type = self.data.get("assigned_object_type")
+
+        if isinstance(o_id, (NBInterface, NBVMInterface)):
+            return o_id
+
+        if o_type is None or not isinstance(o_id, int):
+            return
+
+        if o_type not in self.data_model.get("assigned_object_type"):
+            return
+
+        return self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+
+    def get_device_vm(self):
+
+        o_interface = self.get_interface()
+
+        if o_interface is None:
+            return
+
+        if isinstance(o_interface, NBInterface):
+            return o_interface.data.get("device")
+        elif isinstance(o_interface, NBVMInterface):
+            return o_interface.data.get("virtual_machine")
+
+    def remove_interface_association(self):
+        o_id = self.data.get("assigned_object_id")
+        o_type = self.data.get("assigned_object_type")
+        o_device = self.get_device_vm()
+
+        if grab(o_device, "data.primary_mac_address") is self:
+            o_device.unset_attribute("primary_mac_address")
 
         if o_id is not None:
             self.unset_attribute("assigned_object_id")

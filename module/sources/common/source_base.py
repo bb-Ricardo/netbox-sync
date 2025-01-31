@@ -11,6 +11,7 @@ import re
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
 from typing import List
+from packaging import version
 
 from module.netbox import *
 from module.common.logging import get_logger
@@ -266,6 +267,12 @@ class SourceBase:
             added to this interface
         """
 
+        # handle change to mac_address object from NetBox 4.2 on
+        interface_mac_address = None
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+            interface_mac_address = interface_data.get("mac_address")
+            del(interface_data["mac_address"])
+
         ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
 
         if not isinstance(interface_data, dict):
@@ -311,6 +318,32 @@ class SourceBase:
             interface_object = self.inventory.add_object(interface_class, data=interface_data, source=self)
         else:
             interface_object.update(data=interface_data, source=self)
+
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
+                interface_mac_address is not None :
+
+            primary_mac_address_object = grab(interface_object, "data.primary_mac_address")
+
+            if primary_mac_address_object is None or grab(primary_mac_address_object, "data.mac_address") != interface_mac_address:
+
+                primary_mac_address_object = None
+                for mac_address_object in self.inventory.get_all_items(NBMACAddress):
+                    if grab(mac_address_object, "data.mac_address") == interface_mac_address and grab(mac_address_object, "data.assigned_object_id") is None:
+                        primary_mac_address_object = mac_address_object
+                        break
+
+                primary_mac_address_data = {
+                        "mac_address": interface_mac_address,
+                        "assigned_object_id": interface_object,
+                        "assigned_object_type": interface_class
+                    }
+
+                if primary_mac_address_object is None:
+                    primary_mac_address_object = self.inventory.add_object(NBMACAddress, data=primary_mac_address_data, source=self)
+                else:
+                    primary_mac_address_object.update(data=primary_mac_address_data, source=self)
+
+            interface_object.update(data={"primary_mac_address": primary_mac_address_object}, source=self)
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
@@ -685,8 +718,6 @@ class SourceBase:
                 vlan_data["group"] = vlan_group
         else:
             log.debug2("No matching VLAN group found")
-
-        print(vlan_data)
 
         return vlan_data
 
