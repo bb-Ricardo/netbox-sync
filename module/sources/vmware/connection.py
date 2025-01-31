@@ -73,7 +73,8 @@ class VMWareHandler(SourceBase):
         NBVLAN,
         NBVLANGroup,
         NBCustomField,
-        NBVirtualDisk
+        NBVirtualDisk,
+        NBMACAddress
     ]
 
     source_type = "vmware"

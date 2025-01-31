@@ -650,7 +650,8 @@ class NetBoxHandler:
                         # resolve dependency issues in last run
                         # primary IP always set in last run
                         if value.get_nb_reference() is None or \
-                                (key.startswith("primary_ip") and last_run is False):
+                                (key.startswith("primary_ip") and last_run is False) or \
+                                (key.startswith("primary_mac_address") and last_run is False):
                             unresolved_dependency_data[key] = value
                         else:
                             data_to_patch[key] = value.get_nb_reference()
@@ -658,8 +659,8 @@ class NetBoxHandler:
                     else:
                         data_to_patch[key] = value
 
-            # special case for IP address
-            if isinstance(this_object, NBIPAddress):
+            # special case for IP and MAC addresses
+            if isinstance(this_object, (NBIPAddress, NBMACAddress)):
                 # if object is new and has no id, then we need to remove assigned_object_type from data_to_patch
                 if "assigned_object_id" in unresolved_dependency_data.keys() and \
                         "assigned_object_type" in data_to_patch.keys():
