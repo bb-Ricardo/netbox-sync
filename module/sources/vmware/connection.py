@@ -33,7 +33,7 @@ from module.common.misc import grab, dump, get_string_or_none, plural
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
-from module.netbox.transfer_objects import DTOServer
+from module.netbox.transfer_objects import DTOServer, DTODisk, DTOInterface, DTOVlan
 
 vsphere_automation_sdk_available = True
 try:
@@ -2059,10 +2059,15 @@ class VMWareHandler(SourceBase):
             virtual machine object to parse
         """
 
+        vm_object = DTOServer()
+        vm_object.set_type(NBVM)
+
         name = get_string_or_none(grab(obj, "name"))
 
         if name is not None and self.settings.strip_vm_domain_name is True:
             name = name.split(".")[0]
+
+        vm_object.set_name(get_string_or_none(grab(obj, "name")))
 
         #
         # Filtering
@@ -2074,10 +2079,14 @@ class VMWareHandler(SourceBase):
         if vm_uuid is None or vm_uuid in self.processed_vm_uuid and obj not in self.objects_to_reevaluate:
             return
 
+        vm_object.set_serial(vm_uuid)
+
         log.debug(f"Parsing vCenter VM: {name}")
 
         # get VM power state
-        status = "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
+        vm_object.set_status(
+            "active" if get_string_or_none(grab(obj, "runtime.powerState")) == "poweredOn" else "offline"
+        )
 
         # check if vm is template
         template = grab(obj, "config.template")
@@ -2091,12 +2100,12 @@ class VMWareHandler(SourceBase):
             return
 
         # ignore offline VMs during first run
-        if self.parsing_vms_the_first_time is True and status == "offline":
-            log.debug2(f"Ignoring {status} VM '{name}' on first run")
+        if self.parsing_vms_the_first_time is True and vm_object.status == "offline":
+            log.debug2(f"Ignoring {vm_object.status} VM '{vm_object.name}' on first run")
             return
 
         # add to processed VMs
-        self.processed_vm_uuid.append(vm_uuid)
+        self.processed_vm_uuid.append(vm_object.serial)
 
         parent_host = self.get_parent_object_by_class(grab(obj, "runtime.host"), vim.HostSystem)
         cluster_object = self.get_parent_object_by_class(parent_host, vim.ClusterComputeResource)
@@ -2111,22 +2120,24 @@ class VMWareHandler(SourceBase):
             group = self.get_parent_object_by_class(cluster_object, vim.Datacenter)
 
         if None in [parent_host, cluster_object, group]:
-            log.error(f"Requesting host or cluster for Virtual Machine '{name}' failed. Skipping.")
+            log.error(f"Requesting host or cluster for Virtual Machine '{vm_object.name}' failed. Skipping.")
             return
 
         nb_cluster_object = self.get_object_from_cache(cluster_object)
 
         # check VM cluster
         if nb_cluster_object is None:
-            log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
+            log.debug(f"Virtual machine '{vm_object.name}' is not part of a permitted cluster. Skipping")
             return
+
+        vm_object.set_cluster(nb_cluster_object)
 
         parent_name = grab(parent_host, "name")
         cluster_name = grab(nb_cluster_object, "data.name")
         cluster_full_name = f"{group.name}/{cluster_name}"
 
         if name in self.processed_vm_names.get(cluster_full_name, list()) and obj not in self.objects_to_reevaluate:
-            log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
+            log.warning(f"Virtual machine '{vm_object.name}' for cluster '{cluster_full_name}' already parsed. "
                         "Make sure to use unique VM names. Skipping")
             return
 
@@ -2134,10 +2145,10 @@ class VMWareHandler(SourceBase):
         if self.processed_vm_names.get(cluster_full_name) is None:
             self.processed_vm_names[cluster_full_name] = list()
 
-        self.processed_vm_names[cluster_full_name].append(name)
+        self.processed_vm_names[cluster_full_name].append(vm_object.name)
 
         # filter VMs by name
-        if self.passes_filter(name, self.settings.vm_include_filter, self.settings.vm_exclude_filter) is False:
+        if self.passes_filter(vm_object.name, self.settings.vm_include_filter, self.settings.vm_exclude_filter) is False:
             return
 
         #
@@ -2149,6 +2160,8 @@ class VMWareHandler(SourceBase):
         if site_name is None:
             site_name = self.get_site_name(NBCluster, cluster_full_name)
 
+        vm_object.set_site(site_name)
+
         # first check against vm_platform_relation
         platform = get_string_or_none(grab(obj, "config.guestFullName"))
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
@@ -2156,20 +2169,19 @@ class VMWareHandler(SourceBase):
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
 
-        hardware_devices = grab(obj, "config.hardware.device", fallback=list())
+        vm_object.set_platform(platform)
 
-        annotation = None
         if self.settings.skip_vm_comments is False:
-            annotation = get_string_or_none(grab(obj, "config.annotation"))
+            vm_object.set_comments(get_string_or_none(grab(obj, "config.annotation")))
 
         # assign vm_tenant_relation
-        tenant_name = self.get_object_relation(name, "vm_tenant_relation")
+        vm_object.set_tenant(self.get_object_relation(vm_object.name, "vm_tenant_relation"))
 
         # assign vm_tag_relation
-        vm_tags = self.get_object_relation(name, "vm_tag_relation")
+        vm_object.add_tag(self.get_object_relation(name, "vm_tag_relation"))
 
         # get vCenter tags
-        vm_tags.extend(self.collect_object_tags(obj))
+        vm_object.add_tag(self.collect_object_tags(obj))
 
         # vm memory depending on setting
         vm_memory = grab(obj, "config.hardware.memoryMB", fallback=0)
@@ -2177,48 +2189,15 @@ class VMWareHandler(SourceBase):
         if self.settings.vm_disk_and_ram_in_decimal is True:
             vm_memory = int(vm_memory / 1024 * 1000)
 
-        vm_data = {
-            "name": name,
-            "cluster": nb_cluster_object,
-            "status": status,
-            "memory": vm_memory,
-            "vcpus": grab(obj, "config.hardware.numCPU")
-        }
+        vm_object.set_memory(vm_memory)
+        vm_object.set_cpus(grab(obj, "config.hardware.numCPU"))
 
-        # Add adaption for change in NetBox 3.3.0 VM model
-        # issue: https://github.com/netbox-community/netbox/issues/10131#issuecomment-1225783758
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.3.0"):
-            vm_data["site"] = {"name": site_name}
-
-            if self.settings.track_vm_host:
-                vm_data["device"] = self.get_object_from_cache(parent_host)
-
-        # Add adaption for added virtual disks in NetBox 3.7.0
-        if version.parse(self.inventory.netbox_api_version) < version.parse("3.7.0"):
-            vm_data["disk"] = int(sum([getattr(comp, "capacityInKB", 0) for comp in hardware_devices
-                                       if isinstance(comp, vim.vm.device.VirtualDisk)
-                                       ]) / 1024 / 1024)
-
-        # Add adaptation for the new 'serial' field in NetBox 4.1.0 VM model
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.1.0"):
-            vm_data["serial"] = vm_uuid
-
-        if platform is not None:
-            vm_data["platform"] = {"name": platform}
-        if annotation is not None:
-            vm_data["comments"] = annotation
-        if tenant_name is not None:
-            vm_data["tenant"] = {"name": tenant_name}
-        if len(vm_tags) > 0:
-            vm_data["tags"] = vm_tags
+        if self.settings.track_vm_host:
+            vm_object.set_parent_device(self.get_object_from_cache(parent_host))
 
         # add custom fields if present and configured
-        vm_custom_fields = self.get_object_custom_fields(obj)
-        if len(vm_custom_fields) > 0:
-            vm_data["custom_fields"] = vm_custom_fields
+        vm_object.add_custom_field(self.get_object_custom_fields(obj))
 
-        vm_primary_ip4 = None
-        vm_primary_ip6 = None
         vm_default_gateway_ip4 = None
         vm_default_gateway_ip6 = None
 
@@ -2245,14 +2224,12 @@ class VMWareHandler(SourceBase):
                     log.debug2(f"Found default IPv6 gateway {gateway_ip_address}")
                     vm_default_gateway_ip6 = gateway_ip_address
 
-        nic_data = dict()
-        nic_ips = dict()
-        disk_data = list()
-
         # track MAC addresses in order add dummy guest interfaces
         processed_interface_macs = list()
 
-        # get VM interfaces
+        hardware_devices = grab(obj, "config.hardware.device", fallback=list())
+
+        # get VM devices
         for vm_device in hardware_devices:
 
             if isinstance(vm_device, vim.vm.device.VirtualDisk):
@@ -2274,23 +2251,16 @@ class VMWareHandler(SourceBase):
                 if grab(vm_device_backing, "fileName") is not None:
                     vm_device_description.append(grab(vm_device_backing, "fileName"))
 
-                disk_size_in_kb = grab(vm_device, "capacityInKB", fallback=0)
-                if version.parse(self.inventory.netbox_api_version) < version.parse("4.1.0"):
-                    disk_size = int(disk_size_in_kb / 1024 / 1024)
-                    if disk_size < 1:
-                        vm_device_description.append(f"Size: {int(disk_size_in_kb / 1024)} MB")
-                        disk_size = 1
-                # since NetBox 4.1.0 disk size is represented in MB
-                else:
-                    disk_size = int(disk_size_in_kb / 1024)
-                    if self.settings.vm_disk_and_ram_in_decimal:
-                        disk_size = int(disk_size / 1024 * 1000)
+                disk_size = int(grab(vm_device, "capacityInKB", fallback=0) / 1024)
+                if self.settings.vm_disk_and_ram_in_decimal:
+                    disk_size = int(disk_size / 1024 * 1000)
 
-                disk_data.append({
-                    "name": grab(vm_device, "deviceInfo.label"),
-                    "size": disk_size,
-                    "description": " / ".join(vm_device_description)
-                })
+                vm_disk = DTODisk()
+                vm_disk.set_name(grab(vm_device, "deviceInfo.label"))
+                vm_disk.set_size(disk_size)
+                vm_disk.set_description(" / ".join(vm_device_description))
+
+                vm_object.add_disk(vm_disk)
 
                 continue
 
@@ -2367,6 +2337,11 @@ class VMWareHandler(SourceBase):
                 int_full_name = f"{int_full_name} ({int_network_name})"
 
             int_description = f"{int_label} ({device_class})"
+
+            nic_object = DTOInterface()
+            nic_object.set_type(NBVMInterface)
+            vm_object.add_network_interface(nic_object)
+
             if int_network_vlan_ids is not None:
 
                 if len(int_network_vlan_ids) == 1 and int_network_vlan_ids[0] == 4095:
@@ -2394,9 +2369,6 @@ class VMWareHandler(SourceBase):
 
                 int_connected = grab(guest_nic, "connected", fallback=int_connected)
 
-                if nic_ips.get(int_full_name) is None:
-                    nic_ips[int_full_name] = list()
-
                 # grab all valid interface IP addresses
                 for int_ip in grab(guest_nic, "ipConfig.ipAddress", fallback=list()):
 
@@ -2405,65 +2377,48 @@ class VMWareHandler(SourceBase):
                     if self.settings.permitted_subnets.permitted(int_ip_address, interface_name=int_full_name) is False:
                         continue
 
-                    nic_ips[int_full_name].append(int_ip_address)
+                    nic_object.add_ip_address(int_ip_address)
 
                     # check if primary gateways are in the subnet of this IP address
                     # if it matches IP gets chosen as primary IP
                     if vm_default_gateway_ip4 is not None and \
-                            vm_default_gateway_ip4 in ip_interface(int_ip_address).network and \
-                            vm_primary_ip4 is None:
+                            vm_default_gateway_ip4 in ip_interface(int_ip_address).network:
 
-                        vm_primary_ip4 = int_ip_address
+                        vm_object.set_primary_ipv4(int_ip_address)
 
                     if vm_default_gateway_ip6 is not None and \
-                            vm_default_gateway_ip6 in ip_interface(int_ip_address).network and \
-                            vm_primary_ip6 is None:
+                            vm_default_gateway_ip6 in ip_interface(int_ip_address).network:
 
-                        vm_primary_ip6 = int_ip_address
+                        vm_object.set_primary_ipv6(int_ip_address)
 
-            vm_nic_data = {
-                "name": unquote(int_full_name),
-                "virtual_machine": None,
-                "mac_address": int_mac,
-                "description": unquote(int_description),
-                "enabled": int_connected,
-            }
+            nic_object.set_name(unquote(int_full_name))
+            nic_object.add_mac_address(int_mac)
+            nic_object.set_description(unquote(int_description))
+            nic_object.set_connected(int_connected)
+            nic_object.set_mode(int_mode)
 
-            if int_mtu is not None and self.settings.sync_vm_interface_mtu is True:
-                vm_nic_data["mtu"] = int_mtu
-            if int_mode is not None:
-                vm_nic_data["mode"] = int_mode
+            if self.settings.sync_vm_interface_mtu is True:
+                nic_object.set_mtu(int_mtu)
 
             if int_network_vlan_ids is not None and int_mode != "tagged-all":
 
                 if len(int_network_vlan_ids) == 1 and int_network_vlan_ids[0] != 0:
 
-                    vm_nic_data["untagged_vlan"] = {
-                        "name": unquote(int_network_name),
-                        "vid": int_network_vlan_ids[0],
-                        "site": {
-                            "name": site_name
-                        }
-                    }
+                    vlan_object = DTOVlan()
+                    vlan_object.set_name(unquote(int_network_name))
+                    vlan_object.set_id(int_network_vlan_ids[0])
+                    nic_object.set_untagged_vlan(vlan_object)
+
                 else:
-                    tagged_vlan_list = list()
                     for int_network_vlan_id in int_network_vlan_ids:
 
                         if int_network_vlan_id == 0:
                             continue
 
-                        tagged_vlan_list.append({
-                            "name": unquote(f"{int_network_name}-{int_network_vlan_id}"),
-                            "vid": int_network_vlan_id,
-                            "site": {
-                                "name": site_name
-                            }
-                        })
-
-                    if len(tagged_vlan_list) > 0:
-                        vm_nic_data["tagged_vlans"] = tagged_vlan_list
-
-            nic_data[int_full_name] = vm_nic_data
+                        vlan_object = DTOVlan()
+                        vlan_object.set_name(unquote(f"{int_network_name}-{int_network_vlan_id}"))
+                        vlan_object.set_id(int_network_vlan_id)
+                        nic_object.add_tagged_vlan(vlan_object)
 
         # find dummy guest NIC interfaces
         if self.settings.sync_vm_dummy_interfaces is True:
@@ -2482,8 +2437,7 @@ class VMWareHandler(SourceBase):
 
                 log.debug2(f"Parsing dummy network device: {guest_nic_mac}")
 
-                if nic_ips.get(int_full_name) is None:
-                    nic_ips[int_full_name] = list()
+                dummy_interface_object = DTOInterface()
 
                 # grab all valid interface IP addresses
                 for int_ip in grab(guest_nic, "ipConfig.ipAddress", fallback=list()):
@@ -2491,27 +2445,24 @@ class VMWareHandler(SourceBase):
                     int_ip_address = f"{int_ip.ipAddress}/{int_ip.prefixLength}"
 
                     if self.settings.permitted_subnets.permitted(int_ip_address, interface_name=int_full_name) is True:
-                        nic_ips[int_full_name].append(int_ip_address)
+                        dummy_interface_object.add_ip_address(int_ip_address)
 
-                vm_nic_data = {
-                    "name": int_full_name,
-                    "virtual_machine": None,
-                    "mac_address": guest_nic_mac,
-                    "enabled": grab(guest_nic, "connected", fallback=False),
-                }
-
-                if len(nic_ips.get(int_full_name, list())) == 0:
+                if len(dummy_interface_object.ip_addresses) == 0:
                     log.debug(f"Dummy network interface '{int_full_name}' has no IP addresses assigned. Skipping")
                     continue
 
-                nic_data[int_full_name] = vm_nic_data
+                dummy_interface_object.set_name(int_full_name)
+                dummy_interface_object.add_mac_address(guest_nic_mac)
+                dummy_interface_object.set_connected(grab(guest_nic, "connected", fallback=False))
+
+                vm_object.add_network_interface(dummy_interface_object)
 
         # if VM has only one IPv6 on all interfaces, use it as primary IPv6 address
-        if vm_primary_ip6 is None or True:
-            all_ips = [y for xs in nic_ips.values() for y in xs]
+        if vm_object.primary_ipv6 is None:
+
             potential_primary_ipv6_list = list()
 
-            for ip in all_ips:
+            for ip in vm_object.get_ip_addresses():
                 # noinspection PyBroadException
                 try:
                     ip_address_object = ip_interface(ip)
@@ -2523,13 +2474,11 @@ class VMWareHandler(SourceBase):
 
             if len(potential_primary_ipv6_list) == 1:
                 log.debug(f"Found one IPv6 '{potential_primary_ipv6_list[0]}' address on all interfaces of "
-                          f"VM '{name}', using it as primary IPv6.")
-                vm_primary_ip6 = potential_primary_ipv6_list[0]
+                          f"VM '{vm_object.name}', using it as primary IPv6.")
+                vm_object.primary_ipv6 = potential_primary_ipv6_list[0]
 
         # add VM to inventory
-        self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
-                                        nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6,
-                                        vmware_object=obj, disk_data=disk_data)
+        self.add_server_to_inventory(vm_object)
 
         return
 
