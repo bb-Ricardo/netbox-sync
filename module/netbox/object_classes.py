@@ -11,7 +11,8 @@ import json
 from ipaddress import ip_network, IPv4Network, IPv6Network
 
 # noinspection PyUnresolvedReferences
-from packaging import version
+# disable due to raise of minimum netbox version to 4.2
+##from packaging import version
 
 from module.common.misc import grab, do_error_exit
 from module.common.logging import get_logger
@@ -19,6 +20,42 @@ from module.netbox.manufacturer_mapping import sanitize_manufacturer_name
 
 log = get_logger()
 
+class NetBoxMappings:
+
+    mapping = dict()
+    scope_objects = list()
+    scope_types = list()
+
+    def __new__(cls):
+        it = cls.__dict__.get("__it__")
+        if it is not None:
+            return it
+        cls.__it__ = it = object.__new__(cls)
+        it.init()
+        return it
+
+    def init(self):
+
+        self.scope_objects = [
+            NBSite,
+            NBSiteGroup,
+            NBLocation,
+            NBRegion
+        ]
+
+        for classDefinition in NetBoxObject.__subclasses__():
+
+            self.mapping[classDefinition] = classDefinition.object_type
+            self.mapping[classDefinition.object_type] = classDefinition
+
+        for classDefinition in self.scope_objects:
+            self.scope_types.append(classDefinition.object_type)
+
+    def get(self, needle):
+        if isinstance(needle, NetBoxObject):
+            return self.mapping.get(type(needle))
+        else:
+            return self.mapping.get(needle)
 
 class NetBoxInterfaceType:
     """
@@ -253,8 +290,8 @@ class NetBoxObject:
         NBObjectList subclass:
             value mast be the defined subclass of NBObjectList
 
-
     """
+
     name = ""
     api_path = ""
     primary_key = ""
@@ -315,7 +352,7 @@ class NetBoxObject:
                 continue
             if callable(value) is True:
                 continue
-            if key in ["inventory", "default_attributes", "data_model_relation"]:
+            if key in ["inventory", "default_attributes", "data_model_relation", "mapping"]:
                 continue
             if key == "source":
                 value = getattr(value, "name", None)
@@ -1185,24 +1222,24 @@ class NBObjectList(list):
 class NBCustomField(NetBoxObject):
     name = "custom field"
     api_path = "extras/custom-fields"
+    object_type = "extras.customfield"
     primary_key = "name"
     prune = False
-    # used by this software
-    valid_object_types = [
-        "dcim.device",
-        "dcim.interface",
-        "dcim.inventoryitem",
-        "dcim.powerport",
-        "virtualization.clustergroup",
-        "virtualization.vminterface",
-        "virtualization.virtualmachine"
-    ]
 
     def __init__(self, *args, **kwargs):
+        # used by this software
+        self.valid_object_types = [
+            NBDevice.object_type,
+            NBInterface.object_type,
+            NBInventoryItem.object_type,
+            NBPowerPort.object_type,
+            NBClusterGroup.object_type,
+            NBVMInterface.object_type,
+            NBVM.object_type
+        ]
+
         self.data_model = {
             "object_types": list,
-            # field name (object_types) for NetBox < 4.0.0
-            "content_types": list,
             "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect"],
             "name": 50,
             "label": 50,
@@ -1218,11 +1255,6 @@ class NBCustomField(NetBoxObject):
             handle content types properly
             append to existing object_types and don't delete any
         """
-
-        # Keep support for NetBox < 4.0
-        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
-            if data.get("content_types") is not None:
-                data["object_types"] = data.pop("content_types")
 
         # get current content types
         current_object_types = list()
@@ -1245,24 +1277,16 @@ class NBCustomField(NetBoxObject):
 
         data["object_types"] = current_object_types
 
-        # Keep support for NetBox < 4.0
-        if version.parse(self.inventory.netbox_api_version) < version.parse("4.0.0"):
-            if data.get("object_types") is not None:
-                data["content_types"] = data.pop("object_types")
-
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
         if isinstance(grab(self, "data.object_types"), str):
             self.data["object_types"] = [grab(self, "data.object_types")]
 
-        # Keep support for NetBox < 4.0
-        if isinstance(grab(self, "data.content_types"), str):
-            self.data["content_types"] = [grab(self, "data.content_types")]
-
 
 class NBTag(NetBoxObject):
     name = "tag"
     api_path = "extras/tags"
+    object_type = "extras.tag"
     primary_key = "name"
     prune = False
 
@@ -1300,6 +1324,7 @@ class NBTagList(NBObjectList):
 class NBTenant(NetBoxObject):
     name = "tenant"
     api_path = "tenancy/tenants"
+    object_type = "tenancy.tenant"
     primary_key = "name"
     prune = False
 
@@ -1314,9 +1339,43 @@ class NBTenant(NetBoxObject):
         super().__init__(*args, **kwargs)
 
 
+class NBRegion(NetBoxObject):
+    name = "region"
+    api_path = "dcim/regions"
+    object_type = "dcim.region"
+    primary_key = "name"
+    prune = False
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBLocation(NetBoxObject):
+    name = "location"
+    api_path = "dcim/locations"
+    object_type = "dcim.location"
+    primary_key = "name"
+    prune = False
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "site": NBSite,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
+
+
 class NBSite(NetBoxObject):
     name = "site"
     api_path = "dcim/sites"
+    object_type = "dcim.site"
     primary_key = "name"
     prune = False
 
@@ -1326,6 +1385,23 @@ class NBSite(NetBoxObject):
             "slug": 100,
             "comments": str,
             "tenant": NBTenant,
+            "group": NBSiteGroup,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBSiteGroup(NetBoxObject):
+    name = "site-group"
+    api_path = "dcim/site-groups"
+    object_type = "dcim.sitegroup"
+    primary_key = "name"
+    prune = False
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
@@ -1334,6 +1410,7 @@ class NBSite(NetBoxObject):
 class NBVRF(NetBoxObject):
     name = "VRF"
     api_path = "ipam/vrfs"
+    object_type = "ipam.vrf"
     primary_key = "name"
     prune = False
 
@@ -1350,6 +1427,7 @@ class NBVRF(NetBoxObject):
 class NBVLAN(NetBoxObject):
     name = "VLAN"
     api_path = "ipam/vlans"
+    object_type = "ipam.vlan"
     primary_key = "vid"
     secondary_key = "name"
     enforce_secondary_key = True
@@ -1407,17 +1485,22 @@ class NBVLAN(NetBoxObject):
 class NBVLANGroup(NetBoxObject):
     name = "VLANGroup"
     api_path = "ipam/vlan-groups"
+    object_type = "ipam.vlangroup"
     primary_key = "name"
     prune = False
 
     def __init__(self, *args, **kwargs):
+        self.mapping = NetBoxMappings()
         self.data_model = {
             "name": 100,
             "slug": 100,
+            "scope": self.mapping.scope_types,
+            "scope_id": self.mapping.scope_objects,
             "description": 200,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
+
 
 class NBVLANList(NBObjectList):
     member_type = NBVLAN
@@ -1441,13 +1524,16 @@ class NBVLANList(NBObjectList):
 class NBPrefix(NetBoxObject):
     name = "IP prefix"
     api_path = "ipam/prefixes"
+    object_type = "ipam.prefix"
     primary_key = "prefix"
     prune = False
 
     def __init__(self, *args, **kwargs):
+        self.mapping = NetBoxMappings()
         self.data_model = {
             "prefix": [IPv4Network, IPv6Network],
-            "site": NBSite,
+            "scope": self.mapping.scope_types,
+            "scope_id": self.mapping.scope_objects,
             "tenant": NBTenant,
             "vlan": NBVLAN,
             "vrf": NBVRF,
@@ -1460,7 +1546,7 @@ class NBPrefix(NetBoxObject):
 
         # prefixes are parsed into ip_networks
         data_prefix = data.get(self.primary_key)
-        if data_prefix is not None and not isinstance(data_prefix, (IPv4Network, IPv6Network)):
+        if isinstance(data_prefix, str):
             try:
                 data[self.primary_key] = ip_network(data_prefix)
             except ValueError as e:
@@ -1476,6 +1562,7 @@ class NBPrefix(NetBoxObject):
 class NBManufacturer(NetBoxObject):
     name = "manufacturer"
     api_path = "dcim/manufacturers"
+    object_type = "dcim.manufacturer"
     primary_key = "name"
     prune = False
 
@@ -1492,6 +1579,7 @@ class NBManufacturer(NetBoxObject):
 class NBDeviceType(NetBoxObject):
     name = "device type"
     api_path = "dcim/device-types"
+    object_type = "dcim.devicetype"
     primary_key = "model"
     prune = False
 
@@ -1509,6 +1597,7 @@ class NBDeviceType(NetBoxObject):
 class NBPlatform(NetBoxObject):
     name = "platform"
     api_path = "dcim/platforms"
+    object_type = "dcim.platform"
     primary_key = "name"
     prune = False
 
@@ -1526,6 +1615,7 @@ class NBPlatform(NetBoxObject):
 class NBClusterType(NetBoxObject):
     name = "cluster type"
     api_path = "virtualization/cluster-types"
+    object_type = "virtualization.clustertype"
     primary_key = "name"
     prune = False
 
@@ -1542,6 +1632,7 @@ class NBClusterType(NetBoxObject):
 class NBClusterGroup(NetBoxObject):
     name = "cluster group"
     api_path = "virtualization/cluster-groups"
+    object_type = "virtualization.clustergroup"
     primary_key = "name"
     prune = False
 
@@ -1559,6 +1650,7 @@ class NBClusterGroup(NetBoxObject):
 class NBDeviceRole(NetBoxObject):
     name = "device role"
     api_path = "dcim/device-roles"
+    object_type = "dcim.devicerole"
     primary_key = "name"
     prune = False
 
@@ -1577,19 +1669,22 @@ class NBDeviceRole(NetBoxObject):
 class NBCluster(NetBoxObject):
     name = "cluster"
     api_path = "virtualization/clusters"
+    object_type = "virtualization.cluster"
     primary_key = "name"
     secondary_key = "site"
     prune = False
     # include_secondary_key_if_present = True
 
     def __init__(self, *args, **kwargs):
+        self.mapping = NetBoxMappings()
         self.data_model = {
             "name": 100,
             "comments": str,
             "type": NBClusterType,
             "tenant": NBTenant,
             "group": NBClusterGroup,
-            "site": NBSite,
+            "scope": self.mapping.scope_types,
+            "scope_id": self.mapping.scope_objects,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
@@ -1598,6 +1693,7 @@ class NBCluster(NetBoxObject):
 class NBDevice(NetBoxObject):
     name = "device"
     api_path = "dcim/devices"
+    object_type = "dcim.device"
     primary_key = "name"
     secondary_key = "site"
     prune = True
@@ -1608,7 +1704,6 @@ class NBDevice(NetBoxObject):
         self.data_model = {
             "name": 64,
             "device_type": NBDeviceType,
-            "device_role": NBDeviceRole,
             "role": NBDeviceRole,
             "platform": NBPlatform,
             "serial": 50,
@@ -1624,20 +1719,11 @@ class NBDevice(NetBoxObject):
         }
         super().__init__(*args, **kwargs)
 
-    def update(self, data=None, read_from_netbox=False, source=None):
-
-        # Add adaption for change in NetBox 3.6.0 Device model
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.6.0"):
-            if data.get("device_role") is not None:
-                data["role"] = data.get("device_role")
-                del data["device_role"]
-
-        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
-
 
 class NBVM(NetBoxObject):
     name = "virtual machine"
     api_path = "virtualization/virtual-machines"
+    object_type = "virtualization.virtualmachine"
     primary_key = "name"
     secondary_key = "cluster"
     prune = True
@@ -1676,6 +1762,7 @@ class NBVM(NetBoxObject):
 class NBVMInterface(NetBoxObject):
     name = "virtual machine interface"
     api_path = "virtualization/interfaces"
+    object_type = "virtualization.vminterface"
     primary_key = "name"
     secondary_key = "virtual_machine"
     enforce_secondary_key = True
@@ -1686,7 +1773,6 @@ class NBVMInterface(NetBoxObject):
             "name": 64,
             "virtual_machine": NBVM,
             "enabled": bool,
-            "mac_address": str,
             "primary_mac_address": NBMACAddress,
             "mtu": int,
             "mode": ["access", "tagged", "tagged-all"],
@@ -1710,6 +1796,7 @@ class NBVMInterface(NetBoxObject):
 class NBInterface(NetBoxObject):
     name = "interface"
     api_path = "dcim/interfaces"
+    object_type = "dcim.interface"
     primary_key = "name"
     secondary_key = "device"
     enforce_secondary_key = True
@@ -1722,7 +1809,6 @@ class NBInterface(NetBoxObject):
             "label": 64,
             "type": NetBoxInterfaceType().get_netbox_type_list(),
             "enabled": bool,
-            "mac_address": str,
             "primary_mac_address": NBMACAddress,
             "wwn": str,
             "mgmt_only": bool,
@@ -1733,7 +1819,7 @@ class NBInterface(NetBoxObject):
             "untagged_vlan": NBVLAN,
             "tagged_vlans": NBVLANList,
             "description": 200,
-            "connection_status": bool,
+            "mark_connected": bool,
             "tags": NBTagList,
             "parent": object
         }
@@ -1762,16 +1848,16 @@ class NBInterface(NetBoxObject):
 class NBVirtualDisk(NetBoxObject):
     name = "Virtual Disk"
     api_path = "virtualization/virtual-disks"
+    object_type = "virtualization.virtualdisk"
     primary_key = "name"
     secondary_key = "virtual_machine"
-    min_netbox_version = "3.7"
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "name": 64,
             "virtual_machine": NBVM,
             "description": 200,
-            "size": int,  # in GB
+            "size": int,  # in MB
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
@@ -1780,29 +1866,22 @@ class NBVirtualDisk(NetBoxObject):
 class NBIPAddress(NetBoxObject):
     name = "IP address"
     api_path = "ipam/ip-addresses"
+    object_type = "ipam.ipaddress"
     primary_key = "address"
     is_primary = False
     prune = True
 
     def __init__(self, *args, **kwargs):
+        self.mapping = NetBoxMappings()
         self.data_model = {
             "address": str,
-            "assigned_object_type": ["dcim.interface", "virtualization.vminterface", "ipam.fhrpgroup"],
+            "assigned_object_type": [NBInterface.object_type, NBVMInterface.object_type, NBFHRPGroupItem.object_type],
             "assigned_object_id": [NBInterface, NBVMInterface, NBFHRPGroupItem],
             "description": 200,
             "dns_name": 255,
             "tags": NBTagList,
             "tenant": NBTenant,
             "vrf": NBVRF
-        }
-        # add relation between two attributes
-        self.data_model_relation = {
-            "dcim.interface": NBInterface,
-            "virtualization.vminterface": NBVMInterface,
-            "ipam.fhrpgroup": NBFHRPGroupItem,
-            NBInterface: "dcim.interface",
-            NBVMInterface: "virtualization.vminterface",
-            NBFHRPGroupItem: "ipam.fhrpgroup"
         }
         super().__init__(*args, **kwargs)
 
@@ -1818,7 +1897,7 @@ class NBIPAddress(NetBoxObject):
             do_error_exit(f"Error while resolving relations for {self.get_display_name()}")
 
         if isinstance(o_id, int) and o_type is not None:
-            self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+            self.data["assigned_object_id"] = self.inventory.get_by_id(self.mapping.get(o_type), nb_id=o_id)
 
         super().resolve_relations()
 
@@ -1845,11 +1924,11 @@ class NBIPAddress(NetBoxObject):
             if not isinstance(assigned_object, NetBoxObject):
 
                 data["assigned_object_id"] = \
-                    self.inventory.add_update_object(self.data_model_relation.get(object_type), data=assigned_object)
+                    self.inventory.add_update_object(self.mapping.get(object_type), data=assigned_object)
 
             else:
                 # noinspection PyTypeChecker
-                data["assigned_object_type"] = self.data_model_relation.get(type(assigned_object))
+                data["assigned_object_type"] = self.mapping.get(assigned_object)
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
@@ -1886,7 +1965,7 @@ class NBIPAddress(NetBoxObject):
         if o_type not in self.data_model.get("assigned_object_type"):
             return
 
-        return self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+        return self.inventory.get_by_id(self.mapping.get(o_type), nb_id=o_id)
 
     def get_device_vm(self):
 
@@ -1915,28 +1994,22 @@ class NBIPAddress(NetBoxObject):
         if o_type is not None:
             self.unset_attribute("assigned_object_type")
 
+
 class NBMACAddress(NetBoxObject):
     name = "MAC address"
     api_path = "dcim/mac-addresses"
+    object_type = "ipam.macaddress"
     primary_key = "mac_address"
     prune = True
-    min_netbox_version = "4.2"
 
     def __init__(self, *args, **kwargs):
+        self.mapping = NetBoxMappings()
         self.data_model = {
             "mac_address": str,
-            "assigned_object_type": ["dcim.interface", "virtualization.vminterface"],
+            "assigned_object_type": [NBInterface.object_type, NBVMInterface.object_type],
             "assigned_object_id": [NBInterface, NBVMInterface],
             "description": 200,
             "tags": NBTagList,
-        }
-
-        # add relation between two attributes
-        self.data_model_relation = {
-            "dcim.interface": NBInterface,
-            "virtualization.vminterface": NBVMInterface,
-            NBInterface: "dcim.interface",
-            NBVMInterface: "virtualization.vminterface",
         }
         super().__init__(*args, **kwargs)
 
@@ -1952,7 +2025,7 @@ class NBMACAddress(NetBoxObject):
             do_error_exit(f"Error while resolving relations for {self.get_display_name()}")
 
         if isinstance(o_id, int) and o_type is not None:
-            self.data["assigned_object_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+            self.data["assigned_object_id"] = self.inventory.get_by_id(self.mapping.get(o_type), nb_id=o_id)
 
         super().resolve_relations()
 
@@ -1968,11 +2041,11 @@ class NBMACAddress(NetBoxObject):
             if not isinstance(assigned_object, NetBoxObject):
 
                 data["assigned_object_id"] = \
-                    self.inventory.add_update_object(self.data_model_relation.get(object_type), data=assigned_object)
+                    self.inventory.add_update_object(self.mapping.get(object_type), data=assigned_object)
 
             else:
                 # noinspection PyTypeChecker
-                data["assigned_object_type"] = self.data_model_relation.get(type(assigned_object))
+                data["assigned_object_type"] = self.mapping.get(assigned_object)
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
@@ -1985,46 +2058,6 @@ class NBMACAddress(NetBoxObject):
                 and "assigned_object_type" in self.updated_items:
             self.updated_items.remove("assigned_object_type")
 
-    def get_interface(self):
-        o_id = self.data.get("assigned_object_id")
-        o_type = self.data.get("assigned_object_type")
-
-        if isinstance(o_id, (NBInterface, NBVMInterface)):
-            return o_id
-
-        if o_type is None or not isinstance(o_id, int):
-            return
-
-        if o_type not in self.data_model.get("assigned_object_type"):
-            return
-
-        return self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
-
-    def get_device_vm(self):
-
-        o_interface = self.get_interface()
-
-        if o_interface is None:
-            return
-
-        if isinstance(o_interface, NBInterface):
-            return o_interface.data.get("device")
-        elif isinstance(o_interface, NBVMInterface):
-            return o_interface.data.get("virtual_machine")
-
-    def remove_interface_association(self):
-        o_id = self.data.get("assigned_object_id")
-        o_type = self.data.get("assigned_object_type")
-        o_device = self.get_device_vm()
-
-        if grab(o_device, "data.primary_mac_address") is self:
-            o_device.unset_attribute("primary_mac_address")
-
-        if o_id is not None:
-            self.unset_attribute("assigned_object_id")
-        if o_type is not None:
-            self.unset_attribute("assigned_object_type")
-
 
 class NBFHRPGroupItem(NetBoxObject):
     """
@@ -2033,6 +2066,7 @@ class NBFHRPGroupItem(NetBoxObject):
     """
     name = "FHRP group"
     api_path = "ipam/fhrp-groups"
+    object_type = "ipam.fhrpgroup"
     primary_key = "group_id"
     prune = False
 
@@ -2040,7 +2074,6 @@ class NBFHRPGroupItem(NetBoxObject):
         self.data_model = {
             "group_id": int,
             "ip_addresses": NBIPAddress,
-            "description": 200,
             "tags": NBTagList,
             "custom_fields": NBCustomField
         }
@@ -2050,6 +2083,7 @@ class NBFHRPGroupItem(NetBoxObject):
 class NBInventoryItem(NetBoxObject):
     name = "inventory item"
     api_path = "dcim/inventory-items"
+    object_type = "dcim.inventoryitem"
     primary_key = "name"
     secondary_key = "device"
     prune = True
@@ -2074,6 +2108,7 @@ class NBInventoryItem(NetBoxObject):
 class NBPowerPort(NetBoxObject):
     name = "power port"
     api_path = "dcim/power-ports"
+    object_type = "dcim.powerport"
     primary_key = "name"
     secondary_key = "device"
     prune = True

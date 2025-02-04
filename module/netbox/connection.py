@@ -41,7 +41,7 @@ class NetBoxHandler:
     """
 
     # minimum API version necessary
-    minimum_api_version = "2.9"
+    minimum_api_version = "4.2"
 
     # This tag gets added to all objects create/updated/inherited by this program
     primary_tag = primary_tag_name

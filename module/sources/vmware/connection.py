@@ -33,6 +33,7 @@ from module.common.misc import grab, dump, get_string_or_none, plural
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
+from module.netbox.transfer_objects import DTOServer
 
 vsphere_automation_sdk_available = True
 try:
