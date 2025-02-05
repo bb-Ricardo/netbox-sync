@@ -1545,8 +1545,12 @@ class VMWareHandler(SourceBase):
         if name is not None and self.settings.strip_host_domain_name is True:
             name = name.split(".")[0]
 
+        host_object = DTOServer()
+        host_object.set_type(NBDevice)
+        host_object.set_name(name)
+
         # parse data
-        log.debug(f"Parsing vCenter host: {name}")
+        log.debug(f"Parsing vCenter host: {host_object.name}")
 
         #
         # Filtering
@@ -1576,6 +1580,8 @@ class VMWareHandler(SourceBase):
             log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
             return
 
+        host_object.set_cluster(nb_cluster_object)
+
         cluster_name = get_string_or_none(grab(nb_cluster_object, "data.name"))
 
         # get a site for this host
@@ -1587,9 +1593,11 @@ class VMWareHandler(SourceBase):
         site_name = self.get_site_name(NBDevice, name, f"{group_name}/{cluster_name}")
 
         if name in self.processed_host_names.get(site_name, list()) and obj not in self.objects_to_reevaluate:
-            log.warning(f"Host '{name}' for site '{site_name}' already parsed. "
+            log.warning(f"Host '{host_object.name}' for site '{site_name}' already parsed. "
                         "Make sure to use unique host names. Skipping")
             return
+
+        host_object.set_site(site_name)
 
         # add host to processed list
         if self.processed_host_names.get(site_name) is None:
@@ -1606,26 +1614,28 @@ class VMWareHandler(SourceBase):
         #
 
         # collect all necessary data
-        manufacturer = get_string_or_none(grab(obj, "summary.hardware.vendor"))
-        model = get_string_or_none(grab(obj, "summary.hardware.model"))
+        host_object.set_manufacturer(get_string_or_none(grab(obj, "summary.hardware.vendor")))
+        host_object.set_model(get_string_or_none(grab(obj, "summary.hardware.model")))
         product_name = get_string_or_none(grab(obj, "summary.config.product.name"))
         product_version = get_string_or_none(grab(obj, "summary.config.product.version"))
 
         # collect platform
         platform = f"{product_name} {product_version}"
-        platform = self.get_object_relation(platform, "host_platform_relation", fallback=platform)
+        host_object.set_platform(self.get_object_relation(platform, "host_platform_relation",
+                                                          fallback=platform))
 
         # if the device vendor/model cannot be retrieved (due to problem on the host),
         # set a dummy value so the host still gets synced
-        if manufacturer is None:
-            manufacturer = "Generic Vendor"
-        if model is None:
-            model = "Generic Model"
+        if host_object.manufacturer is None:
+            host_object.set_manufacturer("Generic Vendor")
+        if host_object.model is None:
+            host_object.set_model = "Generic Model"
 
         # get status
         status = "offline"
         if get_string_or_none(grab(obj, "summary.runtime.connectionState")) == "connected":
             status = "active"
+        host_object.set_status(status)
 
         # prepare identifiers to find asset tag and serial number
         identifiers = grab(obj, "summary.hardware.otherIdentifyingInfo", fallback=list())
@@ -1635,17 +1645,11 @@ class VMWareHandler(SourceBase):
             if len(str(value).strip()) > 0:
                 identifier_dict[grab(item, "identifierType.key")] = str(value).strip()
 
-        # try to find serial
-        serial = None
-
         for serial_num_key in ["SerialNumberTag", "ServiceTag", "EnclosureSerialNumberTag"]:
             if serial_num_key in identifier_dict.keys() and self.settings.collect_hardware_serial is True:
                 log.debug2(f"Found {serial_num_key}: {get_string_or_none(identifier_dict.get(serial_num_key))}")
-                if serial is None:
-                    serial = get_string_or_none(identifier_dict.get(serial_num_key))
-
-        # add asset tag if desired and present
-        asset_tag = None
+                host_object.set_serial(get_string_or_none(identifier_dict.get(serial_num_key)))
+                break
 
         if self.settings.collect_hardware_asset_tag is True and "AssetTag" in identifier_dict.keys():
 
@@ -1655,47 +1659,12 @@ class VMWareHandler(SourceBase):
             this_asset_tag = identifier_dict.get("AssetTag")
 
             if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
-                asset_tag = this_asset_tag
+                host_object.set_asset_tag(this_asset_tag)
 
-        # get host_tenant_relation
-        tenant_name = self.get_object_relation(name, "host_tenant_relation")
-
-        # get host_tag_relation
-        host_tags = self.get_object_relation(name, "host_tag_relation")
-
-        # get vCenter tags
-        host_tags.extend(self.collect_object_tags(obj))
-
-        # prepare host data model
-        host_data = {
-            "name": name,
-            "device_type": {
-                "model": model,
-                "manufacturer": {
-                    "name": manufacturer
-                }
-            },
-            "site": {"name": site_name},
-            "cluster": nb_cluster_object,
-            "status": status
-        }
-
-        # add data if present
-        if serial is not None:
-            host_data["serial"] = serial
-        if asset_tag is not None:
-            host_data["asset_tag"] = asset_tag
-        if platform is not None:
-            host_data["platform"] = {"name": platform}
-        if tenant_name is not None:
-            host_data["tenant"] = {"name": tenant_name}
-        if len(host_tags) > 0:
-            host_data["tags"] = host_tags
-
-        # add custom fields if present and configured
-        host_custom_fields = self.get_object_custom_fields(obj)
-        if len(host_custom_fields) > 0:
-            host_data["custom_fields"] = host_custom_fields
+        host_object.set_tenant(self.get_object_relation(name, "host_tenant_relation"))
+        host_object.add_tag(self.get_object_relation(name, "host_tag_relation"))
+        host_object.add_tag(self.collect_object_tags(obj))
+        host_object.add_custom_field(self.get_object_custom_fields(obj))
 
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
@@ -1757,7 +1726,6 @@ class VMWareHandler(SourceBase):
                 }
 
         # now iterate over all physical interfaces and collect data
-        pnic_data_dict = dict()
         for pnic in grab(obj, "config.network.pnic", fallback=list()):
 
             pnic_name = grab(pnic, "device")
@@ -1826,67 +1794,47 @@ class VMWareHandler(SourceBase):
                 log.debug2(f"Host NIC with MAC '{pnic_mac_address}' excluded from sync. Skipping")
                 continue
 
-            pnic_data = {
-                "name": unquote(pnic_name),
-                "device": None,     # will be set once we found the correct device
-                "mac_address": pnic_mac_address,
-                "enabled": bool(grab(pnic, "linkSpeed")),
-                "description": unquote(pnic_description),
-                "type": NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type()
-            }
+            pnic_object = DTOInterface()
+            pnic_object.set_type(NBInterface)
+            pnic_object.set_name(unquote(pnic_name))
+            pnic_object.add_mac_address(pnic_mac_address)
+            pnic_object.set_connected(bool(grab(pnic, "linkSpeed")))
+            pnic_object.set_description(unquote(pnic_description))
+            pnic_object.set_netbox_type(NetBoxInterfaceType(pnic_link_speed).get_this_netbox_type())
+            pnic_object.set_mtu(pnic_mtu)
+            pnic_object.set_mode(pnic_mode)
+            pnic_object.set_speed(pnic_link_speed * 1000)
+            pnic_object.set_duplex("full" if pnic_link_duplex is True else "half")
 
-            if pnic_mtu is not None:
-                pnic_data["mtu"] = pnic_mtu
-            if pnic_mode is not None:
-                pnic_data["mode"] = pnic_mode
-
-            # add link speed and duplex attributes
-            if version.parse(self.inventory.netbox_api_version) >= version.parse("3.2.0"):
-                if pnic_link_speed is not None:
-                    pnic_data["speed"] = pnic_link_speed * 1000
-                if pnic_link_duplex is not None:
-                    pnic_data["duplex"] = "full" if pnic_link_duplex is True else "half"
+            host_object.add_network_interface(pnic_object)
 
             # determine interface mode for non VM traffic NICs
             if len(pnic_vlans) > 0:
                 vlan_ids = list(set([x.get("vid") for x in pnic_vlans]))
                 if len(vlan_ids) == 1 and vlan_ids[0] == 0:
-                    pnic_data["mode"] = "access"
+                    pnic_object.set_mode("access")
                 elif 4095 in vlan_ids:
-                    pnic_data["mode"] = "tagged-all"
+                    pnic_object.set_mode("tagged-all")
                 else:
-                    pnic_data["mode"] = "tagged"
+                    pnic_object.set_mode("tagged")
 
-                tagged_vlan_list = list()
                 for pnic_vlan in pnic_vlans:
 
                     # only add VLANs if port is tagged
-                    if pnic_data.get("mode") != "tagged":
+                    if pnic_object.mode != "tagged":
                         break
 
                     # ignore VLAN ID 0
                     if pnic_vlan.get("vid") == 0:
                         continue
 
-                    tagged_vlan_list.append({
-                        "name": pnic_vlan.get("name"),
-                        "vid": pnic_vlan.get("vid"),
-                        "site": {
-                            "name": site_name
-                        }
-                    })
+                    vlan_object = DTOVlan()
+                    vlan_object.set_name(pnic_vlan.get("name"))
+                    vlan_object.set_id(pnic_vlan.get("vid"))
+                    pnic_object.add_tagged_vlan(vlan_object)
 
-                if len(tagged_vlan_list) > 0:
-                    pnic_data["tagged_vlans"] = tagged_vlan_list
-
-            pnic_data_dict[pnic_name] = pnic_data
-
-        host_primary_ip4 = None
-        host_primary_ip6 = None
 
         # now iterate over all virtual interfaces and collect data
-        vnic_data_dict = dict()
-        vnic_ips = dict()
         for vnic in grab(obj, "config.network.vnic", fallback=list()):
 
             vnic_name = grab(vnic, "device")
@@ -1939,98 +1887,73 @@ class VMWareHandler(SourceBase):
                 if vnic_vswitch is not None:
                     vnic_description = f"{vnic_description} ({vnic_vswitch}, {vlan_description})"
 
-            # add data
-            vnic_data = {
-                "name": unquote(vnic_name),
-                "device": None,     # will be set once we found the correct device
-                "mac_address": normalize_mac_address(grab(vnic, "spec.mac")),
-                "enabled": True,    # ESXi vmk interface is enabled by default
-                "mtu": grab(vnic, "spec.mtu"),
-                "type": "virtual"
-            }
-
-            if vnic_mode is not None:
-                vnic_data["mode"] = vnic_mode
-
-            if vnic_description is not None:
-                vnic_data["description"] = unquote(vnic_description)
-            else:
-                vnic_description = ""
+            vnic_object = DTOInterface()
+            vnic_object.set_type(NBInterface)
+            vnic_object.set_name(unquote(vnic_name))
+            vnic_object.add_mac_address(normalize_mac_address(grab(vnic, "spec.mac")))
+            vnic_object.set_connected(True) # ESXi vmk interface is enabled by default
+            vnic_object.set_mtu(grab(vnic, "spec.mtu"))
+            vnic_object.set_netbox_type("virtual")
+            vnic_object.set_mode(vnic_mode)
+            vnic_object.set_description(unquote(vnic_description))
+            host_object.add_network_interface(vnic_object)
 
             if vnic_portgroup_data is not None and vnic_portgroup_vlan_id != 0:
 
-                vnic_data["untagged_vlan"] = {
-                    "name": unquote(f"ESXi {vnic_portgroup} (ID: {vnic_portgroup_vlan_id}) ({site_name})"),
-                    "vid": vnic_portgroup_vlan_id,
-                    "site": {
-                        "name": site_name
-                    }
-                }
+                vnic_untagged_vlan = DTOVlan()
+                vnic_untagged_vlan.set_name(
+                    unquote(f"ESXi {vnic_portgroup} (ID: {vnic_portgroup_vlan_id}) ({site_name})"))
+                vnic_untagged_vlan.set_id(vnic_portgroup_vlan_id)
+                vnic_object.set_untagged_vlan(vnic_untagged_vlan)
 
-            elif vnic_dv_portgroup_data is not None:
+            elif vnic_dv_portgroup_data is not None and vnic_mode == "tagged":
 
-                tagged_vlan_list = list()
                 for vnic_dv_portgroup_data_vlan_id in vnic_dv_portgroup_data_vlan_ids:
-
-                    if vnic_mode != "tagged":
-                        break
 
                     if vnic_dv_portgroup_data_vlan_id == 0:
                         continue
 
-                    tagged_vlan_list.append({
-                        "name": unquote(f"{vnic_dv_portgroup_data.get('name')}-{vnic_dv_portgroup_data_vlan_id}"),
-                        "vid": vnic_dv_portgroup_data_vlan_id,
-                        "site": {
-                            "name": site_name
-                        }
-                    })
-
-                if len(tagged_vlan_list) > 0:
-                    vnic_data["tagged_vlans"] = tagged_vlan_list
-
-            vnic_data_dict[vnic_name] = vnic_data
+                    vnic_tagged_vlan = DTOVlan()
+                    vnic_tagged_vlan.set_name(
+                        unquote(f"{vnic_dv_portgroup_data.get('name')}-{vnic_dv_portgroup_data_vlan_id}"))
+                    vnic_tagged_vlan.set_id(vnic_dv_portgroup_data_vlan_id)
+                    vnic_object.add_tagged_vlan(vnic_tagged_vlan)
 
             # check if interface has the default route or is described as management interface
             vnic_is_primary = False
             for management_match in self.settings.host_management_interface_match:
-                if management_match in vnic_description.lower():
+                if vnic_object.description is not None and management_match.lower() in vnic_object.description.lower():
                     vnic_is_primary = True
 
             if grab(vnic, "spec.ipRouteSpec") is not None:
-
                 vnic_is_primary = True
-
-            if vnic_ips.get(vnic_name) is None:
-                vnic_ips[vnic_name] = list()
 
             int_v4 = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
 
             if self.settings.permitted_subnets.permitted(int_v4, interface_name=vnic_name) is True:
-                vnic_ips[vnic_name].append(int_v4)
+                vnic_object.add_ip_address(int_v4)
 
-                if vnic_is_primary is True and host_primary_ip4 is None:
-                    host_primary_ip4 = int_v4
+                if vnic_is_primary is True and host_object.primary_ipv4 is None:
+                    host_object.set_primary_ipv4(int_v4)
 
             for ipv6_entry in grab(vnic, "spec.ip.ipV6Config.ipV6Address", fallback=list()):
 
                 int_v6 = "{}/{}".format(grab(ipv6_entry, "ipAddress"), grab(ipv6_entry, "prefixLength"))
 
                 if self.settings.permitted_subnets.permitted(int_v6, interface_name=vnic_name) is True:
-                    vnic_ips[vnic_name].append(int_v6)
+                    vnic_object.add_ip_address(int_v6)
 
                     # set first valid IPv6 address as primary IPv6
                     # not the best way, but maybe we can find more information in "spec.ipRouteSpec"
                     # about default route, and we could use that to determine the correct IPv6 address
-                    if vnic_is_primary is True and host_primary_ip6 is None:
-                        host_primary_ip6 = int_v6
+                    if vnic_is_primary is True and host_object.primary_ipv6 is None:
+                        host_object.set_primary_ipv6(int_v6)
 
         # add host to inventory
-        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
-                                        vnic_data=vnic_data_dict, nic_ips=vnic_ips,
-                                        p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
-
-        return
+#        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
+#                                        vnic_data=vnic_data_dict, nic_ips=vnic_ips,
+#                                        p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
+        #pprint.pprint(host_object.__dict__)
 
     def add_virtual_machine(self, obj):
         """
@@ -2478,9 +2401,8 @@ class VMWareHandler(SourceBase):
                 vm_object.primary_ipv6 = potential_primary_ipv6_list[0]
 
         # add VM to inventory
-        self.add_server_to_inventory(vm_object)
-
-        return
+        pprint.pprint(vm_object.__dict__)
+#        self.add_server_to_inventory(vm_object)
 
     def update_basic_data(self):
         """

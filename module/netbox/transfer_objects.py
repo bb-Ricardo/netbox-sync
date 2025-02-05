@@ -7,10 +7,12 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-
 from module.netbox import *
 
 class DTOBase:
+
+    def __repr__(self):
+        return str(self.__dict__)
 
     def _set_string_attribute(self, attribute: str, value):
         if value is None:
@@ -22,7 +24,7 @@ class DTOBase:
         if not hasattr(self, attribute):
             raise ValueError(f"class '{type(self)}' has no attribute '{attribute}'")
 
-        if isinstance(name, str) and len(name) > 0:
+        if isinstance(value, str) and len(value) > 0:
             setattr(self, attribute, value.strip())
 
 
@@ -105,6 +107,9 @@ class DTOServer(DTOBase):
             self._set_string_attribute("cluster", value)
 
     def set_parent_device(self, value: NBDevice):
+        if value is None:
+            return
+
         if not isinstance(value, NBDevice):
             raise ValueError("value needs to be a NBDevice object")
         self.parent_device = value
@@ -116,13 +121,13 @@ class DTOServer(DTOBase):
             else:
                 self.tags.append(value)
 
-    def add_network_interface(self, value: DTOInterface):
+    def add_network_interface(self, value):
         if not isinstance(value, DTOInterface):
             raise ValueError("value needs to be an instance of DTOInterface")
 
         self.interfaces.append(value)
 
-    def add_disk(self, value: DTODisk):
+    def add_disk(self, value):
         if not isinstance(value, DTODisk):
             raise ValueError("value needs to be an instance of DTODisk")
 
@@ -134,7 +139,7 @@ class DTOServer(DTOBase):
                 self.add_custom_field(item)
             return
 
-        if not isinstance(value, NBCustomField):
+        if not isinstance(value, dict):
             raise ValueError("value needs to be an instance of NBCustomField")
 
         self.custom_fields.append(value)
@@ -175,6 +180,7 @@ class DTOInterface(DTOBase):
     def __init__(self):
 
         self.int_type = None #
+        self.netbox_type = None #
         self.name = None #
         self.mac_addresses = list() #
         self.ip_addresses = list() #
@@ -186,11 +192,16 @@ class DTOInterface(DTOBase):
         self.mtu = None #
         self.mode = None #
         self.mark_connected = None #
+        self.speed = 0
+        self.duplex = None
 
     def set_type(self, value):
         if value not in [NBInterface, NBVMInterface]:
             raise ValueError("type can only be NBInterface or NBVMInterface")
         self.int_type = value
+
+    def set_netbox_type(self, value: str):
+        self._set_string_attribute("netbox_type", value)
 
     def set_name(self, value: str):
         self._set_string_attribute("name", value)
@@ -229,19 +240,25 @@ class DTOInterface(DTOBase):
         self.tagged_vlans.append(value)
 
     def set_mtu(self, value: int):
+        if value is None:
+            return
+
         if not isinstance(value, int):
             raise ValueError("mtu needs to be an int")
 
         self.mtu = value
 
     def set_mode(self, value: str):
+        if value is None:
+            return
+
         if not isinstance(value, str):
             raise ValueError("interface mode needs to be a str")
 
-        if value not in ["access", "tagged", "tagged-all"]:
+        if value.strip() not in ["access", "tagged", "tagged-all"]:
             raise ValueError("interface mode needs to be 'access', 'tagged' or 'tagged-all'")
 
-        self.mtu = value
+        self.mode = value.strip()
 
     def set_connected(self, value: bool):
         if not isinstance(value, bool):
@@ -266,6 +283,27 @@ class DTOInterface(DTOBase):
             raise ValueError("ip address needs to be a string")
 
         self.ip_addresses.append(value)
+
+    def set_speed(self, value):
+        if value is None:
+            return
+
+        if not isinstance(value, int):
+            raise ValueError("interface speed must be of type int")
+
+        self.speed = value
+
+    def set_duplex(self, value):
+        if value is None:
+            return
+
+        if not isinstance(value, str):
+            raise ValueError("interface duplex needs to be a str")
+
+        if value.strip() not in ["half", "full"]:
+            raise ValueError("interface mode needs to be 'half' or 'full'")
+
+        self.duplex = value.strip()
 
 class DTOVlan(DTOBase):
 
