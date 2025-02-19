@@ -1378,9 +1378,14 @@ class VMWareHandler(SourceBase):
         data = {
             "name": name,
             "type": {"name": "VMware ESXi"},
-            "group": group,
-            "site": {"name": site_name}
+            "group": group
         }
+
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+            data["scope_id"] = {"name": site_name}
+            data["scope_type"] = "dcim.site"
+        else:
+            data["site"] = {"name": site_name}
 
         tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:
