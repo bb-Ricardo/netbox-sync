@@ -2156,6 +2156,7 @@ class VMWareHandler(SourceBase):
         # first check against vm_platform_relation
         platform = get_string_or_none(grab(obj, "config.guestFullName"))
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
+        platform = get_string_or_none(grab(obj, "guest.guestDetailedData.prettyName", fallback=platform))
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
