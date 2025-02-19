@@ -1167,6 +1167,17 @@ class NetBoxObject:
             if isinstance(this_site, dict):
                 return this_site.get("name")
 
+        this_scope_type = this_data_set.get("scope_type")
+        this_site = this_data_set.get("scope_id")
+
+        if this_scope_type == "dcim.site" and this_site is not None:
+
+            if isinstance(this_site, NetBoxObject):
+                return this_site.get_display_name()
+
+            if isinstance(this_site, dict):
+                return this_site.get("name")
+
 
 class NBObjectList(list):
     """
@@ -1589,10 +1600,25 @@ class NBCluster(NetBoxObject):
             "type": NBClusterType,
             "tenant": NBTenant,
             "group": NBClusterGroup,
-            "site": NBSite,
+            "scope_type": ["dcim.site", "dcim.sitegroup", "dcim.location", "dcim.region"],
+            "scope_id": NBSite,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
+
+    def update(self, data=None, read_from_netbox=False, source=None):
+
+        # Add adaption for change in NetBox 4.2.0 Device model
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+            if data.get("site") is not None:
+                data["scope_id"] = data.get("site")
+                data["scope_type"] = "dcim.site"
+                del data["site"]
+
+            if data.get("scope_id") is not None:
+                data["scope_type"] = "dcim.site"
+
+        super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
 
 class NBDevice(NetBoxObject):

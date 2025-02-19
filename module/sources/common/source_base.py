@@ -281,7 +281,8 @@ class SourceBase:
 
         if type(device_object) == NBVM:
             interface_class = NBVMInterface
-            site_name = grab(device_object, "data.cluster.data.site.data.name")
+            interface_cluster = grab(device_object, "data.cluster")
+            site_name = interface_cluster.get_site_name()
         elif type(device_object) == NBDevice:
             interface_class = NBInterface
             site_name = grab(device_object, "data.site.data.name")
