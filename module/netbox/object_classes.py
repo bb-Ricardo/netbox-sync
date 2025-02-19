@@ -1738,7 +1738,6 @@ class NBVM(NetBoxObject):
             "platform": NBPlatform,
             "vcpus": float,
             "memory": int,
-            "disk": int,
             "comments": str,
             "primary_ip4": NBIPAddress,
             "primary_ip6": NBIPAddress,

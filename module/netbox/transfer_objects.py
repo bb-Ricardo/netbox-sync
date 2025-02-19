@@ -24,21 +24,23 @@ class DTOBase:
         if not hasattr(self, attribute):
             raise ValueError(f"class '{type(self)}' has no attribute '{attribute}'")
 
-        if isinstance(value, str) and len(value) > 0:
+        if isinstance(value, str):
             setattr(self, attribute, value.strip())
 
 
 class DTOServer(DTOBase):
 
     def __init__(self):
-        self.model_type = None ##
+        self.type = None ##
         self.name = None ##
         self.serial = None ##
+        self.netbox_device_type = None
         self.interfaces = list() #
         self.tags = list() #
         self.primary_ipv4 = None #
         self.primary_ipv6 = None ##
         self.platform = None ##
+        self.role = None ##
         self.comments = None ##
         self.tenant = None ##
         self.custom_fields = list() ##
@@ -59,16 +61,30 @@ class DTOServer(DTOBase):
     def set_serial(self, value: str):
         self._set_string_attribute("serial", value)
 
-    def set_platform(self, value: str):
+    def set_platform(self, value):
         if isinstance(value, NBPlatform):
-            self.manufacturer = value
+            self.platform = value
         else:
             self._set_string_attribute("platform", value)
+
+    def set_device_type(self, value):
+        if isinstance(value, NBDeviceType):
+            self.netbox_device_type = value
+        else:
+            self._set_string_attribute("netbox_device_type", value)
+
+    def set_role(self, value: str):
+        if isinstance(value, NBDeviceRole):
+            self.role = value
+        else:
+            self._set_string_attribute("role", value)
 
     def set_comments(self, value: str):
         self._set_string_attribute("comments", value)
 
     def set_status(self, value: str):
+        if value not in ["active", "offline"]:
+            raise ValueError(f"supported status types are 'active' and 'offline', got {value}")
         self._set_string_attribute("status", value)
 
     def set_asset_tag(self, value: str):
@@ -86,7 +102,7 @@ class DTOServer(DTOBase):
     def set_type(self, value):
         if value not in [NBDevice, NBVM]:
             raise ValueError("type can only be NBDevice or NBVM")
-        self.model_type = value
+        self.type = value
 
     def set_tenant(self, value):
         if isinstance(value, NBTenant):
@@ -112,6 +128,7 @@ class DTOServer(DTOBase):
 
         if not isinstance(value, NBDevice):
             raise ValueError("value needs to be a NBDevice object")
+
         self.parent_device = value
 
     def add_tag(self, value):
@@ -145,10 +162,16 @@ class DTOServer(DTOBase):
         self.custom_fields.append(value)
 
     def set_primary_ipv4(self, value):
-        self._set_string_attribute("primary_ipv4", value)
+        if isinstance(value, NBIPAddress):
+            self.primary_ipv4 = value
+        else:
+            self._set_string_attribute("primary_ipv4", value)
 
     def set_primary_ipv6(self, value):
-        self._set_string_attribute("primary_ipv6", value)
+        if isinstance(value, NBIPAddress):
+            self.primary_ipv6 = value
+        else:
+            self._set_string_attribute("primary_ipv6", value)
 
     def set_memory(self, value: int):
         """
@@ -174,6 +197,138 @@ class DTOServer(DTOBase):
             result.extend(int_data.ip_addresses)
 
         return result
+
+    def _get_vm_netbox_object_data(self) -> dict:
+        data = { "name": self.name }
+
+        if self.serial is not None:
+            data["serial"] = self.serial
+
+        if self.status is not None:
+            data["status"] = self.status
+
+        if isinstance(self.cluster, NBCluster):
+            data["cluster"] = self.cluster
+        elif isinstance(self.cluster, str):
+            data["cluster"] = { "name": self.cluster }
+
+        if isinstance(self.site, NBSite):
+            data["site"] = self.site
+        elif isinstance(self.site, str):
+            data["site"] = { "name": self.site }
+
+        if isinstance(self.tenant, NBTenant):
+            data["tenant"] = self.tenant
+        elif isinstance(self.tenant, str):
+            data["tenant"] = { "name": self.tenant }
+
+        if isinstance(self.role, NBDeviceRole):
+            data["role"] = self.role
+        elif isinstance(self.role, str):
+            data["role"] = { "name": self.role }
+
+        if isinstance(self.platform, NBPlatform):
+            data["platform"] = self.platform
+        elif isinstance(self.platform, str):
+            data["platform"] = { "name": self.platform }
+
+        if isinstance(self.primary_ipv4, NBIPAddress):
+            data["primary_ip4"] = self.primary_ipv4
+        elif isinstance(self.primary_ipv4, str):
+            data["primary_ip4"] = { "address": self.primary_ipv4 }
+
+        if isinstance(self.primary_ipv6, NBIPAddress):
+            data["primary_ip6"] = self.primary_ipv6
+        elif isinstance(self.primary_ipv6, str):
+            data["primary_ip6"] = { "address": self.primary_ipv6 }
+
+        if isinstance(self.parent_device, NBDevice):
+            data["device"] = self.parent_device
+
+        if isinstance(self.memory, int):
+            data["memory"] = self.memory
+
+        if isinstance(self.cpus, int):
+            data["vcpus"] = self.cpus
+
+        if isinstance(self.comments, str):
+            data["comments"] = self.comments
+
+        if len(self.tags) > 0:
+            data["tags"] = self.tags
+
+        if len(self.custom_fields) > 0:
+            data["custom_fields"] = self.custom_fields
+
+        return data
+
+    def _get_device_netbox_object_data(self) -> dict:
+        data = { "name": self.name }
+
+        if isinstance(self.netbox_device_type, NBDeviceType):
+            data["device_type"] = self.netbox_device_type
+        elif isinstance(self.netbox_device_type, str):
+            data["device_type"] = { "name": self.netbox_device_type }
+
+        if isinstance(self.role, NBDeviceRole):
+            data["role"] = self.role
+        elif isinstance(self.role, str):
+            data["role"] = { "name": self.role }
+
+        if isinstance(self.platform, NBPlatform):
+            data["platform"] = self.platform
+        elif isinstance(self.platform, str):
+            data["platform"] = { "name": self.platform }
+
+        if self.serial is not None:
+            data["serial"] = self.serial
+
+        if isinstance(self.site, NBSite):
+            data["site"] = self.site
+        elif isinstance(self.site, str):
+            data["site"] = { "name": self.site }
+
+        if self.status is not None:
+            data["status"] = self.status
+
+        if isinstance(self.cluster, NBCluster):
+            data["cluster"] = self.cluster
+        elif isinstance(self.cluster, str):
+            data["cluster"] = { "name": self.cluster }
+
+        if self.asset_tag is not None:
+            data["asset_tag"] = self.asset_tag
+
+        if isinstance(self.primary_ipv4, NBIPAddress):
+            data["primary_ip4"] = self.primary_ipv4
+        elif isinstance(self.primary_ipv4, str):
+            data["primary_ip4"] = { "address": self.primary_ipv4 }
+
+        if isinstance(self.primary_ipv6, NBIPAddress):
+            data["primary_ip6"] = self.primary_ipv6
+        elif isinstance(self.primary_ipv6, str):
+            data["primary_ip6"] = { "address": self.primary_ipv6 }
+
+        if isinstance(self.tenant, NBTenant):
+            data["tenant"] = self.tenant
+        elif isinstance(self.tenant, str):
+            data["tenant"] = { "name": self.tenant }
+
+        if len(self.tags) > 0:
+            data["tags"] = self.tags
+
+        if len(self.custom_fields) > 0:
+            data["custom_fields"] = self.custom_fields
+
+        return data
+
+    def get_netbox_object_data(self) -> dict:
+        if self.type == NBDevice:
+            return self._get_device_netbox_object_data()
+        elif self.type == NBVM:
+            return self._get_vm_netbox_object_data()
+
+        return {}
 
 class DTOInterface(DTOBase):
 

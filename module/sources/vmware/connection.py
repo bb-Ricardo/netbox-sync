@@ -947,8 +947,7 @@ class VMWareHandler(SourceBase):
 
             return resolved_name
 
-    def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
-                                   nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None):
+    def add_device_vm_to_inventory(self, server_object: DTOServer, vmware_object=None):
         """
         Add/update device/VM object in inventory based on gathered data.
 
@@ -993,62 +992,43 @@ class VMWareHandler(SourceBase):
 
         Parameters
         ----------
-        object_type: (NBDevice, NBVM)
-            NetBoxObject subclass of object to add
-        object_data: dict
-            data of object to add/update
-        pnic_data: dict
-            data of physical interfaces of this object, interface name as key
-        vnic_data: dict
-            data of virtual interfaces of this object, interface name as key
-        nic_ips: dict
-            a dict of ips per interface of this object, interface name as key
-        p_ipv4: str
-            primary IPv4 as string including netmask/prefix
-        p_ipv6: str
-            primary IPv6 as string including netmask/prefix
+        server_object: DTOServer
+            a DTOServer object which contains all the attributes for this Device/VM
         vmware_object: (vim.HostSystem, vim.VirtualMachine)
             vmware object to pass on to 'add_update_interface' method to set up reevaluation
-        disk_data: list
-            data of discs which belong to a VM
 
         """
 
-        if object_type not in [NBDevice, NBVM]:
-            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
+        if not isinstance(server_object, DTOServer):
+            raise ValueError(f"passed object must be a 'DTOServer'")
 
         if log.level == DEBUG3:
 
             log.debug3("function: add_device_vm_to_inventory")
-            log.debug3(f"Object type {object_type}")
-            pprint.pprint(object_data)
-            pprint.pprint(pnic_data)
-            pprint.pprint(vnic_data)
-            pprint.pprint(nic_ips)
-            pprint.pprint(p_ipv4)
-            pprint.pprint(p_ipv6)
-            pprint.pprint(disk_data)
+            pprint.pprint(server_object)
 
         # check existing Devices for matches
-        log.debug2(f"Trying to find a {object_type.name} based on the collected name, cluster, IP and MAC addresses")
+        log.debug2(f"Trying to find a {server_object.name} based on the collected name, cluster, IP and MAC addresses")
 
-        device_vm_object = self.inventory.get_by_data(object_type, data=object_data)
+        device_vm_object = self.inventory.get_by_data(server_object.type, data=server_object.get_netbox_object_data())
 
         if device_vm_object is not None:
             log.debug2("Found a exact matching %s object: %s" %
-                       (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
+                       (server_object.name, device_vm_object.get_display_name(including_second_key=True)))
 
         # keep searching if no exact match was found
         else:
 
-            log.debug2(f"No exact match found. Trying to find {object_type.name} based on MAC addresses")
+            log.debug2(f"No exact match found. Trying to find {server_object.type.name} based on MAC addresses")
 
+#            if server_object.type == NBVM:
+                nic_macs = [x for interface in server_object.interfaces for x in interface.mac_addresses]
             # on VMs vnic data is used, on physical devices pnic data is used
-            mac_source_data = vnic_data if object_type == NBVM else pnic_data
+#            mac_source_data = vnic_data if server_object.type == NBVM else pnic_data
 
-            nic_macs = [x.get("mac_address") for x in mac_source_data.values()]
+ #           nic_macs = [x.get("mac_address") for x in mac_source_data.values()]
 
-            device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
+            device_vm_object = self.get_object_based_on_macs(server_object)
 
         # look for devices with same serial or asset tag
         if object_type == NBDevice:
@@ -1955,6 +1935,8 @@ class VMWareHandler(SourceBase):
 #                                        p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
         #pprint.pprint(host_object.__dict__)
 
+        self.add_device_vm_to_inventory(host_object, vmware_object=obj)
+
     def add_virtual_machine(self, obj):
         """
         Parse a vCenter VM  add to NetBox once all data is gathered.
@@ -2403,6 +2385,7 @@ class VMWareHandler(SourceBase):
         # add VM to inventory
         pprint.pprint(vm_object.__dict__)
 #        self.add_server_to_inventory(vm_object)
+        self.add_device_vm_to_inventory(vm_object, vmware_object=obj)
 
     def update_basic_data(self):
         """
