@@ -797,22 +797,22 @@ class VMWareHandler(SourceBase):
 
             if num_cpu_cores is not None:
                 custom_field = self.add_update_custom_field({
-                    "name": "vcsa_host_cpu_cores",
+                    "name": "host_cpu_cores",
                     "label": "Physical CPU Cores",
                     "object_types": [object_type],
                     "type": "text",
-                    "description": f"vCenter '{self.name}' reported Host CPU cores"
+                    "description": f"Reported Host CPU cores"
                 })
 
                 return_custom_fields[grab(custom_field, "data.name")] = f"{num_cpu_cores} {cpu_model}"
 
             if isinstance(memory_size, int):
                 custom_field = self.add_update_custom_field({
-                    "name": "vcsa_host_memory",
+                    "name": "host_memory",
                     "label": "Memory",
                     "object_types": [object_type],
                     "type": "text",
-                    "description": f"vCenter '{self.name}' reported Memory"
+                    "description": f"Reported size of Memory"
                 })
 
                 memory_size = round(memory_size / 1024 ** 3)

@@ -269,7 +269,9 @@ class SourceBase:
 
         # handle change to mac_address object from NetBox 4.2 on
         interface_mac_address = None
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
+                interface_data.get("mac_address") is not None:
+
             interface_mac_address = interface_data.get("mac_address")
             del(interface_data["mac_address"])
 
