@@ -630,7 +630,8 @@ class NetBoxObject:
             if self.data_model.get(key) == NBCustomField:
                 if current_value is None:
                     current_value = dict()
-                new_value_str = str({**current_value, **new_value})
+                new_value = {**current_value, **new_value}
+                new_value_str = str(new_value)
             elif isinstance(new_value, (NetBoxObject, NBObjectList)):
                 new_value_str = str(new_value.get_display_name())
             else:
