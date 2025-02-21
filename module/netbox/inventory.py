@@ -335,6 +335,11 @@ class NetBoxInventory:
 
                 # if object was found in source
                 if this_object.source is not None:
+                    # skip tagging of VLANs if vlan sync is disabled
+                    if object_type == NBVLAN and \
+                          grab(this_object.source, "settings.disable_vlan_sync", fallback=False) is True:
+                        continue
+
                     this_object.add_tags([netbox_handler.primary_tag, this_object.source.source_tag])
 
                     # if object was orphaned remove tag again
