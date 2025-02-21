@@ -10,13 +10,11 @@
 import re
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
-from typing import List
 from packaging import version
 
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
-from module.sources.common.handle_vlan import FilterVLANByName, FilterVLANByID
 
 log = get_logger()
 
@@ -271,7 +269,6 @@ class SourceBase:
         interface_mac_address = None
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
                 interface_data.get("mac_address") is not None:
-
             interface_mac_address = interface_data.get("mac_address")
             del(interface_data["mac_address"])
 
@@ -329,6 +326,12 @@ class SourceBase:
 
             primary_mac_address_object = grab(interface_object, "data.primary_mac_address")
 
+            primary_mac_address_data = {
+                "mac_address": interface_mac_address,
+                "assigned_object_id": interface_object,
+                "assigned_object_type": interface_class
+            }
+
             if primary_mac_address_object is None or grab(primary_mac_address_object, "data.mac_address") != interface_mac_address:
 
                 primary_mac_address_object = None
@@ -337,16 +340,12 @@ class SourceBase:
                         primary_mac_address_object = mac_address_object
                         break
 
-                primary_mac_address_data = {
-                        "mac_address": interface_mac_address,
-                        "assigned_object_id": interface_object,
-                        "assigned_object_type": interface_class
-                    }
-
                 if primary_mac_address_object is None:
                     primary_mac_address_object = self.inventory.add_object(NBMACAddress, data=primary_mac_address_data, source=self)
                 else:
                     primary_mac_address_object.update(data=primary_mac_address_data, source=self)
+            else:
+                primary_mac_address_object.update(data=primary_mac_address_data, source=self)
 
             interface_object.update(data={"primary_mac_address": primary_mac_address_object}, source=self)
 

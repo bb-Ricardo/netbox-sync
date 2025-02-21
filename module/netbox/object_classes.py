@@ -1453,7 +1453,6 @@ class NBVLANGroup(NetBoxObject):
             "name": 100,
             "slug": 100,
             "description": 200,
-            "tags": NBTagList,
             "scope_type": ["dcim.site", "dcim.sitegroup", "virtualization.cluster", "virtualization.clustergroup"],
             "scope_id": [NBSite, NBSiteGroup, NBCluster, NBClusterGroup],
         }
