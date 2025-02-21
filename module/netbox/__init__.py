@@ -16,6 +16,7 @@ from module.netbox.object_classes import (
     NBTagList,
     NBTenant,
     NBSite,
+    NBSiteGroup,
     NBVRF,
     NBVLAN,
     NBVLANList,
