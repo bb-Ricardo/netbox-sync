@@ -41,14 +41,17 @@ class CheckRedfish(SourceBase):
         NBClusterGroup,
         NBDeviceRole,
         NBSite,
+        NBSiteGroup,
         NBCluster,
         NBDevice,
         NBInterface,
+        NBMACAddress,
         NBIPAddress,
         NBPrefix,
         NBTenant,
         NBVRF,
         NBVLAN,
+        NBVLANGroup,
         NBPowerPort,
         NBInventoryItem,
         NBCustomField
@@ -858,6 +861,7 @@ class CheckRedfish(SourceBase):
 
                 this_link_type = port_data.get("type")
                 mgmt_only = port_data.get("mgmt_only")
+                mac_address = port_data.get("mac_address")
                 data_to_update = self.patch_data(nic_object, port_data, self.settings.overwrite_interface_attributes)
 
                 # always overwrite nic type if discovered
@@ -865,6 +869,9 @@ class CheckRedfish(SourceBase):
                     data_to_update["type"] = this_link_type
 
                 data_to_update["mgmt_only"] = mgmt_only
+
+                if mac_address is not None:
+                    data_to_update["mac_address"] = mac_address
 
                 port_data = data_to_update
 
