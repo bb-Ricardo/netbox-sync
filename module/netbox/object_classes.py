@@ -1338,7 +1338,25 @@ class NBSite(NetBoxObject):
             "slug": 100,
             "comments": str,
             "tenant": NBTenant,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "group": NBSiteGroup
+        }
+        super().__init__(*args, **kwargs)
+
+class NBSiteGroup(NetBoxObject):
+    """
+        This object is currently not used directly in any class.
+        It is used to handle scopes properly.
+    """
+    name = "site group"
+    api_path = "dcim/site-groups"
+    primary_key = "name"
+    prune = False
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
         }
         super().__init__(*args, **kwargs)
 
@@ -1404,7 +1422,15 @@ class NBVLAN(NetBoxObject):
             site_name = self.get_site_name(this_data_set)
 
             if site_name is not None:
-                my_name = f"{vlan_id} ({site_name})"
+                my_name = f"{vlan_id} (site: {site_name})"
+
+        this_group = this_data_set.get("group")
+        if this_group is not None:
+            vlan_id = this_data_set.get(self.primary_key)
+            group_name = grab(this_group, "data.name")
+
+            if group_name is not None:
+                my_name = f"{vlan_id} (group: {group_name})"
 
         return my_name
 
@@ -1427,9 +1453,69 @@ class NBVLANGroup(NetBoxObject):
             "name": 100,
             "slug": 100,
             "description": 200,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "scope_type": ["dcim.site", "dcim.sitegroup", "virtualization.cluster", "virtualization.clustergroup"],
+            "scope_id": [NBSite, NBSiteGroup, NBCluster, NBClusterGroup],
         }
+        # add relation between two attributes
+        self.data_model_relation = {
+            "dcim.site": NBSite,
+            "dcim.sitegroup": NBSiteGroup,
+            "virtualization.cluster": NBCluster,
+            "virtualization.clustergroup": NBClusterGroup,
+            NBSite: "dcim.site",
+            NBSiteGroup: "dcim.sitegroup",
+            NBCluster: "virtualization.cluster",
+            NBClusterGroup: "virtualization.clustergroup"
+        }
+
         super().__init__(*args, **kwargs)
+
+    def resolve_relations(self):
+
+        o_id = self.data.get("scope_id")
+        o_type = self.data.get("scope_type")
+
+        if isinstance(o_id, int) and o_type is not None and self.data_model_relation.get(o_type) is not None:
+            self.data["scope_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+        elif not isinstance(o_id, NetBoxObject):
+            log.debug(f"{self.name} '{self.data.get('name')}' scope type '{o_type}' for '{grab(self, 'data.scope.name')}'  is currently not supported")
+            self.data["scope_id"] = ""
+
+        super().resolve_relations()
+
+    def matches_site_cluster(self, site=None, cluster=None) -> bool:
+        """
+        tries to figure out if this vlan group matches a certain site or cluster
+
+        Parameters
+        ----------
+        site: NBSite
+            the site object to match to
+        cluster: NBCluster
+            the cluster object to match to
+
+        Returns
+        -------
+        bool: True if matches one of the params
+
+        """
+        if isinstance(site, NBSite):
+            if isinstance(self.data["scope_id"], NBSite) and self.data["scope_id"] == site:
+                return True
+            if (isinstance(self.data["scope_id"], NBSiteGroup) and
+                    self.data["scope_id"] == grab(site, "data.group")):
+                return True
+
+        if isinstance(cluster, NBCluster):
+            if isinstance(self.data["scope_id"], NBCluster) and self.data["scope_id"] == cluster:
+                return True
+            if (isinstance(self.data["scope_id"], NBClusterGroup) and
+                    self.data["scope_id"] == grab(cluster, "data.group")):
+                return True
+
+        return False
+
 
 class NBVLANList(NBObjectList):
     member_type = NBVLAN

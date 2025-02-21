@@ -281,10 +281,12 @@ class SourceBase:
             log.error(f"Attribute 'interface_data' must be a dict() got {type(interface_data)}.")
             return None
 
+        device_object_cluster = grab(device_object, "data.cluster")
+        device_object_site = grab(device_object, "data.site")
+
         if type(device_object) == NBVM:
             interface_class = NBVMInterface
-            interface_cluster = grab(device_object, "data.cluster")
-            site_name = interface_cluster.get_site_name()
+            site_name = device_object_cluster.get_site_name()
         elif type(device_object) == NBDevice:
             interface_class = NBInterface
             site_name = grab(device_object, "data.site.data.name")
@@ -596,7 +598,8 @@ class SourceBase:
         vlan_interface_data = dict()
         if untagged_vlan is not None or (untagged_vlan is None and len(tagged_vlans) == 0):
             if matching_untagged_vlan is None and untagged_vlan is not None:
-                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
+                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, device_object_site,
+                                                                        device_object_cluster)
 
                 # don't sync newly discovered VLANs to NetBox
                 if self.add_vlan_object_to_netbox(matching_untagged_vlan, site_name) is False:
@@ -607,7 +610,8 @@ class SourceBase:
                            f"untagged interface VLAN.")
 
             if matching_untagged_vlan is not None:
-                vlan_interface_data["untagged_vlan"] = self.add_vlan_group(matching_untagged_vlan, site_name)
+                vlan_interface_data["untagged_vlan"] = self.add_vlan_group(matching_untagged_vlan, site_name,
+                                                                           device_object_cluster)
                 if grab(interface_object, "data.mode") is None:
                     vlan_interface_data["mode"] = "access"
 
@@ -619,14 +623,16 @@ class SourceBase:
                 log.debug2(f"Found matching prefix VLAN {matching_tagged_vlan.get_display_name()} for "
                            f"tagged interface VLAN.")
             else:
-                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
+                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, device_object_site,
+                                                                      device_object_cluster)
 
                 # don't sync newly discovered VLANs to NetBox
                 if self.add_vlan_object_to_netbox(matching_tagged_vlan, site_name) is False:
                     matching_tagged_vlan = None
 
             if matching_tagged_vlan is not None:
-                compiled_tagged_vlans.append(self.add_vlan_group(matching_tagged_vlan, site_name))
+                compiled_tagged_vlans.append(self.add_vlan_group(matching_tagged_vlan, site_name,
+                                                                 device_object_cluster))
 
         if len(compiled_tagged_vlans) > 0:
             vlan_interface_data["tagged_vlans"] = compiled_tagged_vlans
@@ -668,19 +674,20 @@ class SourceBase:
 
         return data_to_update
 
-    def add_vlan_group(self, vlan_data, vlan_site) -> NBVLAN | dict:
+    def add_vlan_group(self, vlan_data, vlan_site, vlan_cluster) -> NBVLAN | dict:
         """
         This function will try to find a matching VLAN group according to the settings.
         Name matching will take precedence over ID matching. First match wins.
 
-        If nothing matches the input data from 'vlan_data' will be returned
+        If nothing matches the input data the submitted 'vlan_data' will be returned
 
         Parameters
         ----------
         vlan_data: dict | NBVLAN
             A dict or NBVLAN object
-        vlan_site: str | None
+        vlan_site: NBSite | str | None
             name of site for the VLAN
+        vlan_cluster: NBCluster | str | None
 
         Returns
         -------
@@ -690,45 +697,79 @@ class SourceBase:
 
         # get VLAN details
         if isinstance(vlan_data, NBVLAN):
+            if vlan_data.is_new is False:
+                return vlan_data
+
             vlan_name = grab(vlan_data, "data.name")
             vlan_id = grab(vlan_data, "data.vid")
+            # vlan already has a group attached
+            if grab(vlan_data, "data.group") is not None:
+                return vlan_data
+
         elif isinstance(vlan_data, dict):
             vlan_name = vlan_data.get("name")
             vlan_id = vlan_data.get("vid")
         else:
             return vlan_data
 
-        # check existing Devices for matches
-        log.debug2(f"Trying to find a matching VLAN Group based on the VLAN name '{vlan_name}' and VLAN ID '{vlan_id}'")
+        if isinstance(vlan_site, str):
+            vlan_site = self.inventory.get_by_data(NBSite, data={"name": vlan_site})
+
+        if isinstance(vlan_cluster, str):
+            vlan_cluster = self.inventory.get_by_data(NBCluster, data={"name": vlan_cluster})
+
+        log_text = f"Trying to find a matching VLAN Group based on the VLAN name '{vlan_name}'"
+        if vlan_site is not None:
+            log_text += f", site '{vlan_site.get_display_name()}'"
+        if vlan_cluster is not None:
+            log_text += f", cluster '{vlan_cluster.get_display_name()}'"
+        log_text += f" and VLAN ID '{vlan_id}'"
+        log.debug(log_text)
 
         vlan_group = None
         for vlan_filter, vlan_group_name in self.settings.vlan_group_relation_by_name or list():
             if vlan_filter.matches(vlan_name, vlan_site):
-                vlan_group = self.inventory.get_by_data(NBVLANGroup, data={"name": vlan_group_name})
-                break
+                for inventory_vlan_group in self.inventory.get_all_items(NBVLANGroup):
+
+                    if grab(inventory_vlan_group, "data.name") != vlan_group_name:
+                        continue
+
+                    if inventory_vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                        vlan_group = inventory_vlan_group
+                        break
 
         if vlan_group is None:
             for vlan_filter, vlan_group_name in self.settings.vlan_group_relation_by_id or list():
                 if vlan_filter.matches(vlan_id, vlan_site):
-                    vlan_group = self.inventory.get_by_data(NBVLANGroup, data={"name": vlan_group_name})
-                    break
+                    for inventory_vlan_group in self.inventory.get_all_items(NBVLANGroup):
+
+                        if grab(inventory_vlan_group, "data.name") != vlan_group_name:
+                            continue
+
+                        if inventory_vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                            vlan_group = inventory_vlan_group
+                            break
 
         if vlan_group is not None:
             log.debug2(f"Found matching VLAN group '{vlan_group.get_display_name()}'")
             if isinstance(vlan_data, NBVLAN):
                 vlan_data.update(data={"group": vlan_group})
+                if vlan_data.data.get("site") is not None:
+                    vlan_data.unset_attribute("site")
             elif isinstance(vlan_data, dict):
                 vlan_data["group"] = vlan_group
+                if vlan_data.get("site") is not None:
+                    del(vlan_data["site"])
         else:
             log.debug2("No matching VLAN group found")
 
         return vlan_data
 
-    def get_vlan_object_if_exists(self, vlan_data=None, vlan_site=None):
+    def get_vlan_object_if_exists(self, vlan_data=None, vlan_site=None, vlan_cluster=None):
         """
         This function will try to find a matching VLAN object based on 'vlan_data'
         Will return matching objects in following order:
-            * exact match: VLAN ID and site match
+            * exact match: VLAN ID and site or VLAN Group which matches site or cluster
             * global match: VLAN ID matches but the VLAN has no site assigned
         If nothing matches the input data from 'vlan_data' will be returned
 
@@ -736,8 +777,10 @@ class SourceBase:
         ----------
         vlan_data: dict
             A dict with NBVLAN data attributes
-        vlan_site: str
-            name of site the VLAN could be present
+        vlan_site: NBSite
+            site object
+        vlan_cluster: NBCluster
+            cluster object
 
         Returns
         -------
@@ -766,32 +809,55 @@ class SourceBase:
         elif isinstance(vlan_site, str):
             vlan_site = self.inventory.get_by_data(NBSite, data={"name": vlan_site})
 
+        if isinstance(vlan_cluster, str):
+            vlan_cluster = self.inventory.get_by_data(NBCluster, data={"name": vlan_cluster})
+
         return_data = vlan_data
-        vlan_object_including_site = None
-        vlan_object_without_site = None
+        vlan_object_by_site = None
+        vlan_object_by_group = None
+        vlan_object_global = None
 
         for vlan in self.inventory.get_all_items(NBVLAN):
 
             if grab(vlan, "data.vid") != vlan_data.get("vid"):
                 continue
 
+            # try finding matching VLAN by site
             if vlan_site is not None and grab(vlan, "data.site") == vlan_site:
-                vlan_object_including_site = vlan
+                vlan_object_by_site = vlan
+                break
 
-            if grab(vlan, "data.site") is None:
-                vlan_object_without_site = vlan
+            # try find matching VLAN by group
+            if grab(vlan, "data.group") is not None:
+                vlan_group = grab(vlan, "data.group")
+                if vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                    vlan_object_by_group = vlan
+                    break
 
-        if isinstance(vlan_object_including_site, NetBoxObject):
-            return_data = vlan_object_including_site
-            log.debug2("Found a exact matching %s object: %s" %
-                       (vlan_object_including_site.name,
-                        vlan_object_including_site.get_display_name(including_second_key=True)))
+            if grab(vlan, "data.site") is None and grab(vlan, "data.group") is None:
+                vlan_object_global = vlan
 
-        elif isinstance(vlan_object_without_site, NetBoxObject):
-            return_data = vlan_object_without_site
-            log.debug2("Found a global matching %s object: %s" %
-                       (vlan_object_without_site.name,
-                        vlan_object_without_site.get_display_name(including_second_key=True)))
+        if isinstance(vlan_object_by_site, NetBoxObject):
+            return_data = vlan_object_by_site
+            log.debug2(f"Found a {return_data.name} object which matches the site '{vlan_site.get_display_name()}': %s"
+                       % vlan_object_by_site.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_by_group, NetBoxObject):
+            return_data = vlan_object_by_group
+            vlan_group_object = grab(vlan_object_by_group, "data.group")
+            vlan_group_object_scope_object = grab(vlan_object_by_group, "data.scope_id")
+            scope_details = ""
+            if vlan_group_object_scope_object is not None:
+                scope_details = (f" ({vlan_group_object_scope_object.name} "
+                                 f"{vlan_group_object_scope_object.get_display_name()})")
+            log.debug2(f"Found a {return_data.name} object which matches the {vlan_group_object.name} "
+                       f"'{vlan_group_object.get_display_name()}'{scope_details}: %s" %
+                       vlan_object_by_group.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_global, NetBoxObject):
+            return_data = vlan_object_global
+            log.debug2(f"Found a global matching {return_data.name} object: %s" %
+                       vlan_object_global.get_display_name(including_second_key=True))
 
         else:
             log.debug2("No matching existing VLAN found for this VLAN ID.")
