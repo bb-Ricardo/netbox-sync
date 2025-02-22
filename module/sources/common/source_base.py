@@ -701,6 +701,7 @@ class SourceBase:
 
             vlan_name = grab(vlan_data, "data.name")
             vlan_id = grab(vlan_data, "data.vid")
+            vlan_current_site = grab(vlan_data, "data.site")
             # vlan already has a group attached
             if grab(vlan_data, "data.group") is not None:
                 return vlan_data
@@ -708,6 +709,7 @@ class SourceBase:
         elif isinstance(vlan_data, dict):
             vlan_name = vlan_data.get("name")
             vlan_id = vlan_data.get("vid")
+            vlan_current_site = vlan_data.get("site")
         else:
             return vlan_data
 
@@ -716,6 +718,9 @@ class SourceBase:
 
         if isinstance(vlan_cluster, str):
             vlan_cluster = self.inventory.get_by_data(NBCluster, data={"name": vlan_cluster})
+
+        if isinstance(vlan_current_site, dict):
+            vlan_current_site = self.inventory.get_by_data(NBSite, data=vlan_current_site)
 
         log_text = f"Trying to find a matching VLAN Group based on the VLAN name '{vlan_name}'"
         if vlan_site is not None:
@@ -751,13 +756,19 @@ class SourceBase:
 
         if vlan_group is not None:
             log.debug2(f"Found matching VLAN group '{vlan_group.get_display_name()}'")
+            """
+            If a VLAN group has been found we also need to check if the vlan site and the scope of the VLAN group are
+            matching. If the VLAN group has a different scope then site, we need to remove the site from the VLAN.
+
+            Mitigation for: https://github.com/netbox-community/netbox/issues/18706
+            """
             if isinstance(vlan_data, NBVLAN):
                 vlan_data.update(data={"group": vlan_group})
-                if vlan_data.data.get("site") is not None:
+                if vlan_current_site is not vlan_group.data.get("scope_id"):
                     vlan_data.unset_attribute("site")
             elif isinstance(vlan_data, dict):
                 vlan_data["group"] = vlan_group
-                if vlan_data.get("site") is not None:
+                if vlan_current_site is not vlan_group.data.get("scope_id"):
                     del(vlan_data["site"])
         else:
             log.debug2("No matching VLAN group found")

@@ -330,13 +330,16 @@ class VMWareConfig(ConfigBase):
                                                description="""adds a relation to assign VLAN groups to matching VLANs
                                                by name. Same matching rules as the exclude_by_name option uses are applied.
                                                If name and id relations are defined, the name relation takes precedence.
-                                               Fist match wins.""",
+                                               Fist match wins. Only newly discovered VLANs which are not present in
+                                               NetBox will be assigned a VLAN group.
+                                               """,
                                                config_example="London/Vlan_.* = VLAN Group 1, Tokio/Vlan_.* = VLAN Group 2"),
                                   ConfigOption("vlan_group_relation_by_id",
                                                str,
                                                description="""adds a relation to assign VLAN groups to matching VLANs by ID.
                                                Same matching rules as the exclude_by_id option uses are applied.
-                                               Fist match wins.
+                                               Fist match wins.  Only newly discovered VLANs which are not present in
+                                               NetBox will be assigned a VLAN group.
                                                """,
                                                config_example="1023-1042 = VLAN Group 1, Tokio/2342 = VLAN Group 2")
                               ]),
