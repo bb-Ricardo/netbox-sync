@@ -41,6 +41,10 @@ class PermittedSubnets:
                 excluded = True
                 subnet = subnet[1:].strip()
 
+            if "/" not in subnet:
+                log.error(f"permitted subnet '{subnet}' is missing the prefix length (i.e.: {subnet}/24)")
+                self._validation_failed = True
+
             try:
                 if excluded is True:
                     self.excluded_subnets.append(ip_network(subnet))
