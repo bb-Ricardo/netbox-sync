@@ -499,6 +499,12 @@ class SourceBase:
 
                     this_ip_object = ip
 
+                if grab(ip, "data.role.value") == "anycast":
+                    log.debug(f"{ip.name} '{ip.get_display_name()}' is an Anycast address and "
+                              f"can be assigned to multiple interfaces at the same time.")
+                    skip_this_ip = True
+                    break
+
                 if current_nic_enabled == this_nic_enabled:
 
                     this_log_handler = log.warning
@@ -585,6 +591,11 @@ class SourceBase:
         for current_ip in interface_object.get_ip_addresses():
 
             if skip_ip_handling is True:
+                continue
+
+            if grab(current_ip, "data.role.value") == "anycast":
+                log.debug2(f"{ip.name} '{ip.get_display_name()}' is an Anycast address and will "
+                          f"NOT be deleted from interface")
                 continue
 
             if current_ip not in ip_address_objects:
