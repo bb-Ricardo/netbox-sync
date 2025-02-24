@@ -349,10 +349,21 @@ class SourceBase:
 
             interface_object.update(data={"primary_mac_address": primary_mac_address_object}, source=self)
 
+        # skip handling of IPs for VMs with not installed/running guest tools
+        skip_ip_handling = False
+        if ("vim.VirtualMachine" in str(type(vmware_object)) and
+                grab(vmware_object,'guest.toolsStatus') != "toolsOk"):
+            guest_tool_satus = str(grab(vmware_object,'guest.toolsStatus')).replace("tools", "")
+            log.debug(f"VM '{device_object.name}' guest tool status is '{guest_tool_satus}', skipping IP handling")
+            skip_ip_handling = True
+
         ip_address_objects = list()
         matching_ip_prefixes = list()
         # add all interface IPs
         for nic_ip in interface_ips or list():
+
+            if skip_ip_handling is True:
+                continue
 
             # get IP and prefix length
             try:
@@ -559,6 +570,10 @@ class SourceBase:
             ip_address_objects.append(this_ip_object)
 
         for current_ip in interface_object.get_ip_addresses():
+
+            if skip_ip_handling is True:
+                continue
+
             if current_ip not in ip_address_objects:
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
                          f"therefore removed from this interface")
