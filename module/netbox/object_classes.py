@@ -1902,6 +1902,7 @@ class NBIPAddress(NetBoxObject):
             "assigned_object_type": ["dcim.interface", "virtualization.vminterface", "ipam.fhrpgroup"],
             "assigned_object_id": [NBInterface, NBVMInterface, NBFHRPGroupItem],
             "description": 200,
+            "role": ["loopback", "secondary", "anycast", "vip", "vrrp", "hsrp", "glbp", "carp"],
             "dns_name": 255,
             "tags": NBTagList,
             "tenant": NBTenant,
