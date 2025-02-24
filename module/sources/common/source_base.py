@@ -351,8 +351,7 @@ class SourceBase:
 
         # skip handling of IPs for VMs with not installed/running guest tools
         skip_ip_handling = False
-        if ("vim.VirtualMachine" in str(type(vmware_object)) and
-                grab(vmware_object,'guest.toolsStatus') != "toolsOk"):
+        if type(device_object) == NBVM and grab(vmware_object,'guest.toolsStatus') != "toolsOk":
             guest_tool_satus = str(grab(vmware_object,'guest.toolsStatus')).replace("tools", "")
             log.debug(f"VM '{device_object.name}' guest tool status is '{guest_tool_satus}', skipping IP handling")
             skip_ip_handling = True
@@ -529,6 +528,20 @@ class SourceBase:
                 "address": ip_object.compressed,
                 "assigned_object_id": interface_object,
             }
+
+            # skip reassignment if IP is assigned to sub interface of a VM
+            if type(device_object) == NBVM and grab(ip.get_interface(), "data.parent") is not None:
+                current_ip_nic = ip.get_interface()
+                current_ip_nic_parent = grab(current_ip_nic, "data.parent")
+                if isinstance(current_ip_nic_parent, dict):
+                    current_ip_nic_parent = self.inventory.get_by_id(NBVMInterface,
+                                                                     nb_id=current_ip_nic_parent.get("id"))
+
+                if current_ip_nic_parent == interface_object:
+                    log.debug(f"{ip.name} '{ip.get_display_name()}' is assigned to sub interface "
+                              f"'{current_ip_nic.get_display_name()}' of '{interface_object.get_display_name()}'. "
+                              f"Not changing assignment")
+                    nic_ip_data["assigned_object_id"] = current_ip_nic
 
             # grab tenant from device/vm if prefix didn't provide a tenant
             ip_tenant = None
