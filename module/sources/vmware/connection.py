@@ -29,7 +29,7 @@ from pyVmomi.VmomiSupport import VmomiJSONEncoder
 from module.sources.common.source_base import SourceBase
 from module.sources.vmware.config import VMWareConfig
 from module.common.logging import get_logger, DEBUG3
-from module.common.misc import grab, dump, get_string_or_none, plural
+from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
@@ -2162,7 +2162,14 @@ class VMWareHandler(SourceBase):
         # first check against vm_platform_relation
         platform = get_string_or_none(grab(obj, "config.guestFullName"))
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
-        platform = get_string_or_none(grab(obj, "guest.guestDetailedData.prettyName", fallback=platform))
+
+        # extract prettyName from extraConfig exposed by guest tools
+        extra_config = [x.value for x in grab(obj, "config.extraConfig", fallback=[])
+                        if x.key == "guestOS.detailed.data"]
+        if len(extra_config) > 0:
+            pretty_name = [x for x in quoted_split(extra_config[0].replace("' ", "', ")) if x.startswith("prettyName")]
+            if len(pretty_name) > 0:
+                platform = pretty_name[0].replace("prettyName='","")
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
