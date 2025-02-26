@@ -216,7 +216,7 @@ class SourceBase:
 
         for prefix in self.inventory.get_all_items(NBPrefix):
 
-            if grab(prefix, "data.site") != site_object:
+            if not prefix.matches_site(site_object):
                 continue
 
             prefix_network = grab(prefix, f"data.{NBPrefix.primary_key}")
@@ -286,7 +286,7 @@ class SourceBase:
             site_name = device_object_cluster.get_site_name()
         elif type(device_object) == NBDevice:
             interface_class = NBInterface
-            site_name = grab(device_object, "data.site.data.name")
+            site_name = device_object.get_site_name()
         elif device_object is None:
             log.error(f"No device/VM object submitted to attach interface '{grab(interface_data, 'name')}' to.")
             return None
@@ -415,7 +415,7 @@ class SourceBase:
 
                 # check if IP address is of type IP interface (includes prefix length)
                 if type(ip_object) in [IPv6Address, IPv4Address]:
-                    log.warning(f"{log_text}. Unable to add IP address to NetBox.")
+                    log.warning(f"{log_text}. Unable to add IP address to NetBox")
                     continue
                 else:
                     log.debug2(log_text)
@@ -426,7 +426,7 @@ class SourceBase:
                 if type(this_prefix) in [IPv4Network, IPv6Network]:
                     ip_object = ip_interface(f"{ip_object}/{this_prefix.prefixlen}")
                 else:
-                    log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP to NetBox")
+                    log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP address to NetBox")
                     continue
 
             # try to find matching IP address object
@@ -563,13 +563,13 @@ class SourceBase:
                         ip_tenant = prefix_tenant
                         break
 
+            if possible_ip_vrf is not None:
+                nic_ip_data["vrf"] = possible_ip_vrf
+            if ip_tenant is not None:
+                nic_ip_data["tenant"] = ip_tenant
+
             if not isinstance(this_ip_object, NBIPAddress):
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
-
-                if possible_ip_vrf is not None:
-                    nic_ip_data["vrf"] = possible_ip_vrf
-                if ip_tenant is not None:
-                    nic_ip_data["tenant"] = ip_tenant
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
 
@@ -577,12 +577,6 @@ class SourceBase:
             else:
 
                 log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
-
-                if grab(this_ip_object, "data.vrf") is None and possible_ip_vrf is not None:
-                    nic_ip_data["vrf"] = possible_ip_vrf
-
-                if grab(this_ip_object, "data.tenant") is None and ip_tenant is not None:
-                    nic_ip_data["tenant"] = ip_tenant
 
                 this_ip_object.update(data=nic_ip_data, source=self)
 

@@ -1442,6 +1442,7 @@ class NBVLAN(NetBoxObject):
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
+
 class NBVLANGroup(NetBoxObject):
     name = "VLANGroup"
     api_path = "ipam/vlan-groups"
@@ -1477,8 +1478,9 @@ class NBVLANGroup(NetBoxObject):
 
         if isinstance(o_id, int) and o_type is not None and self.data_model_relation.get(o_type) is not None:
             self.data["scope_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
-        elif not isinstance(o_id, NetBoxObject):
-            log.debug(f"{self.name} '{self.data.get('name')}' scope type '{o_type}' for '{grab(self, 'data.scope.name')}'  is currently not supported")
+        elif o_id is not None and not isinstance(o_id, NetBoxObject):
+            log.debug(f"{self.name} '{self.data.get('name')}' scope type '{o_type}' for "
+                      f"'{grab(self, 'data.scope.name')}' is currently not supported")
             self.data["scope_id"] = ""
 
         super().resolve_relations()
@@ -1500,16 +1502,16 @@ class NBVLANGroup(NetBoxObject):
 
         """
         if isinstance(site, NBSite):
-            if isinstance(self.data["scope_id"], NBSite) and self.data["scope_id"] == site:
+            if isinstance(self.data.get("scope_id"), NBSite) and self.data.get("scope_id") == site:
                 return True
-            if (isinstance(self.data["scope_id"], NBSiteGroup) and
+            if (isinstance(self.data.get("scope_id"), NBSiteGroup) and
                     self.data["scope_id"] == grab(site, "data.group")):
                 return True
 
         if isinstance(cluster, NBCluster):
-            if isinstance(self.data["scope_id"], NBCluster) and self.data["scope_id"] == cluster:
+            if isinstance(self.data.get("scope_id"), NBCluster) and self.data.get("scope_id") == cluster:
                 return True
-            if (isinstance(self.data["scope_id"], NBClusterGroup) and
+            if (isinstance(self.data.get("scope_id"), NBClusterGroup) and
                     self.data["scope_id"] == grab(cluster, "data.group")):
                 return True
 
@@ -1545,19 +1547,29 @@ class NBPrefix(NetBoxObject):
         self.data_model = {
             "prefix": [IPv4Network, IPv6Network],
             "site": NBSite,
+            "scope_type": ["dcim.site", "dcim.sitegroup"],
+            "scope_id": [NBSite, NBSiteGroup],
             "tenant": NBTenant,
             "vlan": NBVLAN,
             "vrf": NBVRF,
             "description": 200,
             "tags": NBTagList
         }
+        # add relation between two attributes
+        self.data_model_relation = {
+            "dcim.site": NBSite,
+            "dcim.sitegroup": NBSiteGroup,
+            NBSite: "dcim.site",
+            NBSiteGroup: "dcim.sitegroup",
+        }
+
         super().__init__(*args, **kwargs)
 
     def update(self, data=None, read_from_netbox=False, source=None):
 
         # prefixes are parsed into ip_networks
         data_prefix = data.get(self.primary_key)
-        if data_prefix is not None and not isinstance(data_prefix, (IPv4Network, IPv6Network)):
+        if not isinstance(data_prefix, (IPv4Network, IPv6Network)) and data_prefix is not None:
             try:
                 data[self.primary_key] = ip_network(data_prefix)
             except ValueError as e:
@@ -1568,6 +1580,47 @@ class NBPrefix(NetBoxObject):
 
         if read_from_netbox is False:
             raise ValueError(f"Adding {self.name} by this program is currently not implemented.")
+
+    def resolve_relations(self):
+
+        o_id = self.data.get("scope_id")
+        o_type = self.data.get("scope_type")
+
+        if isinstance(o_id, int) and o_type is not None and self.data_model_relation.get(o_type) is not None:
+            self.data["scope_id"] = self.inventory.get_by_id(self.data_model_relation.get(o_type), nb_id=o_id)
+        elif o_id is not None and not isinstance(o_id, NetBoxObject):
+            log.debug(f"{self.name} '{self.data.get('name')}' scope type '{o_type}' for "
+                      f"'{grab(self, 'data.scope.name')}' is currently not supported")
+            self.data["scope_id"] = ""
+
+        super().resolve_relations()
+
+    def matches_site(self, site=None) -> bool:
+        """
+        tries to figure out if this prefix matches a certain site or site group
+
+        Parameters
+        ----------
+        site: NBSite
+            the site object to match to
+
+        Returns
+        -------
+        bool: True if matches one of the params
+
+        """
+        if isinstance(site, NBSite):
+            if isinstance(self.data.get("scope_id"), NBSite) and self.data.get("scope_id") == site:
+                return True
+            if (isinstance(self.data.get("scope_id"), NBSiteGroup) and
+                    self.data["scope_id"] == grab(site, "data.group")):
+                return True
+
+            # compatible for NetBox versions < 4.2.0
+            if self.data.get("site") == site:
+                return True
+
+        return False
 
 
 class NBManufacturer(NetBoxObject):
@@ -1686,7 +1739,7 @@ class NBCluster(NetBoxObject):
             "type": NBClusterType,
             "tenant": NBTenant,
             "group": NBClusterGroup,
-            "scope_type": ["dcim.site", "dcim.sitegroup", "dcim.location", "dcim.region"],
+            "scope_type": ["dcim.site", "dcim.sitegroup"],
             "scope_id": NBSite,
             "tags": NBTagList
         }
