@@ -382,6 +382,12 @@ class VMWareConfig(ConfigBase):
                          The same behavior also applies for VM disk sizes.""",
                          default_value=True
                          ),
+            ConfigOption("skip_host_nics",
+                         bool,
+                         description="""Skip creating or updating host physical nics in Netobx. Normal operation
+                         will maintain all phisical nics in netbox. This option will skip this part.""" ,
+                         default_value=False
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
