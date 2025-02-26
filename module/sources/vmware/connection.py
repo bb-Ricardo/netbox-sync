@@ -2187,7 +2187,16 @@ class VMWareHandler(SourceBase):
         vm_tags = self.get_object_relation(name, "vm_tag_relation")
 
         # get vCenter tags
-        vm_tags.extend(self.collect_object_tags(obj))
+        vcenter_tags = self.collect_object_tags(obj)
+
+        # check if VM tag excludes VM from being synced to NetBox
+        for sync_exclude_tag in self.settings.vm_exclude_by_tag_filter or list():
+            if sync_exclude_tag in vcenter_tags:
+                log.debug(f"Virtual machine vCenter tag '{sync_exclude_tag}' in matches 'vm_exclude_by_tag_filter'. "
+                          f"Skipping")
+                return
+
+        vm_tags.extend(vcenter_tags)
 
         # vm memory depending on setting
         vm_memory = grab(obj, "config.hardware.memoryMB", fallback=0)

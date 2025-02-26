@@ -108,6 +108,15 @@ class VMWareConfig(ConfigBase):
                                              str, description="simply include/exclude VMs"),
                                 ConfigOption("vm_include_filter", str)
                               ]),
+            ConfigOption("vm_exclude_by_tag_filter",
+                         str,
+                         description="""defines a comma separated list of vCenter tags which (if assigned to a VM)
+                         will exclude this VM from being synced to NetBox. The config option 'vm_tag_source'
+                         determines which tags are collected for VMs.
+                         """,
+                         config_example="tag-a, tag-b"
+                         ),
+
             ConfigOptionGroup(title="relations",
                               options=[
                                 ConfigOption("cluster_site_relation",
@@ -439,7 +448,7 @@ class VMWareConfig(ConfigBase):
             if option.value is None:
                 continue
 
-            if "filter" in option.key:
+            if "filter" in option.key and "vm_exclude_by_tag_filter" not in option.key:
 
                 re_compiled = None
                 try:
@@ -449,6 +458,12 @@ class VMWareConfig(ConfigBase):
                     self.set_validation_failed()
 
                 option.set_value(re_compiled)
+
+                continue
+
+            if option.key == "vm_exclude_by_tag_filter":
+
+                option.set_value(quoted_split(option.value))
 
                 continue
 
