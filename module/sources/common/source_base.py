@@ -179,7 +179,7 @@ class SourceBase:
 
         return return_data
 
-    def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None):
+    def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None) -> NBPrefix|None:
         """
         This is a lazy approach to find the longest matching prefix to an IP address.
         If site_name is set only IP prefixes from that site are matched.
@@ -332,11 +332,13 @@ class SourceBase:
                 "assigned_object_type": interface_class
             }
 
-            if primary_mac_address_object is None or grab(primary_mac_address_object, "data.mac_address") != interface_mac_address:
+            if (primary_mac_address_object is None or
+                    grab(primary_mac_address_object, "data.mac_address") != interface_mac_address):
 
                 primary_mac_address_object = None
                 for mac_address_object in self.inventory.get_all_items(NBMACAddress):
-                    if grab(mac_address_object, "data.mac_address") == interface_mac_address and grab(mac_address_object, "data.assigned_object_id") is None:
+                    if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
+                            grab(mac_address_object, "data.assigned_object_id") is None):
                         primary_mac_address_object = mac_address_object
                         break
 
@@ -380,22 +382,21 @@ class SourceBase:
             prefix_tenant = None
 
             # test for site prefixes first
-            matching_site_name = site_name
-            matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object, matching_site_name)
+            matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object, site_name)
 
             # nothing was found then check prefixes without site name
             if matching_ip_prefix is None:
-                matching_site_name = None
                 matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object)
 
             # matching prefix found, get data from prefix
             if matching_ip_prefix is not None:
 
                 this_prefix = grab(matching_ip_prefix, f"data.{NBPrefix.primary_key}")
-                if matching_site_name is None:
+                prefix_scope = matching_ip_prefix.get_scope_display_name()
+                if prefix_scope is None:
                     log.debug2(f"Found IP '{ip_object}' matches global prefix '{this_prefix}'")
                 else:
-                    log.debug2(f"Found IP '{ip_object}' matches site '{matching_site_name}' prefix "
+                    log.debug2(f"Found IP '{ip_object}' matches {prefix_scope} prefix "
                                f"'{this_prefix}'")
 
                 # check if prefix net size and ip address prefix length match
@@ -535,15 +536,16 @@ class SourceBase:
             }
 
             # skip reassignment if IP is assigned to sub interface of a VM
-            if type(device_object) == NBVM and grab(ip.get_interface(), "data.parent") is not None:
-                current_ip_nic = ip.get_interface()
+            if (type(device_object) == NBVM and this_ip_object is not None and
+                    grab(this_ip_object.get_interface(), "data.parent") is not None):
+                current_ip_nic = this_ip_object.get_interface()
                 current_ip_nic_parent = grab(current_ip_nic, "data.parent")
                 if isinstance(current_ip_nic_parent, dict):
                     current_ip_nic_parent = self.inventory.get_by_id(NBVMInterface,
                                                                      nb_id=current_ip_nic_parent.get("id"))
 
                 if current_ip_nic_parent == interface_object:
-                    log.debug(f"{ip.name} '{ip.get_display_name()}' is assigned to sub interface "
+                    log.debug(f"{this_ip_object.name} '{this_ip_object.get_display_name()}' is assigned to sub interface "
                               f"'{current_ip_nic.get_display_name()}' of '{interface_object.get_display_name()}'. "
                               f"Not changing assignment")
                     nic_ip_data["assigned_object_id"] = current_ip_nic
@@ -587,7 +589,7 @@ class SourceBase:
                 continue
 
             if grab(current_ip, "data.role.value") == "anycast":
-                log.debug2(f"{ip.name} '{ip.get_display_name()}' is an Anycast address and will "
+                log.debug2(f"{current_ip.name} '{current_ip.get_display_name()}' is an Anycast address and will "
                           f"NOT be deleted from interface")
                 continue
 
