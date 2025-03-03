@@ -1768,6 +1768,14 @@ class VMWareHandler(SourceBase):
 
         # now iterate over all physical interfaces and collect data
         pnic_data_dict = dict()
+        pnic_hints = dict()
+        # noinspection PyBroadException
+        try:
+            for hint in obj.configManager.networkSystem.QueryNetworkHint(""):
+                pnic_hints[hint.device] = hint
+        except Exception:
+            pass
+
         for pnic in grab(obj, "config.network.pnic", fallback=list()):
 
             pnic_name = grab(pnic, "device")
@@ -1820,7 +1828,6 @@ class VMWareHandler(SourceBase):
 
             # check vlans on this pnic
             pnic_vlans = list()
-
             for pg_name, pg_data in self.network_data["host_pgroup"][name].items():
 
                 if pnic_name in pg_data.get("nics", list()):
@@ -1830,6 +1837,15 @@ class VMWareHandler(SourceBase):
                     })
 
             pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
+
+            if pnic_hints.get(pnic_name) is not None:
+                pnic_switch_port = grab(pnic_hints.get(pnic_name), 'connectedSwitchPort')
+                if pnic_switch_port is not None:
+                    pnic_sp_sys_name = grab(pnic_switch_port, 'systemName')
+                    if pnic_sp_sys_name is None:
+                        pnic_sp_sys_name = grab(pnic_switch_port, 'devId')
+                    if pnic_sp_sys_name is not None:
+                        pnic_description += f" (conn: {pnic_sp_sys_name} - {grab(pnic_switch_port, 'portId')})"
 
             if self.settings.host_nic_exclude_by_mac_list is not None and \
                     pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
