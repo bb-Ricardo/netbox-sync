@@ -322,9 +322,7 @@ class SourceBase:
             interface_object.update(data=interface_data, source=self)
 
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
-                interface_mac_address is not None :
-
-            primary_mac_address_object = grab(interface_object, "data.primary_mac_address")
+                interface_mac_address is not None:
 
             primary_mac_address_data = {
                 "mac_address": interface_mac_address,
@@ -332,20 +330,31 @@ class SourceBase:
                 "assigned_object_type": interface_class
             }
 
-            if (primary_mac_address_object is None or
-                    grab(primary_mac_address_object, "data.mac_address") != interface_mac_address):
+            primary_mac_address_object = None
+            # check for associated MAC addresses on existing interface
+            if interface_object.is_new is False:
+                current_primary_mac_address_object = grab(interface_object, "data.primary_mac_address")
+                if grab(current_primary_mac_address_object, "data.mac_address") == interface_mac_address:
+                    primary_mac_address_object = current_primary_mac_address_object
+                for mac_address_object in interface_object.get_mac_addresses():
+                    if (primary_mac_address_object is None and
+                            grab(mac_address_object, "data.mac_address") == interface_mac_address):
+                        primary_mac_address_object = mac_address_object
+                    if mac_address_object is not primary_mac_address_object:
+                        mac_address_object.remove_interface_association()
 
-                primary_mac_address_object = None
+            # if a new interface or not matching assigned MAC address, try to find an existing unassigned mac address
+            if primary_mac_address_object is None:
                 for mac_address_object in self.inventory.get_all_items(NBMACAddress):
                     if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
                             grab(mac_address_object, "data.assigned_object_id") is None):
                         primary_mac_address_object = mac_address_object
                         break
 
-                if primary_mac_address_object is None:
-                    primary_mac_address_object = self.inventory.add_object(NBMACAddress, data=primary_mac_address_data, source=self)
-                else:
-                    primary_mac_address_object.update(data=primary_mac_address_data, source=self)
+            # of no existing mac address could be found, create a new one
+            if primary_mac_address_object is None:
+                primary_mac_address_object = self.inventory.add_object(NBMACAddress, data=primary_mac_address_data,
+                                                                       source=self)
             else:
                 primary_mac_address_object.update(data=primary_mac_address_data, source=self)
 

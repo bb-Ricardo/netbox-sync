@@ -1454,6 +1454,7 @@ class NBSite(NetBoxObject):
         }
         super().__init__(*args, **kwargs)
 
+
 class NBSiteGroup(NetBoxObject):
     name = "site group"
     api_path = "dcim/site-groups"
@@ -1995,8 +1996,17 @@ class NBVMInterface(NetBoxObject):
 
         result_list = list()
         for ip_object in self.inventory.get_all_items(NBIPAddress):
-            if grab(ip_object, "data.assigned_object_id") == self:
+            if ip_object.data.get("assigned_object_id") == self:
                 result_list.append(ip_object)
+
+        return result_list
+
+    def get_mac_addresses(self):
+
+        result_list = list()
+        for mac_object in self.inventory.get_all_items(NBMACAddress):
+            if mac_object.data.get("assigned_object_id") == self:
+                result_list.append(mac_object)
 
         return result_list
 
@@ -2038,8 +2048,17 @@ class NBInterface(NetBoxObject):
 
         result_list = list()
         for ip_object in self.inventory.get_all_items(NBIPAddress):
-            if grab(ip_object, "data.assigned_object_id") == self:
+            if ip_object.data.get("assigned_object_id") == self:
                 result_list.append(ip_object)
+
+        return result_list
+
+    def get_mac_addresses(self):
+
+        result_list = list()
+        for mac_object in self.inventory.get_all_items(NBMACAddress):
+            if mac_object.data.get("assigned_object_id") == self:
+                result_list.append(mac_object)
 
         return result_list
 
