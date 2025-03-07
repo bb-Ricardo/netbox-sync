@@ -340,7 +340,9 @@ class VMWareConfig(ConfigBase):
                                                by name. Same matching rules as the exclude_by_name option uses are applied.
                                                If name and id relations are defined, the name relation takes precedence.
                                                Fist match wins. Only newly discovered VLANs which are not present in
-                                               NetBox will be assigned a VLAN group.
+                                               NetBox will be assigned a VLAN group. Supported scopes for a VLAN group
+                                               are "site", "site-group", "cluster" and "cluster-group". Scopes are buggy
+                                               in NetBox https://github.com/netbox-community/netbox/issues/18706
                                                """,
                                                config_example="London/Vlan_.* = VLAN Group 1, Tokio/Vlan_.* = VLAN Group 2"),
                                   ConfigOption("vlan_group_relation_by_id",
