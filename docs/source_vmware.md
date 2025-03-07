@@ -28,7 +28,7 @@ IP addresses and interfaces will be added to NetBox.
 Try to find object first based on the object data, interface MAC addresses and primary IPs.
 1. try to find by name and cluster/site
 2. try to find by mac addresses interfaces
-3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
+3. try to find by serial number (1st) or asset tag (2nd)
 4. try to find by primary IP
 
 ### Finding hosts and VMs from discovered data
@@ -49,7 +49,7 @@ If two or more NetBox object (device, vm) with matching MACs were found, compare
 NetBox object (device, vm) with the highest amount of matching interfaces. If the ratio of matching interface
 MAC addresses exceeds 2.0 then the top matching NetBox object (device, vm) is chosen as desired object.
 
-If the ratio is below 2.0 then None will be chosen. The probability is to low that
+If the ratio is below 2.0 then None will be chosen. The probability is too low that
 this one is the correct one.
 
 #### 3. Try to find a NetBox object based on the primary IP (v4 or v6) address
