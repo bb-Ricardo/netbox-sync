@@ -2180,10 +2180,13 @@ class VMWareHandler(SourceBase):
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
         # extract prettyName from extraConfig exposed by guest tools
-        extra_config = [x.value for x in grab(obj, "config.extraConfig", fallback=[])
-                        if x.key == "guestOS.detailed.data"]
-        if len(extra_config) > 0:
-            pretty_name = [x for x in quoted_split(extra_config[0].replace("' ", "', ")) if x.startswith("prettyName")]
+        extra_config = {x.key: x.value for x in grab(obj, "config.extraConfig", fallback=[])
+                        if x.key in ["guestOS.detailed.data", "guestInfo.detailed.data"]}
+
+        # first try 'guestInfo.detailed.data' and then 'guestOS.detailed.data'
+        detailed_data = extra_config.get("guestInfo.detailed.data") or extra_config.get("guestOS.detailed.data")
+        if isinstance(detailed_data, str):
+            pretty_name = [x for x in quoted_split(detailed_data.replace("' ", "', ")) if x.startswith("prettyName")]
             if len(pretty_name) > 0:
                 platform = pretty_name[0].replace("prettyName='","")
 
