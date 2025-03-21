@@ -683,6 +683,29 @@ class NetBoxObject:
             if self.data_model.get(key) == NBCustomField:
                 if current_value is None:
                     current_value = dict()
+                
+                # Fix for object/multi-object custom fields
+                # When patching, we only need the IDs, not the full object representation
+                new_value_copy = new_value.copy()
+                for field_name, field_value in new_value_copy.items():
+                    # Check for custom field type
+                    custom_field = self.inventory.get_by_data(NBCustomField, data={"name": field_name})
+                    if custom_field is not None:
+                        field_type = grab(custom_field, "data.type")
+                        
+                        # Handle object type custom fields - need only ID
+                        if field_type == "object" and isinstance(field_value, dict) and field_value.get('id') is not None:
+                            new_value[field_name] = field_value.get('id')
+                        
+                        # Handle multi-object type custom fields - need list of IDs
+                        elif field_type == "multi-object" and isinstance(field_value, list):
+                            ids = []
+                            for item in field_value:
+                                if isinstance(item, dict) and item.get('id') is not None:
+                                    ids.append(item.get('id'))
+                            if ids:
+                                new_value[field_name] = ids
+                
                 new_value = {**current_value, **new_value}
                 new_value_str = str(new_value)
             elif isinstance(new_value, (NetBoxObject, NBObjectList)):
@@ -1288,7 +1311,7 @@ class NBCustomField(NetBoxObject):
             "object_types": list,
             # field name (object_types) for NetBox < 4.0.0
             "content_types": list,
-            "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect"],
+            "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect", "object", "multi-object"],
             "name": 50,
             "label": 50,
             "description": 200,
