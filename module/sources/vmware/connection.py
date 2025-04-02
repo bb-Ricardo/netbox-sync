@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -29,7 +29,7 @@ from pyVmomi.VmomiSupport import VmomiJSONEncoder
 from module.sources.common.source_base import SourceBase
 from module.sources.vmware.config import VMWareConfig
 from module.common.logging import get_logger, DEBUG3
-from module.common.misc import grab, dump, get_string_or_none, plural
+from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
@@ -61,6 +61,7 @@ class VMWareHandler(SourceBase):
         NBClusterGroup,
         NBDeviceRole,
         NBSite,
+        NBSiteGroup,
         NBCluster,
         NBDevice,
         NBVM,
@@ -71,8 +72,10 @@ class VMWareHandler(SourceBase):
         NBTenant,
         NBVRF,
         NBVLAN,
+        NBVLANGroup,
         NBCustomField,
-        NBVirtualDisk
+        NBVirtualDisk,
+        NBMACAddress
     ]
 
     source_type = "vmware"
@@ -421,9 +424,9 @@ class VMWareHandler(SourceBase):
         name: str
             name of the object to check
         include_filter: regex object
-            regex object of include filter
+            A regex object of include filter
         exclude_filter: regex object
-            regex object of exclude filter
+            A regex object of exclude filter
 
         Returns
         -------
@@ -511,7 +514,7 @@ class VMWareHandler(SourceBase):
         object_type: (NBDevice, NBVM)
             type of NetBox device to find in inventory
         mac_list: list
-            list of MAC addresses to compare against NetBox interface objects
+            a list of MAC addresses to compare against NetBox interface objects
 
         Returns
         -------
@@ -710,7 +713,7 @@ class VMWareHandler(SourceBase):
         Returns
         -------
         tag_list: list
-            list of NBTag objets retrieved from vCenter for this object
+            a list of NBTag objets retrieved from vCenter for this object
         """
 
         if obj is None:
@@ -795,22 +798,22 @@ class VMWareHandler(SourceBase):
 
             if num_cpu_cores is not None:
                 custom_field = self.add_update_custom_field({
-                    "name": "vcsa_host_cpu_cores",
+                    "name": "host_cpu_cores",
                     "label": "Physical CPU Cores",
                     "object_types": [object_type],
                     "type": "text",
-                    "description": f"vCenter '{self.name}' reported Host CPU cores"
+                    "description": f"Reported Host CPU cores"
                 })
 
                 return_custom_fields[grab(custom_field, "data.name")] = f"{num_cpu_cores} {cpu_model}"
 
             if isinstance(memory_size, int):
                 custom_field = self.add_update_custom_field({
-                    "name": "vcsa_host_memory",
+                    "name": "host_memory",
                     "label": "Memory",
                     "object_types": [object_type],
                     "type": "text",
-                    "description": f"vCenter '{self.name}' reported Memory"
+                    "description": f"Reported size of Memory"
                 })
 
                 memory_size = round(memory_size / 1024 ** 3)
@@ -960,7 +963,7 @@ class VMWareHandler(SourceBase):
         look for longest matching IP Prefix in the same site. If this failed we try to find the longest
         matching global IP Prefix.
 
-        If a IP Prefix was found then we try to get the VRF and VLAN for this prefix. Now we compare
+        If an IP Prefix was found then we try to get the VRF and VLAN for this prefix. Now we compare
         if interface VLAN and prefix VLAN match up and warn if they don't. Then we try to add data to
         the IP address if not already set:
 
@@ -971,7 +974,7 @@ class VMWareHandler(SourceBase):
 
         And we also set primary IP4/6 for this object depending on the "set_primary_ip" setting.
 
-        If a IP address is set as primary IP for another device then using this IP on another
+        If an IP address is set as primary IP for another device then using this IP on another
         device will be rejected by NetBox.
 
         Setting "always":
@@ -991,7 +994,7 @@ class VMWareHandler(SourceBase):
         Parameters
         ----------
         object_type: (NBDevice, NBVM)
-            NetBoxObject sub class of object to add
+            NetBoxObject subclass of object to add
         object_data: dict
             data of object to add/update
         pnic_data: dict
@@ -999,13 +1002,13 @@ class VMWareHandler(SourceBase):
         vnic_data: dict
             data of virtual interfaces of this object, interface name as key
         nic_ips: dict
-            dict of ips per interface of this object, interface name as key
+            a dict of ips per interface of this object, interface name as key
         p_ipv4: str
             primary IPv4 as string including netmask/prefix
         p_ipv6: str
             primary IPv6 as string including netmask/prefix
         vmware_object: (vim.HostSystem, vim.VirtualMachine)
-            vmware object to pass on to 'add_update_interface' method to setup reevaluation
+            vmware object to pass on to 'add_update_interface' method to set up reevaluation
         disk_data: list
             data of discs which belong to a VM
 
@@ -1061,6 +1064,11 @@ class VMWareHandler(SourceBase):
 
                 device_vm_object = self.inventory.get_by_data(object_type,
                                                               data={"asset_tag": object_data.get("asset_tag")})
+
+        # look for VMs with same serial
+        if object_type == NBVM and device_vm_object is None and object_data.get("serial") is not None:
+            log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
+            device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
 
         if device_vm_object is not None:
             log.debug2("Found a matching %s object: %s" %
@@ -1121,7 +1129,7 @@ class VMWareHandler(SourceBase):
                 object_type == NBVM and disk_data is not None and len(disk_data) > 0:
 
             # create pairs of existing and discovered disks.
-            # currently these disks are only used within the VM model. that's we we use this simple approach and
+            # currently these disks are only used within the VM model. that's why we use this simple approach and
             # just rewrite disk as they appear in order.
             # otherwise we would need to implement a matching function like matching interfaces.
             disk_zip_list = zip_longest(
@@ -1301,7 +1309,7 @@ class VMWareHandler(SourceBase):
         Parameters
         ----------
         obj: vim.Datacenter
-            datacenter object
+            a datacenter object
 
         """
         if self.settings.set_source_name_as_cluster_group is True:
@@ -1376,9 +1384,14 @@ class VMWareHandler(SourceBase):
         data = {
             "name": name,
             "type": {"name": "VMware ESXi"},
-            "group": group,
-            "site": {"name": site_name}
+            "group": group
         }
+
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+            data["scope_id"] = {"name": site_name}
+            data["scope_type"] = "dcim.site"
+        else:
+            data["site"] = {"name": site_name}
 
         tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:
@@ -1636,7 +1649,7 @@ class VMWareHandler(SourceBase):
         serial = None
 
         for serial_num_key in ["SerialNumberTag", "ServiceTag", "EnclosureSerialNumberTag"]:
-            if serial_num_key in identifier_dict.keys():
+            if serial_num_key in identifier_dict.keys() and self.settings.collect_hardware_serial is True:
                 log.debug2(f"Found {serial_num_key}: {get_string_or_none(identifier_dict.get(serial_num_key))}")
                 if serial is None:
                     serial = get_string_or_none(identifier_dict.get(serial_num_key))
@@ -1755,6 +1768,14 @@ class VMWareHandler(SourceBase):
 
         # now iterate over all physical interfaces and collect data
         pnic_data_dict = dict()
+        pnic_hints = dict()
+        # noinspection PyBroadException
+        try:
+            for hint in obj.configManager.networkSystem.QueryNetworkHint(""):
+                pnic_hints[hint.device] = hint
+        except Exception:
+            pass
+
         for pnic in grab(obj, "config.network.pnic", fallback=list()):
 
             pnic_name = grab(pnic, "device")
@@ -1807,7 +1828,6 @@ class VMWareHandler(SourceBase):
 
             # check vlans on this pnic
             pnic_vlans = list()
-
             for pg_name, pg_data in self.network_data["host_pgroup"][name].items():
 
                 if pnic_name in pg_data.get("nics", list()):
@@ -1817,6 +1837,15 @@ class VMWareHandler(SourceBase):
                     })
 
             pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
+
+            if pnic_hints.get(pnic_name) is not None:
+                pnic_switch_port = grab(pnic_hints.get(pnic_name), 'connectedSwitchPort')
+                if pnic_switch_port is not None:
+                    pnic_sp_sys_name = grab(pnic_switch_port, 'systemName')
+                    if pnic_sp_sys_name is None:
+                        pnic_sp_sys_name = grab(pnic_switch_port, 'devId')
+                    if pnic_sp_sys_name is not None:
+                        pnic_description += f" (conn: {pnic_sp_sys_name} - {grab(pnic_switch_port, 'portId')})"
 
             if self.settings.host_nic_exclude_by_mac_list is not None and \
                     pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
@@ -2017,8 +2046,8 @@ class VMWareHandler(SourceBase):
                     vnic_ips[vnic_name].append(int_v6)
 
                     # set first valid IPv6 address as primary IPv6
-                    # not the best way but maybe we can find more information in "spec.ipRouteSpec"
-                    # about default route and we could use that to determine the correct IPv6 address
+                    # not the best way, but maybe we can find more information in "spec.ipRouteSpec"
+                    # about default route, and we could use that to determine the correct IPv6 address
                     if vnic_is_primary is True and host_primary_ip6 is None:
                         host_primary_ip6 = int_v6
 
@@ -2034,10 +2063,10 @@ class VMWareHandler(SourceBase):
         Parse a vCenter VM  add to NetBox once all data is gathered.
 
         VMs are parsed twice. First only "online" VMs are parsed and added. In the second
-        round also "offline" VMs will be parsed. This helps of VMs are cloned and used
+        round also "offline" VMs will be parsed. This helps if VMs are cloned and used
         for upgrades but then have the same name.
 
-        First VM is filtered:
+        First VM will be filtered:
              VM has a cluster and is it permitted
              was VM with same name and cluster already parsed
              does the VM pass the vm_include_filter and vm_exclude_filter
@@ -2150,6 +2179,14 @@ class VMWareHandler(SourceBase):
         platform = get_string_or_none(grab(obj, "config.guestFullName"))
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
+        # extract prettyName from extraConfig exposed by guest tools
+        extra_config = [x.value for x in grab(obj, "config.extraConfig", fallback=[])
+                        if x.key == "guestOS.detailed.data"]
+        if len(extra_config) > 0:
+            pretty_name = [x for x in quoted_split(extra_config[0].replace("' ", "', ")) if x.startswith("prettyName")]
+            if len(pretty_name) > 0:
+                platform = pretty_name[0].replace("prettyName='","")
+
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
 
@@ -2166,7 +2203,16 @@ class VMWareHandler(SourceBase):
         vm_tags = self.get_object_relation(name, "vm_tag_relation")
 
         # get vCenter tags
-        vm_tags.extend(self.collect_object_tags(obj))
+        vcenter_tags = self.collect_object_tags(obj)
+
+        # check if VM tag excludes VM from being synced to NetBox
+        for sync_exclude_tag in self.settings.vm_exclude_by_tag_filter or list():
+            if sync_exclude_tag in vcenter_tags:
+                log.debug(f"Virtual machine vCenter tag '{sync_exclude_tag}' in matches 'vm_exclude_by_tag_filter'. "
+                          f"Skipping")
+                return
+
+        vm_tags.extend(vcenter_tags)
 
         # vm memory depending on setting
         vm_memory = grab(obj, "config.hardware.memoryMB", fallback=0)
@@ -2195,6 +2241,10 @@ class VMWareHandler(SourceBase):
             vm_data["disk"] = int(sum([getattr(comp, "capacityInKB", 0) for comp in hardware_devices
                                        if isinstance(comp, vim.vm.device.VirtualDisk)
                                        ]) / 1024 / 1024)
+
+        # Add adaptation for the new 'serial' field in NetBox 4.1.0 VM model
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.1.0"):
+            vm_data["serial"] = vm_uuid
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}

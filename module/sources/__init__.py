@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -34,7 +34,7 @@ def validate_source(source_class_object=None, state="pre"):
     ----------
     source_class_object: Source handler class/object
     state: str
-        pre if validating a class, post if validating a initialized object
+        pre if validating a class, post if validating an initialized object
 
     """
 
@@ -71,7 +71,7 @@ def validate_source(source_class_object=None, state="pre"):
 def instantiate_sources():
     """
     Instantiate a source handler and add necessary attributes. Also
-    validate source handler pre and post initialization.
+    validate source handler on pre- and post-initialization.
 
     Returns
     -------

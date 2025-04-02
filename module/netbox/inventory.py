@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -19,7 +19,7 @@ log = get_logger()
 
 class NetBoxInventory:
     """
-    Singleton class to manage a inventory of NetBoxObject objects
+    Singleton class to manage an inventory of NetBoxObject objects
     """
 
     base_structure = dict()
@@ -62,18 +62,18 @@ class NetBoxInventory:
 
         Parameters
         ----------
-        object_type: NetBoxObject sub class
+        object_type: NetBoxObject subclass
             object type to find
         nb_id: int
             NetBox ID of object
 
         Returns
         -------
-        (NetBoxObject sub class, None): return object instance if object was found, None otherwise
+        (NetBoxObject subclass, None): return object instance if object was found, None otherwise
         """
 
         if object_type not in NetBoxObject.__subclasses__():
-            raise AttributeError("'%s' object must be a sub class of '%s'." %
+            raise AttributeError("'%s' object must be a subclass of '%s'." %
                                  (object_type.__name__, NetBoxObject.__name__))
 
         if nb_id is None or self.base_structure[object_type.name] is None:
@@ -90,18 +90,18 @@ class NetBoxInventory:
 
         Parameters
         ----------
-        object_type: NetBoxObject sub class
+        object_type: NetBoxObject subclass
             object type to find
         data: dict
             params of object to match
 
         Returns
         -------
-        (NetBoxObject sub class, None): return object instance if object was found, None otherwise
+        (NetBoxObject subclass, None): return object instance if object was found, None otherwise
         """
 
         if object_type not in NetBoxObject.__subclasses__():
-            raise AttributeError("'%s' object must be a sub class of '%s'." %
+            raise AttributeError("'%s' object must be a subclass of '%s'." %
                                  (object_type.__name__, NetBoxObject.__name__))
 
         if data is None or len(self.get_all_items(object_type)) == 0:
@@ -169,7 +169,7 @@ class NetBoxInventory:
         """
 
         if object_type not in NetBoxObject.__subclasses__():
-            raise AttributeError("'%s' object must be a sub class of '%s'." %
+            raise AttributeError("'%s' object must be a subclass of '%s'." %
                                  (object_type.__name__, NetBoxObject.__name__))
 
         if "slug" in object_type.data_model.keys():
@@ -185,7 +185,7 @@ class NetBoxInventory:
 
         Parameters
         ----------
-        object_type: NetBoxObject sub class
+        object_type: NetBoxObject subclass
             object type to add
         data: dict
             Object data to add to the inventory
@@ -216,10 +216,10 @@ class NetBoxInventory:
 
         Parameters
         ----------
-        object_type: NetBoxObject sub class
+        object_type: NetBoxObject subclass
             object type to add/update
         data: dict
-            data used to create a new object or update a existing object
+            data used to create a new object or update an existing object
         read_from_netbox: bool
             True if data was read directly from NetBox
         source: object handler of source
@@ -265,7 +265,7 @@ class NetBoxInventory:
 
         Parameters
         ----------
-        object_type: NetBoxObject sub class
+        object_type: NetBoxObject subclass
             object type to find
 
         Returns
@@ -274,7 +274,7 @@ class NetBoxInventory:
         """
 
         if object_type not in NetBoxObject.__subclasses__():
-            raise ValueError(f"'{object_type.__name__}' object must be a sub class of '{NetBoxObject.__name__}'.")
+            raise ValueError(f"'{object_type.__name__}' object must be a subclass of '{NetBoxObject.__name__}'.")
 
         return self.base_structure.get(object_type.name, list())
 
@@ -335,6 +335,11 @@ class NetBoxInventory:
 
                 # if object was found in source
                 if this_object.source is not None:
+                    # skip tagging of VLANs if vlan sync is disabled
+                    if object_type == NBVLAN and \
+                          grab(this_object.source, "settings.disable_vlan_sync", fallback=False) is True:
+                        continue
+
                     this_object.add_tags([netbox_handler.primary_tag, this_object.source.source_tag])
 
                     # if object was orphaned remove tag again

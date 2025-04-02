@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -15,7 +15,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
     """
         get data from a complex object/json structure with a
         "." separated path information. If a part of a path
-        is not not present then this function returns the
+        is not present then this function returns the
         value of fallback (default: "None").
 
         example structure:
@@ -38,7 +38,7 @@ def grab(structure=None, path=None, separator=".", fallback=None):
         Parameters
         ----------
         structure: dict, list, object
-            object structure to extract data from
+            an object structure to extract data from
         path: str
             nested path to extract
         separator: str

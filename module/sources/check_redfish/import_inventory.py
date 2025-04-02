@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -41,14 +41,17 @@ class CheckRedfish(SourceBase):
         NBClusterGroup,
         NBDeviceRole,
         NBSite,
+        NBSiteGroup,
         NBCluster,
         NBDevice,
         NBInterface,
+        NBMACAddress,
         NBIPAddress,
         NBPrefix,
         NBTenant,
         NBVRF,
         NBVLAN,
+        NBVLANGroup,
         NBPowerPort,
         NBInventoryItem,
         NBCustomField
@@ -214,11 +217,6 @@ class CheckRedfish(SourceBase):
             log.error(f"No system data found for '{self.device_object.get_display_name()}' in inventory file.")
             return
 
-        # get status
-        status = "offline"
-        if get_string_or_none(grab(system, "power_state")) == "On":
-            status = "active"
-
         serial = get_string_or_none(grab(system, "serial"))
         name = get_string_or_none(grab(system, "host_name"))
         manufacturer = get_string_or_none(grab(system, "manufacturer"))
@@ -230,9 +228,9 @@ class CheckRedfish(SourceBase):
                     "name": manufacturer
                 },
             },
-            "status": status,
             "custom_fields": {
-                "health": get_string_or_none(grab(system, "health_status"))
+                "health": get_string_or_none(grab(system, "health_status")),
+                "power_state": get_string_or_none(grab(system, "power_state"))
             }
         }
 
@@ -270,7 +268,7 @@ class CheckRedfish(SourceBase):
             if grab(ps, "data.device") == self.device_object:
                 current_ps.append(ps)
 
-        current_ps.sort(key=lambda x: grab(x, "data.name"))
+        current_ps.sort(key=lambda x: grab(x, "data.name") or "")
 
         ps_index = 1
         ps_items = list()
@@ -399,6 +397,7 @@ class CheckRedfish(SourceBase):
     def update_memory(self):
 
         items = list()
+        memory_size_total = 0
         for memory in grab(self.inventory_file_content, "inventory.memory", fallback=list()):
 
             if grab(memory, "operation_status") in ["NotPresent", "Absent"]:
@@ -415,6 +414,8 @@ class CheckRedfish(SourceBase):
 
             if size_in_mb == 0 or (health_status is None and grab(memory, "operation_status") != "GoodInUse"):
                 continue
+
+            memory_size_total += size_in_mb
 
             name_details = list()
             if dimm_type is not None:
@@ -448,9 +449,21 @@ class CheckRedfish(SourceBase):
 
         self.update_all_items(items)
 
+        if memory_size_total > 0:
+            memory_size_total = memory_size_total / 1024
+            memory_size_unit = "GB"
+            if memory_size_total >= 1024:
+                memory_size_total = memory_size_total / 1024
+                memory_size_unit = "TB"
+
+            custom_fields_data = {"custom_fields": {"host_memory": f"{memory_size_total} {memory_size_unit}"}}
+            self.device_object.update(data=custom_fields_data, source=self)
+
     def update_proc(self):
 
         items = list()
+        num_cores = 0
+        cpu_name = ""
         for processor in grab(self.inventory_file_content, "inventory.processor", fallback=list()):
 
             if grab(processor, "operation_status") in ["NotPresent", "Absent"]:
@@ -465,6 +478,7 @@ class CheckRedfish(SourceBase):
             health_status = get_string_or_none(grab(processor, "health_status"))
 
             name = f"{socket} ({model})"
+            cpu_name = model
 
             if current_speed is not None:
                 current_speed = f"{current_speed / 1000}GHz"
@@ -477,6 +491,7 @@ class CheckRedfish(SourceBase):
                 description.append(f"{instruction_set}")
             if cores is not None:
                 description.append(f"Cores: {cores}")
+                num_cores += int(cores)
             if threads is not None:
                 description.append(f"Threads: {threads}")
 
@@ -492,6 +507,10 @@ class CheckRedfish(SourceBase):
             })
 
         self.update_all_items(items)
+
+        if num_cores > 0:
+            custom_fields_data = {"custom_fields": {"host_cpu_cores": f"{num_cores} {cpu_name}"}}
+            self.device_object.update(data=custom_fields_data, source=self)
 
     def update_physical_drive(self):
 
@@ -842,6 +861,7 @@ class CheckRedfish(SourceBase):
 
                 this_link_type = port_data.get("type")
                 mgmt_only = port_data.get("mgmt_only")
+                mac_address = port_data.get("mac_address")
                 data_to_update = self.patch_data(nic_object, port_data, self.settings.overwrite_interface_attributes)
 
                 # always overwrite nic type if discovered
@@ -849,6 +869,9 @@ class CheckRedfish(SourceBase):
                     data_to_update["type"] = this_link_type
 
                 data_to_update["mgmt_only"] = mgmt_only
+
+                if mac_address is not None:
+                    data_to_update["mac_address"] = mac_address
 
                 port_data = data_to_update
 
@@ -895,7 +918,7 @@ class CheckRedfish(SourceBase):
         Parameters
         ----------
         items: list
-            list of items to update
+            a list of items to update
 
         Returns
         -------
@@ -944,7 +967,7 @@ class CheckRedfish(SourceBase):
                 unmatched_inventory_items.append(item)
 
         # sort unmatched items by full_name
-        unmatched_inventory_items.sort(key=lambda x: x.get("full_name"))
+        unmatched_inventory_items.sort(key=lambda x: x.get("full_name") or "")
 
         # iterate over current NetBox inventory items
         # if name did not match try to assign unmatched items in alphabetical order
@@ -974,7 +997,7 @@ class CheckRedfish(SourceBase):
         Parameters
         ----------
         item_data: dict
-            dict with data for item to update
+            a dict with data for item to update
         inventory_object: NBInventoryItem, None
             the NetBox inventory item to update.
 
@@ -1035,6 +1058,36 @@ class CheckRedfish(SourceBase):
         self.inventory.add_update_object(NBTag, data={
             "name": self.source_tag,
             "description": f"Marks objects synced from check_redfish inventory '{self.name}' to this NetBox Instance."
+        })
+
+        self.add_update_custom_field({
+            "name": "host_cpu_cores",
+            "label": "Physical CPU Cores",
+            "object_types": [
+                "dcim.device"
+            ],
+            "type": "text",
+            "description": f"Reported Host CPU cores"
+        })
+
+        self.add_update_custom_field({
+            "name": "host_memory",
+            "label": "Memory",
+            "object_types": [
+                "dcim.device"
+            ],
+            "type": "text",
+            "description": f"Reported size of Memory"
+        })
+
+        self.add_update_custom_field({
+            "name": "power_state",
+            "label": "Power State",
+            "object_types": [
+                "dcim.device"
+            ],
+            "type": "text",
+            "description": "Device power state"
         })
 
         # add Firmware

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -33,7 +33,7 @@ unset DOCKER_TLS_VERIFY
 unset DOCKER_HOST
 unset DOCKER_CERT_PATH
 
-find module -type d -name "__pycache__" -exec rm -rf {} \;
+find module -type d -name "__pycache__" -print0 | xargs -0 -n1 rm -rf
 docker --config ./docker-tmp login
 docker --config ./docker-tmp buildx create --use
 if [[ $FINAL == true ]]; then

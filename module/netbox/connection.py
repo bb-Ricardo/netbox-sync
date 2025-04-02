@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -217,20 +217,20 @@ class NetBoxHandler:
 
         Parameters
         ----------
-        object_class: NetBoxObject sub class
+        object_class: NetBoxObject subclass
             class definition of the desired NetBox object
         req_type: str
             GET, PATCH, PUT, DELETE
         data: dict
-            data which shall be send to NetBox
+            data which shall be sent to NetBox
         params: dict
-            dict of URL params which should be passed to NetBox
+            dictionary of URL params which should be passed to NetBox
         nb_id: int
             ID of the NetBox object which will be appended to the requested NetBox URL
 
         Returns
         -------
-        (dict, bool, None): of returned NetBox data. If object was requested to be deleted and it was
+        dict, bool, None: of returned NetBox data. If object was requested to be deleted, and it was
                             successful then True will be returned. None if request failed or was empty
         """
 
@@ -373,12 +373,12 @@ class NetBoxHandler:
         """
         Request all current NetBox objects. Use caching whenever possible.
         Objects must provide "last_updated" attribute to support caching for this object type.
-        Otherwise it's not possible to query only changed objects since last run. If attribute is
+        Otherwise, it's not possible to query only changed objects since last run. If attribute is
         not present all objects will be requested (looking at you *Interfaces)
 
         Parameters
         ----------
-        netbox_objects_to_query: list of NetBoxObject sub classes
+        netbox_objects_to_query: list of NetBoxObject subclasses
             NetBox items to query
 
         """
@@ -585,14 +585,14 @@ class NetBoxHandler:
 
     def update_object(self, nb_object_sub_class, unset=False, last_run=False):
         """
-        Iterate over all objects of a certain NetBoxObject sub class and add/update them.
+        Iterate over all objects of a certain NetBoxObject subclass and add/update them.
         But first update objects which this object class depends on.
         If some dependencies are unresolvable then these will be removed from the request
         and re added later to the object to try update object in a third run.
 
         Parameters
         ----------
-        nb_object_sub_class: NetBoxObject sub class
+        nb_object_sub_class: NetBoxObject subclass
             NetBox objects to update
         unset: bool
             True if only unset items should be deleted
@@ -650,7 +650,8 @@ class NetBoxHandler:
                         # resolve dependency issues in last run
                         # primary IP always set in last run
                         if value.get_nb_reference() is None or \
-                                (key.startswith("primary_ip") and last_run is False):
+                                (key.startswith("primary_ip") and last_run is False) or \
+                                (key.startswith("primary_mac_address") and last_run is False):
                             unresolved_dependency_data[key] = value
                         else:
                             data_to_patch[key] = value.get_nb_reference()
@@ -658,9 +659,9 @@ class NetBoxHandler:
                     else:
                         data_to_patch[key] = value
 
-            # special case for IP address
-            if isinstance(this_object, NBIPAddress):
-                # if object is new and and has no id, then we need to remove assigned_object_type from data_to_patch
+            # special case for IP and MAC addresses
+            if isinstance(this_object, (NBIPAddress, NBMACAddress)):
+                # if object is new and has no id, then we need to remove assigned_object_type from data_to_patch
                 if "assigned_object_id" in unresolved_dependency_data.keys() and \
                         "assigned_object_type" in data_to_patch.keys():
                     del data_to_patch["assigned_object_type"]
@@ -674,7 +675,7 @@ class NetBoxHandler:
                 req_type = "POST"
                 action = "Creating new"
 
-                # if its not a new object then update it
+                # if it's not a new object then update it
                 if this_object.is_new is False:
                     nb_id = this_object.nb_id
                     req_type = "PATCH"
@@ -928,7 +929,7 @@ class NetBoxHandler:
             if tag_description is None or not tag_description.startswith(self.primary_tag):
                 continue
 
-            if tag_tagged_items is None or tag_tagged_items != 0:
+            if tag_tagged_items is None or tag_tagged_items != 0 or this_tag.used is True:
                 continue
 
             log.info(f"Deleting unused tag '{this_tag.get_display_name()}'")

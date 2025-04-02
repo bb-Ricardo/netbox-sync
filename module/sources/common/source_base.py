@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -10,12 +10,11 @@
 import re
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
-from typing import List
+from packaging import version
 
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
-from module.sources.common.excluded_vlan import ExcludedVLANName, ExcludedVLANID
 
 log = get_logger()
 
@@ -60,7 +59,7 @@ class SourceBase:
                 MAC address of interfaces match exactly, type of interface does not matter
 
             If there are interfaces which don't match at all then the unmatched interfaces will be
-            matched 1:1. Sort both lists (unmatched current interfaces, unmatched new new interfaces)
+            matched 1:1. Sort both lists (unmatched current interfaces, unmatched new interfaces)
             by name and assign them each other.
 
                 eth0 > vNIC 1
@@ -80,7 +79,7 @@ class SourceBase:
         Returns
         -------
         dict: {"$interface_name": associated_interface_object}
-            if no current current interface was left to match "None" will be returned instead of
+            if no current interface was left to match "None" will be returned instead of
             a matching interface object
         """
 
@@ -159,7 +158,7 @@ class SourceBase:
                 if grab(matching_int, "data.name") in current_object_interface_names:
                     current_object_interface_names.remove(grab(matching_int, "data.name"))
 
-            # no match found, we match the left overs just by #1 -> #1, #2 -> #2, ...
+            # no match found, we match the leftovers just by #1 -> #1, #2 -> #2, ...
             else:
                 unmatched_interface_names.append(int_name)
 
@@ -180,9 +179,9 @@ class SourceBase:
 
         return return_data
 
-    def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None):
+    def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None) -> NBPrefix|None:
         """
-        This is a lazy approach to find longest matching prefix to an IP address.
+        This is a lazy approach to find the longest matching prefix to an IP address.
         If site_name is set only IP prefixes from that site are matched.
 
         Parameters
@@ -217,7 +216,7 @@ class SourceBase:
 
         for prefix in self.inventory.get_all_items(NBPrefix):
 
-            if grab(prefix, "data.site") != site_object:
+            if not prefix.matches_site(site_object):
                 continue
 
             prefix_network = grab(prefix, f"data.{NBPrefix.primary_key}")
@@ -247,38 +246,47 @@ class SourceBase:
 
         Parameters
         ----------
-        interface_object: NBVMInterface, NBInterface, None
+        interface_object: NBVMInterface | NBInterface | None
             object handle of the current interface (if existent, otherwise None)
-        device_object: NBVM, NBDevice
+        device_object: NBVM | NBDevice
             device object handle this interface belongs to
         interface_data: dict
             dictionary with interface attributes to add to this interface
         interface_ips: list
-            list of ip addresses which are assigned to this interface
-        vmware_object: (vim.HostSystem, vim.VirtualMachine)
+            a list of ip addresses which are assigned to this interface
+        vmware_object: vim.HostSystem | vim.VirtualMachine
             object to add to list of objects to reevaluate
 
         Returns
         -------
-        objects: tuple((NBVMInterface, NBInterface), list)
+        objects:
+            tuple of NBVMInterface | NBInterface and list
             tuple with interface object that was added/updated and a list of ip address objects which were
             added to this interface
         """
 
-        ip_tenant_inheritance_order = None
-        if "ip_tenant_inheritance_order" in self.settings:
-            ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
+        # handle change to mac_address object from NetBox 4.2 on
+        interface_mac_address = None
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
+                interface_data.get("mac_address") is not None:
+            interface_mac_address = interface_data.get("mac_address")
+            del(interface_data["mac_address"])
+
+        ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
 
         if not isinstance(interface_data, dict):
             log.error(f"Attribute 'interface_data' must be a dict() got {type(interface_data)}.")
             return None
 
+        device_object_cluster = grab(device_object, "data.cluster")
+        device_object_site = grab(device_object, "data.site")
+
         if type(device_object) == NBVM:
             interface_class = NBVMInterface
-            site_name = grab(device_object, "data.cluster.data.site.data.name")
+            site_name = device_object_cluster.get_site_name()
         elif type(device_object) == NBDevice:
             interface_class = NBInterface
-            site_name = grab(device_object, "data.site.data.name")
+            site_name = device_object.get_site_name()
         elif device_object is None:
             log.error(f"No device/VM object submitted to attach interface '{grab(interface_data, 'name')}' to.")
             return None
@@ -313,10 +321,58 @@ class SourceBase:
         else:
             interface_object.update(data=interface_data, source=self)
 
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
+                interface_mac_address is not None:
+
+            primary_mac_address_data = {
+                "mac_address": interface_mac_address,
+                "assigned_object_id": interface_object,
+                "assigned_object_type": interface_class
+            }
+
+            primary_mac_address_object = None
+            # check for associated MAC addresses on existing interface
+            if interface_object.is_new is False:
+                current_primary_mac_address_object = grab(interface_object, "data.primary_mac_address")
+                if grab(current_primary_mac_address_object, "data.mac_address") == interface_mac_address:
+                    primary_mac_address_object = current_primary_mac_address_object
+                for mac_address_object in interface_object.get_mac_addresses():
+                    if (primary_mac_address_object is None and
+                            grab(mac_address_object, "data.mac_address") == interface_mac_address):
+                        primary_mac_address_object = mac_address_object
+                    if mac_address_object is not primary_mac_address_object:
+                        mac_address_object.remove_interface_association()
+
+            # if a new interface or not matching assigned MAC address, try to find an existing unassigned mac address
+            if primary_mac_address_object is None:
+                for mac_address_object in self.inventory.get_all_items(NBMACAddress):
+                    if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
+                            grab(mac_address_object, "data.assigned_object_id") is None):
+                        primary_mac_address_object = mac_address_object
+                        break
+
+            # of no existing mac address could be found, create a new one
+            if primary_mac_address_object is None:
+                primary_mac_address_object = self.inventory.add_object(NBMACAddress, data=primary_mac_address_data,
+                                                                       source=self)
+            else:
+                primary_mac_address_object.update(data=primary_mac_address_data, source=self)
+
+            interface_object.update(data={"primary_mac_address": primary_mac_address_object}, source=self)
+
+        # skip handling of IPs for VMs with not installed/running guest tools
+        skip_ip_handling = False
+        if type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
+            log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
+            skip_ip_handling = True
+
         ip_address_objects = list()
         matching_ip_prefixes = list()
         # add all interface IPs
         for nic_ip in interface_ips or list():
+
+            if skip_ip_handling is True:
+                continue
 
             # get IP and prefix length
             try:
@@ -335,22 +391,21 @@ class SourceBase:
             prefix_tenant = None
 
             # test for site prefixes first
-            matching_site_name = site_name
-            matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object, matching_site_name)
+            matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object, site_name)
 
             # nothing was found then check prefixes without site name
             if matching_ip_prefix is None:
-                matching_site_name = None
                 matching_ip_prefix = self.return_longest_matching_prefix_for_ip(ip_object)
 
             # matching prefix found, get data from prefix
             if matching_ip_prefix is not None:
 
                 this_prefix = grab(matching_ip_prefix, f"data.{NBPrefix.primary_key}")
-                if matching_site_name is None:
+                prefix_scope = matching_ip_prefix.get_scope_display_name()
+                if prefix_scope is None:
                     log.debug2(f"Found IP '{ip_object}' matches global prefix '{this_prefix}'")
                 else:
-                    log.debug2(f"Found IP '{ip_object}' matches site '{matching_site_name}' prefix "
+                    log.debug2(f"Found IP '{ip_object}' matches {prefix_scope} prefix "
                                f"'{this_prefix}'")
 
                 # check if prefix net size and ip address prefix length match
@@ -369,7 +424,7 @@ class SourceBase:
 
                 # check if IP address is of type IP interface (includes prefix length)
                 if type(ip_object) in [IPv6Address, IPv4Address]:
-                    log.warning(f"{log_text}. Unable to add IP address to NetBox.")
+                    log.warning(f"{log_text}. Unable to add IP address to NetBox")
                     continue
                 else:
                     log.debug2(log_text)
@@ -380,7 +435,7 @@ class SourceBase:
                 if type(this_prefix) in [IPv4Network, IPv6Network]:
                     ip_object = ip_interface(f"{ip_object}/{this_prefix.prefixlen}")
                 else:
-                    log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP to NetBox")
+                    log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP address to NetBox")
                     continue
 
             # try to find matching IP address object
@@ -453,6 +508,12 @@ class SourceBase:
 
                     this_ip_object = ip
 
+                if grab(ip, "data.role.value") == "anycast":
+                    log.debug(f"{ip.name} '{ip.get_display_name()}' is an Anycast address and "
+                              f"can be assigned to multiple interfaces at the same time.")
+                    skip_this_ip = True
+                    break
+
                 if current_nic_enabled == this_nic_enabled:
 
                     this_log_handler = log.warning
@@ -483,6 +544,21 @@ class SourceBase:
                 "assigned_object_id": interface_object,
             }
 
+            # skip reassignment if IP is assigned to sub interface of a VM
+            if (type(device_object) == NBVM and this_ip_object is not None and
+                    grab(this_ip_object.get_interface(), "data.parent") is not None):
+                current_ip_nic = this_ip_object.get_interface()
+                current_ip_nic_parent = grab(current_ip_nic, "data.parent")
+                if isinstance(current_ip_nic_parent, dict):
+                    current_ip_nic_parent = self.inventory.get_by_id(NBVMInterface,
+                                                                     nb_id=current_ip_nic_parent.get("id"))
+
+                if current_ip_nic_parent == interface_object:
+                    log.debug(f"{this_ip_object.name} '{this_ip_object.get_display_name()}' is assigned to sub interface "
+                              f"'{current_ip_nic.get_display_name()}' of '{interface_object.get_display_name()}'. "
+                              f"Not changing assignment")
+                    nic_ip_data["assigned_object_id"] = current_ip_nic
+
             # grab tenant from device/vm if prefix didn't provide a tenant
             ip_tenant = None
             if isinstance(ip_tenant_inheritance_order, list) and "disabled" not in ip_tenant_inheritance_order:
@@ -497,13 +573,13 @@ class SourceBase:
                         ip_tenant = prefix_tenant
                         break
 
+            if possible_ip_vrf is not None:
+                nic_ip_data["vrf"] = possible_ip_vrf
+            if ip_tenant is not None:
+                nic_ip_data["tenant"] = ip_tenant
+
             if not isinstance(this_ip_object, NBIPAddress):
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
-
-                if possible_ip_vrf is not None:
-                    nic_ip_data["vrf"] = possible_ip_vrf
-                if ip_tenant is not None:
-                    nic_ip_data["tenant"] = ip_tenant
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
 
@@ -512,17 +588,20 @@ class SourceBase:
 
                 log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
 
-                if grab(this_ip_object, "data.vrf") is None and possible_ip_vrf is not None:
-                    nic_ip_data["vrf"] = possible_ip_vrf
-
-                if grab(this_ip_object, "data.tenant") is None and ip_tenant is not None:
-                    nic_ip_data["tenant"] = ip_tenant
-
                 this_ip_object.update(data=nic_ip_data, source=self)
 
             ip_address_objects.append(this_ip_object)
 
         for current_ip in interface_object.get_ip_addresses():
+
+            if skip_ip_handling is True:
+                continue
+
+            if grab(current_ip, "data.role.value") == "anycast":
+                log.debug2(f"{current_ip.name} '{current_ip.get_display_name()}' is an Anycast address and will "
+                          f"NOT be deleted from interface")
+                continue
+
             if current_ip not in ip_address_objects:
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
                          f"therefore removed from this interface")
@@ -561,7 +640,8 @@ class SourceBase:
         vlan_interface_data = dict()
         if untagged_vlan is not None or (untagged_vlan is None and len(tagged_vlans) == 0):
             if matching_untagged_vlan is None and untagged_vlan is not None:
-                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, site_name)
+                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, device_object_site,
+                                                                        device_object_cluster)
 
                 # don't sync newly discovered VLANs to NetBox
                 if self.add_vlan_object_to_netbox(matching_untagged_vlan, site_name) is False:
@@ -572,7 +652,8 @@ class SourceBase:
                            f"untagged interface VLAN.")
 
             if matching_untagged_vlan is not None:
-                vlan_interface_data["untagged_vlan"] = matching_untagged_vlan
+                vlan_interface_data["untagged_vlan"] = self.add_vlan_group(matching_untagged_vlan, site_name,
+                                                                           device_object_cluster)
                 if grab(interface_object, "data.mode") is None:
                     vlan_interface_data["mode"] = "access"
 
@@ -584,14 +665,16 @@ class SourceBase:
                 log.debug2(f"Found matching prefix VLAN {matching_tagged_vlan.get_display_name()} for "
                            f"tagged interface VLAN.")
             else:
-                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, site_name)
+                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, device_object_site,
+                                                                      device_object_cluster)
 
                 # don't sync newly discovered VLANs to NetBox
                 if self.add_vlan_object_to_netbox(matching_tagged_vlan, site_name) is False:
                     matching_tagged_vlan = None
 
             if matching_tagged_vlan is not None:
-                compiled_tagged_vlans.append(matching_tagged_vlan)
+                compiled_tagged_vlans.append(self.add_vlan_group(matching_tagged_vlan, site_name,
+                                                                 device_object_cluster))
 
         if len(compiled_tagged_vlans) > 0:
             vlan_interface_data["tagged_vlans"] = compiled_tagged_vlans
@@ -618,7 +701,7 @@ class SourceBase:
         Returns
         -------
         data_to_update: dict
-            dict with data to append/patch
+            A dict with data to append/patch
         """
 
         if overwrite is True:
@@ -633,20 +716,124 @@ class SourceBase:
 
         return data_to_update
 
-    def get_vlan_object_if_exists(self, vlan_data=None, vlan_site=None):
+    def add_vlan_group(self, vlan_data, vlan_site, vlan_cluster) -> NBVLAN | dict:
+        """
+        This function will try to find a matching VLAN group according to the settings.
+        Name matching will take precedence over ID matching. First match wins.
+
+        If nothing matches the input data the submitted 'vlan_data' will be returned
+
+        Parameters
+        ----------
+        vlan_data: dict | NBVLAN
+            A dict or NBVLAN object
+        vlan_site: NBSite | str | None
+            name of site for the VLAN
+        vlan_cluster: NBCluster | str | None
+
+        Returns
+        -------
+        NBVLAN | dict: the input vlan_data enriched with VLAN group if a match was found
+
+        """
+
+        # get VLAN details
+        if isinstance(vlan_data, NBVLAN):
+            if vlan_data.is_new is False:
+                return vlan_data
+
+            vlan_name = grab(vlan_data, "data.name")
+            vlan_id = grab(vlan_data, "data.vid")
+            vlan_current_site = grab(vlan_data, "data.site")
+            # vlan already has a group attached
+            if grab(vlan_data, "data.group") is not None:
+                return vlan_data
+
+        elif isinstance(vlan_data, dict):
+            vlan_name = vlan_data.get("name")
+            vlan_id = vlan_data.get("vid")
+            vlan_current_site = vlan_data.get("site")
+        else:
+            return vlan_data
+
+        if isinstance(vlan_site, str):
+            vlan_site = self.inventory.get_by_data(NBSite, data={"name": vlan_site})
+
+        if isinstance(vlan_cluster, str):
+            vlan_cluster = self.inventory.get_by_data(NBCluster, data={"name": vlan_cluster})
+
+        if isinstance(vlan_current_site, dict):
+            vlan_current_site = self.inventory.get_by_data(NBSite, data=vlan_current_site)
+
+        log_text = f"Trying to find a matching VLAN Group based on the VLAN name '{vlan_name}'"
+        if vlan_site is not None:
+            log_text += f", site '{vlan_site.get_display_name()}'"
+        if vlan_cluster is not None:
+            log_text += f", cluster '{vlan_cluster.get_display_name()}'"
+        log_text += f" and VLAN ID '{vlan_id}'"
+        log.debug(log_text)
+
+        vlan_group = None
+        for vlan_filter, vlan_group_name in self.settings.vlan_group_relation_by_name or list():
+            if vlan_filter.matches(vlan_name, vlan_site):
+                for inventory_vlan_group in self.inventory.get_all_items(NBVLANGroup):
+
+                    if grab(inventory_vlan_group, "data.name") != vlan_group_name:
+                        continue
+
+                    if inventory_vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                        vlan_group = inventory_vlan_group
+                        break
+
+        if vlan_group is None:
+            for vlan_filter, vlan_group_name in self.settings.vlan_group_relation_by_id or list():
+                if vlan_filter.matches(vlan_id, vlan_site):
+                    for inventory_vlan_group in self.inventory.get_all_items(NBVLANGroup):
+
+                        if grab(inventory_vlan_group, "data.name") != vlan_group_name:
+                            continue
+
+                        if inventory_vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                            vlan_group = inventory_vlan_group
+                            break
+
+        if vlan_group is not None:
+            log.debug2(f"Found matching VLAN group '{vlan_group.get_display_name()}'")
+            """
+            If a VLAN group has been found we also need to check if the vlan site and the scope of the VLAN group are
+            matching. If the VLAN group has a different scope then site, we need to remove the site from the VLAN.
+
+            Mitigation for: https://github.com/netbox-community/netbox/issues/18706
+            """
+            if isinstance(vlan_data, NBVLAN):
+                vlan_data.update(data={"group": vlan_group})
+                if vlan_current_site is not vlan_group.data.get("scope_id"):
+                    vlan_data.unset_attribute("site")
+            elif isinstance(vlan_data, dict):
+                vlan_data["group"] = vlan_group
+                if vlan_current_site is not vlan_group.data.get("scope_id"):
+                    del(vlan_data["site"])
+        else:
+            log.debug2("No matching VLAN group found")
+
+        return vlan_data
+
+    def get_vlan_object_if_exists(self, vlan_data=None, vlan_site=None, vlan_cluster=None):
         """
         This function will try to find a matching VLAN object based on 'vlan_data'
         Will return matching objects in following order:
-            * exact match: VLAN id and site match
-            * global match: VLAN id matches but the VLAN has no site assigned
+            * exact match: VLAN ID and site or VLAN Group which matches site or cluster
+            * global match: VLAN ID matches but the VLAN has no site assigned
         If nothing matches the input data from 'vlan_data' will be returned
 
         Parameters
         ----------
         vlan_data: dict
-            dict with NBVLAN data attributes
-        vlan_site: str
-            name of site the VLAN could be present
+            A dict with NBVLAN data attributes
+        vlan_site: NBSite
+            site object
+        vlan_cluster: NBCluster
+            cluster object
 
         Returns
         -------
@@ -664,10 +851,10 @@ class SourceBase:
             raise ValueError("Value of 'vlan_data' needs to be a dict.")
 
         # check existing Devices for matches
-        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN id '{vlan_data.get('vid')}'")
+        log.debug2(f"Trying to find a {NBVLAN.name} based on the VLAN ID '{vlan_data.get('vid')}'")
 
         if vlan_data.get("vid") is None:
-            log.debug("No VLAN id set in vlan_data while trying to find matching VLAN.")
+            log.debug("No VLAN ID set in vlan_data while trying to find matching VLAN.")
             return vlan_data
 
         if vlan_site is None:
@@ -675,35 +862,58 @@ class SourceBase:
         elif isinstance(vlan_site, str):
             vlan_site = self.inventory.get_by_data(NBSite, data={"name": vlan_site})
 
+        if isinstance(vlan_cluster, str):
+            vlan_cluster = self.inventory.get_by_data(NBCluster, data={"name": vlan_cluster})
+
         return_data = vlan_data
-        vlan_object_including_site = None
-        vlan_object_without_site = None
+        vlan_object_by_site = None
+        vlan_object_by_group = None
+        vlan_object_global = None
 
         for vlan in self.inventory.get_all_items(NBVLAN):
 
             if grab(vlan, "data.vid") != vlan_data.get("vid"):
                 continue
 
+            # try finding matching VLAN by site
             if vlan_site is not None and grab(vlan, "data.site") == vlan_site:
-                vlan_object_including_site = vlan
+                vlan_object_by_site = vlan
+                break
 
-            if grab(vlan, "data.site") is None:
-                vlan_object_without_site = vlan
+            # try find matching VLAN by group
+            if grab(vlan, "data.group") is not None:
+                vlan_group = grab(vlan, "data.group")
+                if vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                    vlan_object_by_group = vlan
+                    break
 
-        if isinstance(vlan_object_including_site, NetBoxObject):
-            return_data = vlan_object_including_site
-            log.debug2("Found a exact matching %s object: %s" %
-                       (vlan_object_including_site.name,
-                        vlan_object_including_site.get_display_name(including_second_key=True)))
+            if grab(vlan, "data.site") is None and grab(vlan, "data.group") is None:
+                vlan_object_global = vlan
 
-        elif isinstance(vlan_object_without_site, NetBoxObject):
-            return_data = vlan_object_without_site
-            log.debug2("Found a global matching %s object: %s" %
-                       (vlan_object_without_site.name,
-                        vlan_object_without_site.get_display_name(including_second_key=True)))
+        if isinstance(vlan_object_by_site, NetBoxObject):
+            return_data = vlan_object_by_site
+            log.debug2(f"Found a {return_data.name} object which matches the site '{vlan_site.get_display_name()}': %s"
+                       % vlan_object_by_site.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_by_group, NetBoxObject):
+            return_data = vlan_object_by_group
+            vlan_group_object = grab(vlan_object_by_group, "data.group")
+            vlan_group_object_scope_object = grab(vlan_object_by_group, "data.scope_id")
+            scope_details = ""
+            if vlan_group_object_scope_object is not None:
+                scope_details = (f" ({vlan_group_object_scope_object.name} "
+                                 f"{vlan_group_object_scope_object.get_display_name()})")
+            log.debug2(f"Found a {return_data.name} object which matches the {vlan_group_object.name} "
+                       f"'{vlan_group_object.get_display_name()}'{scope_details}: %s" %
+                       vlan_object_by_group.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_global, NetBoxObject):
+            return_data = vlan_object_global
+            log.debug2(f"Found a global matching {return_data.name} object: %s" %
+                       vlan_object_global.get_display_name(including_second_key=True))
 
         else:
-            log.debug2("No matching existing VLAN found for this VLAN id.")
+            log.debug2("No matching existing VLAN found for this VLAN ID.")
 
         return return_data
 
@@ -724,17 +934,6 @@ class SourceBase:
 
         """
 
-        # get config data
-        disable_vlan_sync = False
-        vlan_sync_exclude_by_name: List[ExcludedVLANName] = list()
-        vlan_sync_exclude_by_id: List[ExcludedVLANID] = list()
-        if "disable_vlan_sync" in self.settings:
-            disable_vlan_sync = self.settings.disable_vlan_sync
-        if "vlan_sync_exclude_by_name" in self.settings:
-            vlan_sync_exclude_by_name = self.settings.vlan_sync_exclude_by_name
-        if "vlan_sync_exclude_by_id" in self.settings:
-            vlan_sync_exclude_by_id = self.settings.vlan_sync_exclude_by_id
-
         # VLAN is already an existing NetBox VLAN, then it can be reused
         if isinstance(vlan_data, NetBoxObject):
             return True
@@ -742,7 +941,7 @@ class SourceBase:
         if vlan_data is None:
             return False
 
-        if disable_vlan_sync is True:
+        if self.settings.disable_vlan_sync is True:
             return False
 
         # get VLAN details
@@ -757,11 +956,11 @@ class SourceBase:
             log.warning(f"Skipping sync of invalid VLAN '{vlan_name}' ID: '{vlan_id}'")
             return False
 
-        for excluded_vlan in vlan_sync_exclude_by_name or list():
+        for excluded_vlan in self.settings.vlan_sync_exclude_by_name or list():
             if excluded_vlan.matches(vlan_name, site_name):
                 return False
 
-        for excluded_vlan in vlan_sync_exclude_by_id or list():
+        for excluded_vlan in self.settings.vlan_sync_exclude_by_id or list():
             if excluded_vlan.matches(vlan_id, site_name):
                 return False
 

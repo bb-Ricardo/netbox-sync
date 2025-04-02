@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -30,6 +30,10 @@ class ConfigOptions:
     def __contains__(self, key):
         return key in self.__dict__
 
+    def __getattr__(self, item):
+        if item in self:
+            return getattr(self, item)
+        return None
 
 class ConfigBase:
     """

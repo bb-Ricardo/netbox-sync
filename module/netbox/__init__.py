@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -16,9 +16,11 @@ from module.netbox.object_classes import (
     NBTagList,
     NBTenant,
     NBSite,
+    NBSiteGroup,
     NBVRF,
     NBVLAN,
     NBVLANList,
+    NBVLANGroup,
     NBPrefix,
     NBManufacturer,
     NBDeviceType,
@@ -33,6 +35,7 @@ from module.netbox.object_classes import (
     NBVirtualDisk,
     NBInterface,
     NBIPAddress,
+    NBMACAddress,
     NBFHRPGroupItem,
     NBInventoryItem,
     NBPowerPort

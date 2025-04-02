@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -23,7 +23,7 @@ def parse_command_line(self_description=None):
     Parameters
     ----------
     self_description: str
-        short self description of this program
+        short self-description of this program
 
     Returns
     -------

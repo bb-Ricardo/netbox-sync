@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -13,19 +13,17 @@ import re
 log = get_logger()
 
 
-class ExcludedVLAN:
-    """
-    initializes and verifies if an VLAN should be excluded from being synced to NetBox
-    """
+class VLANFilter:
 
-    def __init__(self, vlan):
+    def __init__(self, vlan, filter_type):
         self._validation_failed = False
 
         self.site = None
+        self.filter_type = filter_type
 
-        if vlan is None:
+        if vlan is None or len(f"{vlan}") == 0:
             self._validation_failed = True
-            log.error("submitted VLAN string for VLAN exclusion was 'None'")
+            log.error(f"submitted VLAN {self.filter_type} string for VLAN was " + "'None'" if vlan is None else "empty")
             return
 
         vlan_split = [x.replace('\\', "") for x in re.split(r'(?<!\\)/', vlan)]
@@ -37,7 +35,7 @@ class ExcludedVLAN:
             self._value = vlan_split[1]
         else:
             self._validation_failed = True
-            log.error("submitted VLAN string for VLAN exclusion contains name or site including '/'. " +
+            log.error(f"submitted VLAN {self.filter_type} string for VLAN filter contains name or site including '/'. " +
                       "A '/' which belongs to the name needs to be escaped like '\\/'.")
 
     def site_matches(self, site_name):
@@ -46,9 +44,10 @@ class ExcludedVLAN:
             return True
 
         # string or regex matches
+        # noinspection PyBroadException
         try:
             if ([self.site, site_name]).count(None) == 0 and re.search(f"^{self.site}$", site_name):
-                log.debug2(f"VLAN exclude site name '{site_name}' matches '{self.site}'")
+                log.debug2(f"VLAN {self.filter_type} site name '{site_name}' matches '{self.site}'")
                 return True
         except Exception:
             return False
@@ -60,11 +59,14 @@ class ExcludedVLAN:
         return not self._validation_failed
 
 
-class ExcludedVLANName(ExcludedVLAN):
+class FilterVLANByName(VLANFilter):
+    """
+    initializes and verifies if a VLAN matches by name
+    """
 
-    def __init__(self, vlan):
+    def __init__(self, vlan, filter_type="exclude"):
 
-        super().__init__(vlan)
+        super().__init__(vlan, filter_type)
 
         self.name = None
 
@@ -81,20 +83,23 @@ class ExcludedVLANName(ExcludedVLAN):
         # string or regex matches
         try:
             if ([self.name, name]).count(None) == 0 and re.search(f"^{self.name}$", name):
-                log.debug2(f"VLAN exclude name '{name}' matches '{self.name}'")
+                log.debug2(f"VLAN {self.filter_type} name '{name}' matches '{self.name}'")
                 return True
         except Exception as e:
-            log.warning(f"Unable to match exclude VLAN name '{name}' to '{self.name}': {e}")
+            log.warning(f"Unable to match {self.filter_type} VLAN name '{name}' to '{self.name}': {e}")
             return False
 
         return False
 
 
-class ExcludedVLANID(ExcludedVLAN):
+class FilterVLANByID(VLANFilter):
+    """
+    initializes and verifies if a VLAN matches by ID
+    """
 
-    def __init__(self, vlan):
+    def __init__(self, vlan, filter_type="exclude"):
 
-        super().__init__(vlan)
+        super().__init__(vlan, filter_type)
 
         self.range = None
 
@@ -103,7 +108,7 @@ class ExcludedVLANID(ExcludedVLAN):
 
         try:
             if "-" in self._value and int(self._value.split("-")[0]) >= int(self._value.split("-")[1]):
-                log.error(f"range has to start with the lower id: {self._value}")
+                log.error(f"VLAN {self.filter_type} range has to start with the lower ID: {self._value}")
                 self._validation_failed = True
                 return
 
@@ -112,22 +117,21 @@ class ExcludedVLANID(ExcludedVLAN):
                  for i in self._value.split(',')), []
             )
         except Exception as e:
-            log.error(f"unable to extract ids from value '{self._value}': {e}")
+            log.error(f"unable to extract VLAN IDs from value '{self._value}': {e}")
             self._validation_failed = True
 
     def matches(self, vlan_id, site=None):
 
         if self.site_matches(site) is False:
+            log.debug2(f"VLAN {self.filter_type} site name '{site_name}' matches '{self.site}'")
             return False
 
         try:
             if int(vlan_id) in self.range:
-                log.debug2(f"VLAN exclude id '{vlan_id}' matches '{self._value}'")
+                log.debug2(f"VLAN {self.filter_type} ID '{vlan_id}' matches '{self._value}'")
                 return True
         except Exception as e:
-            log.warning(f"Unable to match exclude VLAN id '{vlan_id}' to '{self._value}': {e}")
+            log.warning(f"Unable to match {self.filter_type} VLAN ID '{vlan_id}' to '{self._value}': {e}")
             return False
 
         return False
-
-
