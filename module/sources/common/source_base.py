@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import re
+from typing import Union,Optional
 
 from ipaddress import ip_interface, ip_address, IPv6Address, IPv4Address, IPv6Network, IPv4Network
 from packaging import version
@@ -179,7 +180,7 @@ class SourceBase:
 
         return return_data
 
-    def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None) -> NBPrefix|None:
+    def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None) -> Optional[NBPrefix]:
         """
         This is a lazy approach to find the longest matching prefix to an IP address.
         If site_name is set only IP prefixes from that site are matched.
@@ -716,7 +717,7 @@ class SourceBase:
 
         return data_to_update
 
-    def add_vlan_group(self, vlan_data, vlan_site, vlan_cluster) -> NBVLAN | dict:
+    def add_vlan_group(self, vlan_data, vlan_site, vlan_cluster) -> Union[NBVLAN ,dict]:
         """
         This function will try to find a matching VLAN group according to the settings.
         Name matching will take precedence over ID matching. First match wins.
