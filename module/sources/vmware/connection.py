@@ -2186,9 +2186,15 @@ class VMWareHandler(SourceBase):
         # first try 'guestInfo.detailed.data' and then 'guestOS.detailed.data'
         detailed_data = extra_config.get("guestInfo.detailed.data") or extra_config.get("guestOS.detailed.data")
         if isinstance(detailed_data, str):
-            pretty_name = [x for x in quoted_split(detailed_data.replace("' ", "', ")) if x.startswith("prettyName")]
-            if len(pretty_name) > 0:
-                platform = pretty_name[0].replace("prettyName='","")
+            detailed_data_dict = dict()
+            for detailed_data_item in quoted_split(detailed_data.replace("' ", "', ")):
+                detailed_data_key, detailed_data_value = detailed_data_item.split("=")
+                detailed_data_dict[detailed_data_key] = detailed_data_value.strip("'")
+            if len(detailed_data_dict.get("prettyName","")) > 0:
+                platform = detailed_data_dict.get("prettyName")
+            if detailed_data_dict.get("prettyName").lower() == "linux" and \
+                    detailed_data_dict.get("distroVersion") not in platform:
+                platform = f'{platform} {detailed_data_dict.get("distroVersion")}'
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
