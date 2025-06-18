@@ -2188,11 +2188,14 @@ class VMWareHandler(SourceBase):
         if isinstance(detailed_data, str):
             detailed_data_dict = dict()
             for detailed_data_item in quoted_split(detailed_data.replace("' ", "', ")):
+                if "=" not in detailed_data_item:
+                    continue
+
                 detailed_data_key, detailed_data_value = detailed_data_item.split("=")
                 detailed_data_dict[detailed_data_key] = detailed_data_value.strip("'")
             if len(detailed_data_dict.get("prettyName","")) > 0:
                 platform = detailed_data_dict.get("prettyName")
-            if detailed_data_dict.get("prettyName").lower() == "linux" and \
+            if detailed_data_dict.get("familyName", "").lower() == "linux" and \
                     detailed_data_dict.get("distroVersion") not in platform:
                 platform = f'{platform} {detailed_data_dict.get("distroVersion")}'
 
