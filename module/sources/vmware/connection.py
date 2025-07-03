@@ -1388,8 +1388,9 @@ class VMWareHandler(SourceBase):
         }
 
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            data["scope_id"] = {"name": site_name}
-            data["scope_type"] = "dcim.site"
+            if site_name is not None:
+                data["scope_id"] = {"name": site_name}
+                data["scope_type"] = "dcim.site"
         else:
             data["site"] = {"name": site_name}
 
