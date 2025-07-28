@@ -1708,6 +1708,9 @@ class VMWareHandler(SourceBase):
         if len(host_custom_fields) > 0:
             host_data["custom_fields"] = host_custom_fields
 
+        if self.settings.skip_host_nics is True:
+            return
+
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
         for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
