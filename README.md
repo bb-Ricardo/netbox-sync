@@ -1,4 +1,3 @@
-
 # NetBox-Sync
 
 > [!CAUTION]
@@ -297,6 +296,17 @@ Program will exit if all retries failed!
 Check out the documentations for the different sources
 * [vmware](https://github.com/bb-Ricardo/netbox-sync/blob/main/docs/source_vmware.md)
 * [check_redfish](https://github.com/bb-Ricardo/netbox-sync/blob/main/docs/source_check_redfish.md)
+
+### Filtering
+netbox-sync provides various filtering capabilities to control what objects are synced from sources to NetBox:
+
+1. **General VM filtering**: Use `vm_include_filter` and `vm_exclude_filter` to include or exclude VMs by name.
+2. **Tag-based VM filtering**: Use `vm_exclude_by_tag_filter` to exclude VMs with specific vCenter tags.
+3. **Partial information filtering**:
+   - Use `vm_exclude_disk_sync` to exclude disk synchronization for VMs matching specific name patterns.
+   - Use `vm_exclude_disk_sync_by_tag` to exclude disk synchronization for VMs with specific vCenter tags.
+
+These filters allow for fine-grained control over what information is synchronized, helping to avoid clutter in the change log from temporary or backup-related disk changes.
 
 If you have multiple vCenter instances or check_redfish folders just add another source with the same type
 in the **same** file.

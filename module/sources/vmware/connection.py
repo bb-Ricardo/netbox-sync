@@ -1128,24 +1128,46 @@ class VMWareHandler(SourceBase):
         if version.parse(self.inventory.netbox_api_version) >= version.parse("3.7.0") and \
                 object_type == NBVM and disk_data is not None and len(disk_data) > 0:
 
-            # create pairs of existing and discovered disks.
-            # currently these disks are only used within the VM model. that's why we use this simple approach and
-            # just rewrite disk as they appear in order.
-            # otherwise we would need to implement a matching function like matching interfaces.
-            disk_zip_list = zip_longest(
-                sorted(device_vm_object.get_virtual_disks(), key=lambda x: grab(x, "data.name")),
-                sorted(disk_data, key=lambda x: x.get("name")),
-                fillvalue="X")
+            # Skip disk updates for VMs that match exclusion filters
+            skip_disk_sync = False
+            
+            # Check if VM name matches vm_exclude_disk_sync filter
+            if hasattr(self.settings, 'vm_exclude_disk_sync') and self.settings.vm_exclude_disk_sync is not None:
+                if self.settings.vm_exclude_disk_sync.match(object_data.get("name")):
+                    log.debug(f"VM '{object_data.get('name')}' matches vm_exclude_disk_sync filter. "
+                              f"Skipping disk synchronization.")
+                    skip_disk_sync = True
+            
+            # Check if VM has any tags that match vm_exclude_disk_sync_by_tag filter
+            if not skip_disk_sync and hasattr(self.settings, 'vm_exclude_disk_sync_by_tag') and \
+                    self.settings.vm_exclude_disk_sync_by_tag is not None:
+                vm_tags = [NetBoxObject.extract_tag_name(tag) for tag in device_vm_object.data.get("tags", list())]
+                for exclude_tag in self.settings.vm_exclude_disk_sync_by_tag:
+                    if exclude_tag in vm_tags:
+                        log.debug(f"VM '{object_data.get('name')}' has tag '{exclude_tag}' which matches "
+                                  f"vm_exclude_disk_sync_by_tag filter. Skipping disk synchronization.")
+                        skip_disk_sync = True
+                        break
+            
+            if not skip_disk_sync:
+                # create pairs of existing and discovered disks.
+                # currently these disks are only used within the VM model. that's why we use this simple approach and
+                # just rewrite disk as they appear in order.
+                # otherwise we would need to implement a matching function like matching interfaces.
+                disk_zip_list = zip_longest(
+                    sorted(device_vm_object.get_virtual_disks(), key=lambda x: grab(x, "data.name")),
+                    sorted(disk_data, key=lambda x: x.get("name")),
+                    fillvalue="X")
 
-            for existing, discovered in disk_zip_list:
-                if existing == "X":
-                    self.inventory.add_object(NBVirtualDisk, source=self,
-                                              data={**discovered, **{"virtual_machine": device_vm_object}}, )
-                elif discovered == "X":
-                    log.info(f"{existing.name} '{existing.get_display_name(including_second_key=True)}' has been deleted")
-                    existing.deleted = True
-                else:
-                    existing.update(data=discovered, source=self)
+                for existing, discovered in disk_zip_list:
+                    if existing == "X":
+                        self.inventory.add_object(NBVirtualDisk, source=self,
+                                                  data={**discovered, **{"virtual_machine": device_vm_object}}, )
+                    elif discovered == "X":
+                        log.info(f"{existing.name} '{existing.get_display_name(including_second_key=True)}' has been deleted")
+                        existing.deleted = True
+                    else:
+                        existing.update(data=discovered, source=self)
 
         # compile all nic data into one dictionary
         if object_type == NBVM:

@@ -107,3 +107,25 @@ Primary IPv4/6 will be determined by interface that provides the default route f
 
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
+
+### Filtering VM Disk Information
+VM disks are synchronized between vCenter and NetBox. Since NetBox 3.7.0, virtual disks are tracked as separate objects 
+linked to VMs. In some scenarios, such as when temporary disks are attached to VMs during backup operations 
+(e.g., "Independent-nonpersistent" disks from Veeam), you might want to exclude these changes from synchronization 
+to avoid cluttering your NetBox change log.
+
+You can use the following filter options to exclude disk synchronization for specific VMs:
+
+1. **`vm_exclude_disk_sync`**: A regex pattern matching VM names where disk synchronization should be excluded.
+   ```ini
+   vm_exclude_disk_sync = backup-.*, veeam-.*
+   ```
+
+2. **`vm_exclude_disk_sync_by_tag`**: A comma-separated list of vCenter tags. VMs with any of these tags will have 
+   their disk information excluded from synchronization.
+   ```ini
+   vm_exclude_disk_sync_by_tag = backup-vm, veeam-job
+   ```
+
+When a VM matches these filters, it will still be synchronized to NetBox with all its other information 
+(CPU, memory, interfaces, IP addresses, etc.), but changes to disk information will be ignored.

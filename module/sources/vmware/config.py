@@ -116,7 +116,22 @@ class VMWareConfig(ConfigBase):
                          """,
                          config_example="tag-a, tag-b"
                          ),
-
+            ConfigOption("vm_exclude_disk_sync",
+                         str,
+                         description="""defines a comma separated list of VM names (regex) where disk synchronization 
+                         will be excluded. A VM matching this filter will still be synced to NetBox,
+                         but its disk information won't be updated.
+                         """,
+                         config_example="backup-.*, temp-.*"
+                         ),
+            ConfigOption("vm_exclude_disk_sync_by_tag",
+                         str,
+                         description="""defines a comma separated list of vCenter tags which (if assigned to a VM)
+                         will exclude this VM from disk synchronization. A VM with this tag will still be synced 
+                         to NetBox, but its disk information won't be updated.
+                         """,
+                         config_example="backup-vm, veeam-job"
+                         ),
             ConfigOptionGroup(title="relations",
                               options=[
                                 ConfigOption("cluster_site_relation",
@@ -466,6 +481,25 @@ class VMWareConfig(ConfigBase):
             if option.key == "vm_exclude_by_tag_filter":
 
                 option.set_value(quoted_split(option.value))
+
+                continue
+
+            if option.key == "vm_exclude_disk_sync_by_tag":
+
+                option.set_value(quoted_split(option.value))
+
+                continue
+
+            if option.key == "vm_exclude_disk_sync":
+
+                re_compiled = None
+                try:
+                    re_compiled = re.compile(option.value)
+                except Exception as e:
+                    log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                option.set_value(re_compiled)
 
                 continue
 
