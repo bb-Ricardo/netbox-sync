@@ -1273,19 +1273,19 @@ class NetBoxObject:
             if isinstance(this_site, dict):
                 return this_site.get("name")
     
-    # def get_scope_type(self, data=None):
-    #     this_data_set = data
-    #     if this_data_set is None:
-    #         this_data_set = self.data
+    def get_scope_type(self, data=None):
+        this_data_set = data
+        if this_data_set is None:
+            this_data_set = self.data
 
-    #     return this_data_set.get("scope_type")
+        return this_data_set.get("scope_type")
     
-    # def get_scope_id(self, data=None):
-    #     this_data_set = data
-    #     if this_data_set is None:
-    #         this_data_set = self.data
+    def get_scope_id(self, data=None):
+        this_data_set = data
+        if this_data_set is None:
+            this_data_set = self.data
 
-    #     return this_data_set.get("scope_id")
+        return this_data_set.get("scope_id")
 
 
 class NBObjectList(list):

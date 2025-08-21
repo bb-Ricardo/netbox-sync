@@ -474,12 +474,14 @@ class VMWareHandler(SourceBase):
 
         site_name = self.get_object_relation(object_name, relation_name)
 
-        if object_type == NBDevice: # and site_name is None:
+        # check if cluster is in a different site than the host and override the site name if so
+        if object_type == NBDevice:
             site_name = self.get_site_name(NBCluster, cluster_name)
             if site_name is not None:
-                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'. Overriding host site relation '{relation_name}'")
             else:
                 site_name = self.get_object_relation(object_name, relation_name)
+                # set deault site name if no relation was found
                 if site_name is None:
                     site_name = self.site_name
                     log.debug(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
@@ -527,19 +529,6 @@ class VMWareHandler(SourceBase):
         relation_name = "cluster_scope_type_relation"
         scope_type = self.get_object_relation(object_name, relation_name)
         log.debug(f"Retrieved scope type '{scope_type}' for {object_type.name} '{object_name}' from relation '{relation_name}'.")
-        
-        # object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
-        # log.debug(f"Retrieved object instance for {object_type.name} '{object_name}'")
-
-        # if object_instance is None:
-        #     log.debug(f"No {object_type.name} found with name '{object_name}'.")
-        #     return None
-        
-        # if scope_type is None:
-        #     scope_type = object_instance.data_model.get("scope_type")
-        #     if scope_type is None:
-        #         log.debug(f"No scope type found for {object_name}.")
-        #         return None
         
         if scope_type is not None and type(scope_type) is list:
             scope_type_list = scope_type
