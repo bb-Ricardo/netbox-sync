@@ -467,20 +467,22 @@ class VMWareHandler(SourceBase):
         if object_type not in [NBCluster, NBDevice]:
             raise ValueError(f"Object must be a '{NBCluster.name}' or '{NBDevice.name}'.")
 
-        log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
+        log.debug(f"Trying to find site name for {object_type.name} '{object_name}'")
 
         # check if site was provided in config
         relation_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
 
         site_name = self.get_object_relation(object_name, relation_name)
 
-        if object_type == NBDevice and site_name is None:
+        if object_type == NBDevice: # and site_name is None:
             site_name = self.get_site_name(NBCluster, cluster_name)
             if site_name is not None:
                 log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
             else:
-                site_name = self.site_name
-                log.debug(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
+                site_name = self.get_object_relation(object_name, relation_name)
+                if site_name is None:
+                    site_name = self.site_name
+                    log.debug(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
 
         # set default site name
         if site_name is None and object_type == NBDevice:
@@ -493,8 +495,7 @@ class VMWareHandler(SourceBase):
             log.debug2(f"Site relation for '{object_name}' set to None")
 
         if site_name is None and object_type == NBCluster:
-            log.debug(f"No site relation for {object_type.name} '{object_name}' found, using default site '{self.site_name}'")
-            site_name = self.site_name
+            log.debug(f"No site relation for {object_type.name} '{object_name}' found")
 
         log.debug(f"Returning site name '{site_name}' for {object_type.name} '{object_name}'. End of method.")
 
@@ -574,20 +575,20 @@ class VMWareHandler(SourceBase):
             raise ValueError(f"Object type must be '{NBCluster.name}'.")
 
 
-        relation_name = "cluster_scope_type_relation"
+        relation_name = "cluster_scope_id_relation"
         
         scope_id = self.get_object_relation(object_name, relation_name)
         
-        object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
+        # object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
 
-        if object_instance is None:
-            log.debug2(f"No {object_type.name} found with name '{object_name}'.") # changed log level to warning for testing
-            return None
+        # if object_instance is None:
+        #     log.debug2(f"No {object_type.name} found with name '{object_name}'.")
+        #     return None
 
         if scope_id is None:
-            scope_id = object_instance.data_model.get("scope_id")
+            scope_id = object_name
             if scope_id is None:
-                log.debug2(f"No scope id found for {object_name}.") # changed log level to warning for testing
+                log.debug(f"No scope id found for {object_name}.") 
                 return None
         if type(scope_id) is not str:
             log.debug(f"scope_id is type: {type(scope_id)}, not str")
@@ -1491,11 +1492,12 @@ class VMWareHandler(SourceBase):
         if scope_type is None:
             scope_type = self.get_scope_type(NBCluster, name)
             log.debug(f"Cluster '{full_cluster_name}' has scope type '{scope_type}' of type {type(scope_type)}.")
-        if scope_type == "dcim.site":
-            site_name = self.get_site_name(NBCluster, full_cluster_name)
-            log.debug(f"Cluster '{full_cluster_name}' has site name '{site_name}' of type {type(site_name)}.")
+        site_name = self.get_site_name(NBCluster, full_cluster_name)
+        log.debug(f"Cluster '{full_cluster_name}' has site name '{site_name}' of type {type(site_name)}.")
+
         scope_id = self.get_scope_id(NBCluster, full_cluster_name)
         log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
+        
         if scope_id is None:
             scope_id = self.get_scope_id(NBCluster, name)
         log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
@@ -1537,11 +1539,12 @@ class VMWareHandler(SourceBase):
             if grab(cluster_candidate, "data.name") != name:
                 continue
 
-            # try to find a cluster with matching site
-            if cluster_candidate.get_site_name() == site_name:
-                cluster_object = cluster_candidate
-                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
-                break
+            if site_name is not None:
+                # try to find a cluster with matching site
+                if cluster_candidate.get_site_name() == site_name:
+                    cluster_object = cluster_candidate
+                    log.debug2("Found an existing cluster where 'name' and 'site' are matching")
+                    break
 
             if grab(cluster_candidate, "data.group") is not None and \
                     grab(cluster_candidate, "data.group.data.name") == group_name:
