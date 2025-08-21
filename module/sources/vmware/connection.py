@@ -478,11 +478,14 @@ class VMWareHandler(SourceBase):
             site_name = self.get_site_name(NBCluster, cluster_name)
             if site_name is not None:
                 log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+            else:
+                site_name = self.site_name
+                log.debug(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
 
         # set default site name
-        if site_name is None:
-            site_name = self.site_name
-            log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
+        # if site_name is None:
+        #     site_name = self.site_name
+        #     log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
 
         # set the site for cluster to None if None-keyword ("<NONE>") is set via cluster_site_relation
         if object_type == NBCluster and site_name == "<NONE>":
@@ -490,7 +493,94 @@ class VMWareHandler(SourceBase):
             log.debug2(f"Site relation for '{object_name}' set to None")
 
         return site_name
+    
+    def get_scope_type(self, object_type, object_name):
+        """
+        Retrieve the scope_type for a NBCluster instance by object name or from the config option
+        cluster_scope_type_relation
 
+        Note: Only NBCluster is supported as the object_type.
+
+        Parameters
+        ----------
+        object_type: object type
+            The NetBox object type (must be NBCluster).
+        object_name: str
+            The name of the object to look up.
+
+        Returns
+        -------
+        str or None: scope type if one is found, otherwise None
+        """
+
+        # Validate object type
+        if object_type != NBCluster:
+            raise ValueError(f"Object type must be '{NBCluster.name}'.")
+        
+        relation_name = "cluster_scope_type_relation"
+        scope_type = self.get_object_relation(object_name, relation_name)
+        
+        object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
+
+        if object_instance is None:
+            log.debug2(f"No {object_type.name} found with name '{object_name}'.")
+            return None
+        
+        if scope_type is None:
+            scope_type = object_instance.data_model.get("scope_type")
+            if scope_type is None:
+                log.debug2(f"No scope type found for {object_instance.get_display_name()}.")
+                return None
+        
+        if type(scope_type) is not str:
+            scope_type_list = scope_type
+            scope_type = scope_type_list[0] if len(scope_type_list) > 0 else None
+
+        return scope_type
+
+    def get_scope_id(self, object_type, object_name):
+        """
+        Retrieve the scope_id for a NBCluster instance by object name or from the config option
+        cluster_scope_id_relation
+
+        Note: Only NBCluster is supported as the object_type.
+
+        Parameters
+        ----------
+        object_type: type
+            The NetBox object type (must be NBCluster).
+        object_name: str
+            The name of the object to look up.
+
+        Returns
+        -------
+        str or None: scope id if one is found, otherwise None
+        """
+        # Validate object type
+        if object_type != NBCluster:
+            raise ValueError(f"Object type must be '{NBCluster.name}'.")
+
+
+        relation_name = "cluster_scope_type_relation"
+        
+        scope_id = self.get_object_relation(object_name, relation_name)
+        
+        object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
+
+        if object_instance is None:
+            log.debug2(f"No {object_type.name} found with name '{object_name}'.") # changed log level to warning for testing
+            return None
+
+        if scope_id is None:
+            scope_id = object_instance.data_model.get("scope_id")
+            if scope_id is None:
+                log.debug2(f"No scope id found for {object_instance.get_display_name()}.") # changed log level to warning for testing
+                return None
+        if type(scope_id) is not str:
+            log.debug(f"scope_id is type: {type(scope_id)}, not str")
+            return None
+        return scope_id
+    
     def get_object_based_on_macs(self, object_type, mac_list=None):
         """
         Try to find a NetBox object based on list of MAC addresses.
@@ -1379,7 +1469,14 @@ class VMWareHandler(SourceBase):
                                       self.settings.cluster_exclude_filter) is False:
             return
 
-        site_name = self.get_site_name(NBCluster, full_cluster_name)
+        scope_type = self.get_scope_type(NBCluster, full_cluster_name)
+        if scope_type is None:
+            scope_type = self.get_scope_type(NBCluster, name)
+        if scope_type == "dcim.site":
+            site_name = self.get_site_name(NBCluster, full_cluster_name)
+        scope_id = self.get_scope_id(NBCluster, full_cluster_name)
+        if scope_id is None:
+            scope_id = self.get_scope_id(NBCluster, name)
 
         data = {
             "name": name,
@@ -1388,11 +1485,18 @@ class VMWareHandler(SourceBase):
         }
 
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            if site_name is not None:
-                data["scope_id"] = {"name": site_name}
-                data["scope_type"] = "dcim.site"
+            # four scope types here (dcim.site, dcim.location, dcim.region, dcim.sitegroup)
+            if scope_type is not None:
+                data["scope_type"] = scope_type
+                data["scope_id"] = {"name": scope_id}
+                log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
+                          f"and scope id '{scope_id}'.")
+            else:
+                log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
-            data["site"] = {"name": site_name}
+            # old verison has site only (# TODO: required??) --> optional (tested in netbox versions 4.1.11 and 3.7.1)
+            if site_name is not None:
+                data["site"] = {"name": site_name}
 
         tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:

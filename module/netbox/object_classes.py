@@ -1272,6 +1272,20 @@ class NetBoxObject:
 
             if isinstance(this_site, dict):
                 return this_site.get("name")
+    
+    # def get_scope_type(self, data=None):
+    #     this_data_set = data
+    #     if this_data_set is None:
+    #         this_data_set = self.data
+
+    #     return this_data_set.get("scope_type")
+    
+    # def get_scope_id(self, data=None):
+    #     this_data_set = data
+    #     if this_data_set is None:
+    #         this_data_set = self.data
+
+    #     return this_data_set.get("scope_id")
 
 
 class NBObjectList(list):
@@ -1424,39 +1438,39 @@ class NBTenant(NetBoxObject):
         super().__init__(*args, **kwargs)
 
 
-# class NBLocation(NetBoxObject):
-#     name = "location"
-#     api_path = "dcim/locations"
-#     object_type = "dcim.location"
-#     primary_key = "name"
-#     prune = False
-#     read_only = True
-#
-#     def __init__(self, *args, **kwargs):
-#         self.data_model = {
-#             "name": 100,
-#             "slug": 100,
-#             "site": NBSite,
-#             "tags": NBTagList
-#         }
-#         super().__init__(*args, **kwargs)
-#
-#
-# class NBRegion(NetBoxObject):
-#     name = "region"
-#     api_path = "dcim/regions"
-#     object_type = "dcim.region"
-#     primary_key = "name"
-#     prune = False
-#     read_only = True
-#
-#     def __init__(self, *args, **kwargs):
-#         self.data_model = {
-#             "name": 100,
-#             "slug": 100,
-#             "tags": NBTagList
-#         }
-#         super().__init__(*args, **kwargs)
+class NBLocation(NetBoxObject):
+    name = "location"
+    api_path = "dcim/locations"
+    object_type = "dcim.location"
+    primary_key = "name"
+    prune = False
+    read_only = True
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "site": NBSite,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBRegion(NetBoxObject):
+    name = "region"
+    api_path = "dcim/regions"
+    object_type = "dcim.region"
+    primary_key = "name"
+    prune = False
+    read_only = True
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBSite(NetBoxObject):

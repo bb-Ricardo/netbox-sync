@@ -143,6 +143,24 @@ class VMWareConfig(ConfigBase):
                                              description="""Same as cluster site but on host level.
                                              If unset it will fall back to cluster_site_relation""",
                                              config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
+                                ConfigOption("cluster_scope_type_relation", 
+                                             str,
+                                             description="""This option defines the scope type for a cluster.
+                                             The scope type can be 'site', 'site-group', 'location' or 'region'.
+                                             This is done with a comma separated key = value list.
+                                               key: defines a cluster name as regex
+                                               value: defines the NetBox scope type name (use quotes if name contains commas)
+                                             """,
+                                             config_example="Cluster_NYC = site, Cluster_FFM = sitegroup, Cluster_BER = location"),
+                                ConfigOption("cluster_scope_id_relation",
+                                             str,
+                                             description="""This option defines the scope id for a cluster.
+                                             The scope id is the NetBox ID of the scope type.
+                                             This is done with a comma separated key = value list.
+                                               key: defines a cluster name as regex
+                                               value: defines the NetBox scope id (use quotes if name contains commas)
+                                             """,
+                                             config_example="Cluster_NYC = New York, Cluster_FFM.* = Data Centers, Cluster_BER = Building 1"),
                                 ConfigOption("cluster_tenant_relation",
                                              str,
                                              description="""\
