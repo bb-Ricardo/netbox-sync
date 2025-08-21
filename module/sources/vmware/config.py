@@ -146,12 +146,12 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("cluster_scope_type_relation", 
                                              str,
                                              description="""This option defines the scope type for a cluster.
-                                             The scope type can be 'site', 'site-group', 'location' or 'region'.
+                                             The scope type can be 'dcim.site', 'dcim.sitegroup', 'dcim.location' or 'dcim.region'.
                                              This is done with a comma separated key = value list.
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope type name (use quotes if name contains commas)
                                              """,
-                                             config_example="Cluster_NYC = site, Cluster_FFM = sitegroup, Cluster_BER = location"),
+                                             config_example="Cluster_NYC = dcim.site, Cluster_FFM = dcim.sitegroup, Cluster_BER = dcim.location"),
                                 ConfigOption("cluster_scope_id_relation",
                                              str,
                                              description="""This option defines the scope id for a cluster.
