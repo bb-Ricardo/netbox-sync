@@ -1515,6 +1515,9 @@ class VMWareHandler(SourceBase):
                 data["scope_id"] = {"name": scope_id}
                 log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
                           f"and scope id '{scope_id}'.")
+            elif site_name is not None:
+                data["scope_type"] = "dcim.site"
+                data["scope_id"] = {"name": site_name}
             else:
                 log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
