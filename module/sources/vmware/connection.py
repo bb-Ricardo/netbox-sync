@@ -483,14 +483,20 @@ class VMWareHandler(SourceBase):
                 log.debug(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
 
         # set default site name
-        # if site_name is None:
-        #     site_name = self.site_name
-        #     log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
+        if site_name is None and object_type == NBDevice:
+            site_name = self.site_name
+            log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
 
         # set the site for cluster to None if None-keyword ("<NONE>") is set via cluster_site_relation
         if object_type == NBCluster and site_name == "<NONE>":
             site_name = None
             log.debug2(f"Site relation for '{object_name}' set to None")
+
+        if site_name is None and object_type == NBCluster:
+            log.debug(f"No site relation for {object_type.name} '{object_name}' found, using default site '{self.site_name}'")
+            site_name = self.site_name
+
+        log.debug(f"Returning site name '{site_name}' for {object_type.name} '{object_name}'. End of method.")
 
         return site_name
     
@@ -519,23 +525,30 @@ class VMWareHandler(SourceBase):
         
         relation_name = "cluster_scope_type_relation"
         scope_type = self.get_object_relation(object_name, relation_name)
+        log.debug(f"Retrieved scope type '{scope_type}' for {object_type.name} '{object_name}' from relation '{relation_name}'.")
         
-        object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
+        # object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
+        # log.debug(f"Retrieved object instance for {object_type.name} '{object_name}'")
 
-        if object_instance is None:
-            log.debug2(f"No {object_type.name} found with name '{object_name}'.")
-            return None
+        # if object_instance is None:
+        #     log.debug(f"No {object_type.name} found with name '{object_name}'.")
+        #     return None
         
-        if scope_type is None:
-            scope_type = object_instance.data_model.get("scope_type")
-            if scope_type is None:
-                log.debug2(f"No scope type found for {object_instance.get_display_name()}.")
-                return None
+        # if scope_type is None:
+        #     scope_type = object_instance.data_model.get("scope_type")
+        #     if scope_type is None:
+        #         log.debug(f"No scope type found for {object_name}.")
+        #         return None
         
-        if type(scope_type) is not str:
+        if scope_type is not None and type(scope_type) is list:
             scope_type_list = scope_type
             scope_type = scope_type_list[0] if len(scope_type_list) > 0 else None
+            log.debug(f"Scope type for {object_type.name} '{object_name}' is a list, using first element: '{scope_type}'")
 
+        if type(scope_type) is not str:
+            log.debug(f"scope_type is type: {type(scope_type)}, not str")
+            return None
+        log.debug(f"Returning scope type '{scope_type}' for {object_type.name} '{object_name}'. End of method.")
         return scope_type
 
     def get_scope_id(self, object_type, object_name):
@@ -574,11 +587,14 @@ class VMWareHandler(SourceBase):
         if scope_id is None:
             scope_id = object_instance.data_model.get("scope_id")
             if scope_id is None:
-                log.debug2(f"No scope id found for {object_instance.get_display_name()}.") # changed log level to warning for testing
+                log.debug2(f"No scope id found for {object_name}.") # changed log level to warning for testing
                 return None
         if type(scope_id) is not str:
             log.debug(f"scope_id is type: {type(scope_id)}, not str")
             return None
+        
+        log.debug(f"Retrieved scope id '{scope_id}' for {object_type.name} '{object_name}' from relation '{relation_name}'. End of method.")
+
         return scope_id
     
     def get_object_based_on_macs(self, object_type, mac_list=None):
@@ -1468,15 +1484,21 @@ class VMWareHandler(SourceBase):
                                       self.settings.cluster_include_filter,
                                       self.settings.cluster_exclude_filter) is False:
             return
+        log.debug(f"Cluster '{name}' passes include and exclude filters. Continuing.")
 
         scope_type = self.get_scope_type(NBCluster, full_cluster_name)
+        log.debug(f"Cluster '{full_cluster_name}' has scope type '{scope_type}' of type {type(scope_type)}.")
         if scope_type is None:
             scope_type = self.get_scope_type(NBCluster, name)
+            log.debug(f"Cluster '{full_cluster_name}' has scope type '{scope_type}' of type {type(scope_type)}.")
         if scope_type == "dcim.site":
             site_name = self.get_site_name(NBCluster, full_cluster_name)
+            log.debug(f"Cluster '{full_cluster_name}' has site name '{site_name}' of type {type(site_name)}.")
         scope_id = self.get_scope_id(NBCluster, full_cluster_name)
+        log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
         if scope_id is None:
             scope_id = self.get_scope_id(NBCluster, name)
+        log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
 
         data = {
             "name": name,
