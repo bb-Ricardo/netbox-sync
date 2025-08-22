@@ -540,6 +540,11 @@ class VMWareHandler(SourceBase):
         if type(scope_type) is not str:
             log.debug(f"scope_type is type: {type(scope_type)}, not str")
             return None
+
+        if scope_type == "<NONE>":
+            log.debug(f"Scope type for {object_type.name} '{object_name}' is set to None")
+            return None
+        
         log.debug(f"Returning scope type '{scope_type}' for {object_type.name} '{object_name}'. End of method.")
         return scope_type
 
