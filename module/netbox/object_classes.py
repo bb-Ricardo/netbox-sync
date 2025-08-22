@@ -563,7 +563,6 @@ class NetBoxObject:
 
             # check data model to see how we have to parse the value
             defined_value_type = self.data_model.get(key)
-
             # value must be a string witch a certain max length
             if isinstance(defined_value_type, int):
                 if not isinstance(value, str):
@@ -587,7 +586,7 @@ class NetBoxObject:
 
                 # check if value is in defined list
                 elif value not in defined_value_type:
-                    log.error(f"Invalid data type for '{key}' (must be one of {defined_value_type}), got: '{value}'")
+                    log.error(f"this one. Invalid data type for '{key}' (must be one of {defined_value_type}), got: '{value}'")
                     continue
 
             # just check the type of the value
@@ -1890,7 +1889,7 @@ class NBCluster(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.mapping = NetBoxMappings()
         self.scopes = [
-            NBSite, NBSiteGroup
+            NBSite, NBSiteGroup, NBLocation, NBRegion
         ]
         self.data_model = {
             "name": 100,
@@ -1899,7 +1898,6 @@ class NBCluster(NetBoxObject):
             "tenant": NBTenant,
             "group": NBClusterGroup,
             "scope_type": self.mapping.scopes_object_types(self.scopes),
-            # currently only site is supported as a scope
             "scope_id": NetBoxObject,
             "site": NBSite,
             "tags": NBTagList

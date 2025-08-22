@@ -62,6 +62,8 @@ class VMWareHandler(SourceBase):
         NBDeviceRole,
         NBSite,
         NBSiteGroup,
+        NBLocation,
+        NBRegion,
         NBCluster,
         NBDevice,
         NBVM,
