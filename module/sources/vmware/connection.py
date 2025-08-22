@@ -469,7 +469,7 @@ class VMWareHandler(SourceBase):
         if object_type not in [NBCluster, NBDevice]:
             raise ValueError(f"Object must be a '{NBCluster.name}' or '{NBDevice.name}'.")
 
-        log.debug(f"Trying to find site name for {object_type.name} '{object_name}'")
+        log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
 
         # check if site was provided in config
         relation_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
@@ -525,24 +525,28 @@ class VMWareHandler(SourceBase):
         if object_type != NBCluster:
             raise ValueError(f"Object type must be '{NBCluster.name}'.")
         
+        # get scope type from relation config
         relation_name = "cluster_scope_type_relation"
         scope_type = self.get_object_relation(object_name, relation_name)
         log.debug(f"Retrieved scope type '{scope_type}' for {object_type.name} '{object_name}' from relation '{relation_name}'.")
         
+        # if the scope_type is a list, use the first element
         if scope_type is not None and type(scope_type) is list:
             scope_type_list = scope_type
             scope_type = scope_type_list[0] if len(scope_type_list) > 0 else None
             log.debug(f"Scope type for {object_type.name} '{object_name}' is a list, using first element: '{scope_type}'")
 
+        # if scope_type is not a str, return None
         if type(scope_type) is not str:
             log.debug(f"scope_type is type: {type(scope_type)}, not str")
             return None
 
+        # set scope_type to None if it is configured as "<NONE>"
         if scope_type == "<NONE>":
             log.debug(f"Scope type for {object_type.name} '{object_name}' is set to None")
             return None
         
-        log.debug(f"Returning scope type '{scope_type}' for {object_type.name} '{object_name}'. End of method.")
+        log.debug2(f"Returning scope type '{scope_type}' for {object_type.name} '{object_name}'.")
         return scope_type
 
     def get_scope_id(self, object_type, object_name):
@@ -567,21 +571,19 @@ class VMWareHandler(SourceBase):
         if object_type != NBCluster:
             raise ValueError(f"Object type must be '{NBCluster.name}'.")
 
-
+        # get scope id from relation config
         relation_name = "cluster_scope_id_relation"
-        
         scope_id = self.get_object_relation(object_name, relation_name)
 
+        # return None if scope_id is None or not a string
         if scope_id is None:
-            scope_id = object_name
-            if scope_id is None:
-                log.debug(f"No scope id found for {object_name}.") 
-                return None
+            log.debug(f"No scope id found for {object_name}.") 
+            return None
         if type(scope_id) is not str:
             log.debug(f"scope_id is type: {type(scope_id)}, not str")
             return None
         
-        log.debug(f"Retrieved scope id '{scope_id}' for {object_type.name} '{object_name}' from relation '{relation_name}'. End of method.")
+        log.debug2(f"Retrieved scope id '{scope_id}' for {object_type.name} '{object_name}' from relation '{relation_name}'. End of method.")
 
         return scope_id
     
@@ -1472,8 +1474,9 @@ class VMWareHandler(SourceBase):
                                       self.settings.cluster_include_filter,
                                       self.settings.cluster_exclude_filter) is False:
             return
-        log.debug(f"Cluster '{name}' passes include and exclude filters. Continuing.")
+        log.debug2(f"Cluster '{name}' passes include and exclude filters. Continuing.")
 
+        # get scope type and id, or site name
         scope_type = self.get_scope_type(NBCluster, full_cluster_name)
         if scope_type is None:
             scope_type = self.get_scope_type(NBCluster, name)
@@ -1504,7 +1507,7 @@ class VMWareHandler(SourceBase):
             else:
                 log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
-            # set site_name in the pre-4.2.0 NetBox versions is one is found
+            # set site_name in the pre-4.2.0 NetBox versions if one is found
             if site_name is not None:
                 data["site"] = {"name": site_name}
 

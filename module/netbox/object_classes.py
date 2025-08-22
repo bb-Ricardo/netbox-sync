@@ -659,7 +659,6 @@ class NetBoxObject:
                                                      max_len=self.data_model.get("slug"))
 
         # update all data items
-        log.debug2(f"Updating {self.name} '{display_name}' with data: {parsed_data.items()}")
         data_updated = False
         for key, new_value in parsed_data.items():
 
@@ -751,8 +750,7 @@ class NetBoxObject:
                 new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
                          f"'{current_value_str}' to '{new_value_str}'")
-            log.debug2(f"Updating {self.name} '{display_name}' attribute '{key}' from "
-                      f"'{current_value_str}' to '{new_value_str}'")
+            
             self.data[key] = new_value
             self.updated_items.append(key)
             data_updated = True
@@ -1873,6 +1871,7 @@ class NBCluster(NetBoxObject):
 
     def __init__(self, *args, **kwargs):
         self.mapping = NetBoxMappings()
+        # scope types allowed for clusters
         self.scopes = [
             NBSite, NBSiteGroup, NBLocation, NBRegion
         ]
@@ -1883,7 +1882,9 @@ class NBCluster(NetBoxObject):
             "tenant": NBTenant,
             "group": NBClusterGroup,
             "scope_type": self.mapping.scopes_object_types(self.scopes),
+            # supports scoped clusters
             "scope_id": NetBoxObject,
+            # supports pre4.2.0 clusters with site
             "site": NBSite,
             "tags": NBTagList
         }

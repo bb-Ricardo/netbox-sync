@@ -163,7 +163,7 @@ class VMWareConfig(ConfigBase):
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope id (use quotes if name contains commas)
                                              """,
-                                             config_example="Cluster_NYC = New York, Cluster_FFM.* = Data Centers, Cluster_BER = Building 1"),
+                                             config_example="Cluster_NYC = 1, Cluster_FFM.* = 2, Cluster_BER = 7"),
                                 ConfigOption("cluster_tenant_relation",
                                              str,
                                              description="""\
