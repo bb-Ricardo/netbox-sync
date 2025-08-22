@@ -563,6 +563,7 @@ class NetBoxObject:
 
             # check data model to see how we have to parse the value
             defined_value_type = self.data_model.get(key)
+
             # value must be a string witch a certain max length
             if isinstance(defined_value_type, int):
                 if not isinstance(value, str):
@@ -586,7 +587,7 @@ class NetBoxObject:
 
                 # check if value is in defined list
                 elif value not in defined_value_type:
-                    log.error(f"this one. Invalid data type for '{key}' (must be one of {defined_value_type}), got: '{value}'")
+                    log.error(f"Invalid data type for '{key}' (must be one of {defined_value_type}), got: '{value}'")
                     continue
 
             # just check the type of the value
@@ -1272,21 +1273,6 @@ class NetBoxObject:
 
             if isinstance(this_site, dict):
                 return this_site.get("name")
-    
-    def get_scope_type(self, data=None):
-        this_data_set = data
-        if this_data_set is None:
-            this_data_set = self.data
-
-        return this_data_set.get("scope_type")
-    
-    def get_scope_id(self, data=None):
-        this_data_set = data
-        if this_data_set is None:
-            this_data_set = self.data
-
-        return this_data_set.get("scope_id")
-
 
 class NBObjectList(list):
     """
@@ -1884,7 +1870,6 @@ class NBCluster(NetBoxObject):
     primary_key = "name"
     secondary_key = "scope_id"
     prune = False
-    # include_secondary_key_if_present = True
 
     def __init__(self, *args, **kwargs):
         self.mapping = NetBoxMappings()
@@ -1906,21 +1891,10 @@ class NBCluster(NetBoxObject):
 
     def update(self, data=None, read_from_netbox=False, source=None):
 
-        # Add adaption for change in NetBox 4.2.0 Device model
-        # if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-        #     if data.get("site") is not None:
-        #         data["scope_id"] = data.get("site")
-        #         data["scope_type"] = "dcim.site"
-        #         del data["site"]
-
-        #     if data.get("scope_id") is not None:
-        #         data["scope_type"] = "dcim.site"
-
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
     def resolve_relations(self):
         log.debug2(f"Resolving relations for {self.name} '{self.get_display_name()}'")
-        # self.resolve_scoped_relations("scope_id", "scope_type")
         super().resolve_relations()
 
 

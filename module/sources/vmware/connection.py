@@ -498,10 +498,7 @@ class VMWareHandler(SourceBase):
             site_name = None
             log.debug2(f"Site relation for '{object_name}' set to None")
 
-        if site_name is None and object_type == NBCluster:
-            log.debug(f"No site relation for {object_type.name} '{object_name}' found")
-
-        log.debug(f"Returning site name '{site_name}' for {object_type.name} '{object_name}'. End of method.")
+        log.debug2(f"Returning site name '{site_name}' for {object_type.name} '{object_name}'.")
 
         return site_name
     
@@ -574,12 +571,6 @@ class VMWareHandler(SourceBase):
         relation_name = "cluster_scope_id_relation"
         
         scope_id = self.get_object_relation(object_name, relation_name)
-        
-        # object_instance = self.inventory.get_by_data(object_type, data={"name": object_name})
-
-        # if object_instance is None:
-        #     log.debug2(f"No {object_type.name} found with name '{object_name}'.")
-        #     return None
 
         if scope_id is None:
             scope_id = object_name
@@ -1501,7 +1492,7 @@ class VMWareHandler(SourceBase):
         }
 
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            # four scope types here (dcim.site, dcim.location, dcim.region, dcim.sitegroup)
+            # set the scope type and id if they are defined
             if scope_type is not None:
                 data["scope_type"] = scope_type
                 data["scope_id"] = scope_id
@@ -1513,7 +1504,7 @@ class VMWareHandler(SourceBase):
             else:
                 log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
-            # old verison has site only (# TODO: required??) --> optional (tested in netbox versions 4.1.11 and 3.7.1)
+            # set site_name in the pre-4.2.0 NetBox versions is one is found
             if site_name is not None:
                 data["site"] = {"name": site_name}
 
@@ -1568,10 +1559,8 @@ class VMWareHandler(SourceBase):
             cluster_object = fallback_cluster_object
 
         if cluster_object is not None:
-            # log.debug(f"1st The data items are {data.items()} for cluster '{name}'")
             cluster_object.update(data=data, source=self)
         else:
-            # log.debug(f"1st (alternative) The data items are {data.items()} for cluster '{name}'")
             cluster_object = self.inventory.add_update_object(NBCluster, data=data, source=self)
 
         self.add_object_to_cache(obj, cluster_object)

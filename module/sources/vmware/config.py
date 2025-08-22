@@ -149,6 +149,7 @@ class VMWareConfig(ConfigBase):
                                              The scope type can be 'dcim.site', 'dcim.sitegroup', 'dcim.location' or 'dcim.region'.
                                              This is done with a comma separated key = value list.
                                              Can be set to "<NONE>" to not assign a scope type.
+                                             Note: this does not remove scope types from existing clusters in NetBox.
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope type name (use quotes if name contains commas)
                                              """,
