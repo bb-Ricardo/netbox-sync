@@ -484,9 +484,9 @@ class VMWareHandler(SourceBase):
                 # set deault site name if no relation was found
                 if site_name is None:
                     site_name = self.site_name
-                    log.debug(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
+                    log.debug2(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
 
-        # set default site name
+        # set default site name for devices
         if site_name is None and object_type == NBDevice:
             site_name = self.site_name
             log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
@@ -1477,16 +1477,12 @@ class VMWareHandler(SourceBase):
         log.debug(f"Cluster '{name}' passes include and exclude filters. Continuing.")
 
         scope_type = self.get_scope_type(NBCluster, full_cluster_name)
-        log.debug(f"Cluster '{full_cluster_name}' has scope type '{scope_type}' of type {type(scope_type)}.")
         if scope_type is None:
             scope_type = self.get_scope_type(NBCluster, name)
-            log.debug(f"Cluster '{full_cluster_name}' has scope type '{scope_type}' of type {type(scope_type)}.")
-        site_name = self.get_site_name(NBCluster, full_cluster_name)
-        log.debug(f"Cluster '{full_cluster_name}' has site name '{site_name}' of type {type(site_name)}.")
-
-        scope_id = self.get_scope_id(NBCluster, full_cluster_name)
-        log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
         
+        site_name = self.get_site_name(NBCluster, full_cluster_name)
+
+        scope_id = self.get_scope_id(NBCluster, full_cluster_name)        
         if scope_id is None:
             scope_id = self.get_scope_id(NBCluster, name)
         log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
@@ -1501,7 +1497,7 @@ class VMWareHandler(SourceBase):
             # four scope types here (dcim.site, dcim.location, dcim.region, dcim.sitegroup)
             if scope_type is not None:
                 data["scope_type"] = scope_type
-                data["scope_id"] = {"name": scope_id}
+                data["scope_id"] = scope_id
                 log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
                           f"and scope id '{scope_id}'.")
             elif site_name is not None:
@@ -1513,6 +1509,8 @@ class VMWareHandler(SourceBase):
             # old verison has site only (# TODO: required??) --> optional (tested in netbox versions 4.1.11 and 3.7.1)
             if site_name is not None:
                 data["site"] = {"name": site_name}
+
+        log.debug(f"Cluster '{full_cluster_name}' (or {name}) has data items '{data.items()}'.")
 
         tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:
@@ -1563,8 +1561,10 @@ class VMWareHandler(SourceBase):
             cluster_object = fallback_cluster_object
 
         if cluster_object is not None:
+            # log.debug(f"1st The data items are {data.items()} for cluster '{name}'")
             cluster_object.update(data=data, source=self)
         else:
+            # log.debug(f"1st (alternative) The data items are {data.items()} for cluster '{name}'")
             cluster_object = self.inventory.add_update_object(NBCluster, data=data, source=self)
 
         self.add_object_to_cache(obj, cluster_object)

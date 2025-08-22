@@ -552,7 +552,6 @@ class NetBoxObject:
 
         parsed_data = dict()
         for key, value in data.items():
-
             if key not in self.data_model.keys():
                 log.error(f"Found undefined data model key '{key}' for object '{self.__class__.__name__}'")
                 continue
@@ -660,6 +659,7 @@ class NetBoxObject:
                                                      max_len=self.data_model.get("slug"))
 
         # update all data items
+        log.debug2(f"Updating {self.name} '{display_name}' with data: {parsed_data.items()}")
         data_updated = False
         for key, new_value in parsed_data.items():
 
@@ -751,7 +751,8 @@ class NetBoxObject:
                 new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
                          f"'{current_value_str}' to '{new_value_str}'")
-
+            log.debug2(f"Updating {self.name} '{display_name}' attribute '{key}' from "
+                      f"'{current_value_str}' to '{new_value_str}'")
             self.data[key] = new_value
             self.updated_items.append(key)
             data_updated = True
@@ -1882,7 +1883,7 @@ class NBCluster(NetBoxObject):
     api_path = "virtualization/clusters"
     object_type = "virtualization.cluster"
     primary_key = "name"
-    secondary_key = "site"
+    secondary_key = "scope_id"
     prune = False
     # include_secondary_key_if_present = True
 
@@ -1899,7 +1900,7 @@ class NBCluster(NetBoxObject):
             "group": NBClusterGroup,
             "scope_type": self.mapping.scopes_object_types(self.scopes),
             # currently only site is supported as a scope
-            "scope_id": NBSite,
+            "scope_id": NetBoxObject,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
@@ -1907,20 +1908,20 @@ class NBCluster(NetBoxObject):
     def update(self, data=None, read_from_netbox=False, source=None):
 
         # Add adaption for change in NetBox 4.2.0 Device model
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            if data.get("site") is not None:
-                data["scope_id"] = data.get("site")
-                data["scope_type"] = "dcim.site"
-                del data["site"]
+        # if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+        #     if data.get("site") is not None:
+        #         data["scope_id"] = data.get("site")
+        #         data["scope_type"] = "dcim.site"
+        #         del data["site"]
 
-            if data.get("scope_id") is not None:
-                data["scope_type"] = "dcim.site"
+        #     if data.get("scope_id") is not None:
+        #         data["scope_type"] = "dcim.site"
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
     def resolve_relations(self):
-
-        self.resolve_scoped_relations("scope_id", "scope_type")
+        log.debug2(f"Resolving relations for {self.name} '{self.get_display_name()}'")
+        # self.resolve_scoped_relations("scope_id", "scope_type")
         super().resolve_relations()
 
 
