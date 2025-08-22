@@ -1901,6 +1901,7 @@ class NBCluster(NetBoxObject):
             "scope_type": self.mapping.scopes_object_types(self.scopes),
             # currently only site is supported as a scope
             "scope_id": NetBoxObject,
+            "site": NBSite,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
