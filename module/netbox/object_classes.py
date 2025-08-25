@@ -2148,12 +2148,18 @@ class NBIPAddress(NetBoxObject):
         super().resolve_relations()
 
     def update(self, data=None, read_from_netbox=False, source=None):
-
         object_type = data.get("assigned_object_type")
         assigned_object = data.get("assigned_object_id")
-
-        if object_type == "ipam.fhrpgroup":
-            log.info(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
+        
+        # Skip IP assignments when the IP is assigned to FHRP groups when config option
+        # skipping_fhrp_group_ips is set to True
+        if source is not None:
+            config_relation = source.get_object_relation(assigned_object, "skipping_fhrp_group_ips")
+            if config_relation == True and object_type == "ipam.fhrpgroup":
+                log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
+                return
+        elif object_type == "ipam.fhrpgroup":
+            log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
             return
 
         # used to track changes in object primary IP assignments

@@ -258,6 +258,11 @@ class VMWareConfig(ConfigBase):
                          description="""If the VMware Site Recovery Manager is used to can skip syncing
                          placeholder/replicated VMs from fail-over site to NetBox.""",
                          default_value=False),
+            ConfigOption("skipping_fhrp_group_ips",
+                         bool,
+                         description="""If an IP address is assigned to a FHRP group (like HSRP, VRRP, GLBP)
+                         then this IP address will be skipped and not synced to NetBox to prevent incorrect syncing.""",
+                         default_value=False),
             ConfigOption("strip_host_domain_name",
                          bool,
                          description="strip domain part from host name before syncing device to NetBox",

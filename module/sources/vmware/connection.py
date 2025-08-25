@@ -914,6 +914,12 @@ class VMWareHandler(SourceBase):
         """
 
         resolved_list = list()
+        relation_data = grab(self.settings, relation, fallback=fallback)
+
+        if isinstance(relation_data, bool):
+            log.debug(f"Object relation '{relation}' is boolean '{relation_data}'. Returning.")
+            return relation_data
+
         for single_relation in grab(self.settings, relation, fallback=list()):
             object_regex = single_relation.get("object_regex")
             match_found = False
