@@ -2152,6 +2152,10 @@ class NBIPAddress(NetBoxObject):
         object_type = data.get("assigned_object_type")
         assigned_object = data.get("assigned_object_id")
 
+        if object_type == "ipam.fhrpgroup":
+            log.info("IP address assigned to FHRP group. Skipping.")
+            return
+
         # used to track changes in object primary IP assignments
         previous_ip_device_vm = None
         is_primary_ipv4_of_previous_device = False
