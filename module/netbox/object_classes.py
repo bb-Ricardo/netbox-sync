@@ -2142,6 +2142,7 @@ class NBIPAddress(NetBoxObject):
         
         # Skip IP assignments when the IP is assigned to FHRP groups when config option
         # skip_fhrp_group_ips is set to True, or if the IP is manually assigned to an FHRP group (no source)
+        # skipping_fhrp_group_ips is set to True, or if the IP is manually assigned to an FHRP group (no source)
         if source is not None:
 
             config_relation = source.get_object_relation(assigned_object, "skipping_fhrp_group_ips")
