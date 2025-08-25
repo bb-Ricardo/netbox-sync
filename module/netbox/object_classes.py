@@ -2154,12 +2154,13 @@ class NBIPAddress(NetBoxObject):
         # Skip IP assignments when the IP is assigned to FHRP groups when config option
         # skipping_fhrp_group_ips is set to True
         if source is not None:
-            config_relation = source.get_object_relation(assigned_object, "skipping_fhrp_group_ips")
-            if config_relation == True and object_type == "ipam.fhrpgroup":
-                log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
-                return
+            if source.source_type == "vmware":
+                config_relation = source.get_object_relation(assigned_object, "skipping_fhrp_group_ips")
+                if config_relation == True and object_type == "ipam.fhrpgroup":
+                    log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
+                    return
         elif object_type == "ipam.fhrpgroup":
-            log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
+            log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. It was manually created. Skipping.")
             return
 
         # used to track changes in object primary IP assignments

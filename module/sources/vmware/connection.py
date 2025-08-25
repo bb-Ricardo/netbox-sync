@@ -917,7 +917,7 @@ class VMWareHandler(SourceBase):
         relation_data = grab(self.settings, relation, fallback=fallback)
 
         if isinstance(relation_data, bool):
-            log.debug(f"Object relation '{relation}' is boolean '{relation_data}'. Returning.")
+            log.debug(f"Object relation '{relation}' is boolean, set '{relation_data}'.")
             return relation_data
 
         for single_relation in grab(self.settings, relation, fallback=list()):
