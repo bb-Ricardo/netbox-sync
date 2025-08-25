@@ -70,7 +70,7 @@ class CheckRedfishConfig(ConfigBase):
                          via check_redfish if False only data which is not preset in NetBox will be added""",
                          default_value=False),
 
-            ConfigOption("skipping_fhrp_group_ips",
+            ConfigOption("skip_fhrp_group_ips",
                          bool,
                          description="""define if an IP address assigned to a FHRP group (like HSRP, VRRP, GLBP) will be skipped.
                          If True this IP address will be skipped and not synced to NetBox to prevent incorrect syncing.""",
