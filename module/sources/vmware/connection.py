@@ -615,7 +615,6 @@ class VMWareHandler(SourceBase):
         Returns
         -------
         (NBDevice, NBVM, None): object instance of found device, otherwise None
-        comment line
         """
 
         object_to_return = None
