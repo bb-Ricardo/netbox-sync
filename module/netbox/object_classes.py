@@ -2131,7 +2131,7 @@ class NBIPAddress(NetBoxObject):
         ]
         self.data_model = {
             "address": str,
-            "assigned_object_type": self.mapping.scopes_object_types(self.scopes),
+            "assigned_object_type": ("ipam.fhrpgroup, dcim.interface, virtualization.vminterface"),
             "assigned_object_id": self.scopes,
             "description": 200,
             "role": ["loopback", "secondary", "anycast", "vip", "vrrp", "hsrp", "glbp", "carp"],
