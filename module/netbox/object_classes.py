@@ -2162,18 +2162,6 @@ class NBIPAddress(NetBoxObject):
             # get current device to make sure to unset primary ip before moving IP address
             previous_ip_device_vm = self.get_device_vm()
 
-            # Skip IP assignments when the IP is already assigned to FHRP groups when config option
-            # skip_fhrp_group_ips is set to True, or if the IP is manually assigned to an FHRP group (no source)
-            if source is not None:
-                if source.source_type == "vmware":
-                    config_relation = source.get_object_relation(assigned_object, "skip_fhrp_group_ips")
-                    if config_relation == True and object_type == "ipam.fhrpgroup":
-                        log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
-                        return
-            elif object_type == "ipam.fhrpgroup":
-                log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. It was manually created. Skipping.")
-                return
-            
             if grab(previous_ip_device_vm, "data.primary_ip4") is self:
                 is_primary_ipv4_of_previous_device = True
             if grab(previous_ip_device_vm, "data.primary_ip6") is self:
