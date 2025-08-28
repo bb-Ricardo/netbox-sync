@@ -2148,6 +2148,7 @@ class NBIPAddress(NetBoxObject):
         super().resolve_relations()
 
     def update(self, data=None, read_from_netbox=False, source=None):
+
         object_type = data.get("assigned_object_type")
         assigned_object = data.get("assigned_object_id")
 
@@ -2202,7 +2203,7 @@ class NBIPAddress(NetBoxObject):
         o_id = self.data.get("assigned_object_id")
         o_type = self.data.get("assigned_object_type")
 
-        if isinstance(o_id, (NBInterface, NBVMInterface, NBFHRPGroupItem)):
+        if isinstance(o_id, (NBInterface, NBVMInterface)):
             return o_id
 
         if o_type is None or not isinstance(o_id, int):
@@ -2224,8 +2225,6 @@ class NBIPAddress(NetBoxObject):
             return o_interface.data.get("device")
         elif isinstance(o_interface, NBVMInterface):
             return o_interface.data.get("virtual_machine")
-        elif isinstance(o_interface, NBFHRPGroupItem):
-            return o_interface.data.get("fhrp_group")
 
     def remove_interface_association(self):
         o_id = self.data.get("assigned_object_id")
