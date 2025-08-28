@@ -2167,10 +2167,10 @@ class NBIPAddress(NetBoxObject):
             if source is not None:
                 if source.source_type == "vmware":
                     config_relation = source.get_object_relation(assigned_object, "skip_fhrp_group_ips")
-                    if config_relation == True and grab(previous_ip_device_vm, "data.assigned_object_type") == "ipam.fhrpgroup":
+                    if config_relation == True and object_type == "ipam.fhrpgroup":
                         log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
                         return
-            elif grab(previous_ip_device_vm, "data.assigned_object_type") == "ipam.fhrpgroup":
+            elif object_type == "ipam.fhrpgroup":
                 log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. It was manually created. Skipping.")
                 return
             
