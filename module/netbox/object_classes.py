@@ -2162,7 +2162,6 @@ class NBIPAddress(NetBoxObject):
 
             # get current device to make sure to unset primary ip before moving IP address
             previous_ip_device_vm = self.get_device_vm()
-
             if grab(previous_ip_device_vm, "data.primary_ip4") is self:
                 is_primary_ipv4_of_previous_device = True
             if grab(previous_ip_device_vm, "data.primary_ip6") is self:
