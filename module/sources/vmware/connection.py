@@ -909,8 +909,8 @@ class VMWareHandler(SourceBase):
 
         Returns
         -------
-        data: str, list, None
-            string of matching relation or list of matching tags
+        data: str, list, bool, None
+            string of matching relation or list of matching tags, or boolean if relation is boolean
         """
 
         resolved_list = list()
