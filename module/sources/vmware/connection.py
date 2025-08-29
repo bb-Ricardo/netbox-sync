@@ -909,17 +909,11 @@ class VMWareHandler(SourceBase):
 
         Returns
         -------
-        data: str, list, bool, None
-            string of matching relation or list of matching tags, or boolean if relation is boolean
+        data: str, list, None
+            string of matching relation or list of matching tags
         """
 
         resolved_list = list()
-        relation_data = grab(self.settings, relation, fallback=fallback)
-
-        if isinstance(relation_data, bool):
-            log.debug(f"Object relation '{relation}' is boolean, set '{relation_data}'.")
-            return relation_data
-
         for single_relation in grab(self.settings, relation, fallback=list()):
             object_regex = single_relation.get("object_regex")
             match_found = False
