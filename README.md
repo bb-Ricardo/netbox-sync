@@ -1,9 +1,6 @@
 
 # NetBox-Sync
 
-> [!CAUTION]
-> **Maintainer wanted - sunsetting this repository by 31.10.2025 [#474](https://github.com/bb-Ricardo/netbox-sync/issues/474)**
-
 This is a tool to sync data from different sources to a NetBox instance.
 
 Available source types:
