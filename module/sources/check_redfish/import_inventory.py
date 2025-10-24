@@ -30,7 +30,7 @@ class CheckRedfish(SourceBase):
     """
 
     # minimum check_redfish inventory version
-    minimum_check_redfish_version = "1.2.0"
+    minimum_check_redfish_version = "2.0.0"
 
     dependent_netbox_objects = [
         NBTag,
@@ -239,8 +239,8 @@ class CheckRedfish(SourceBase):
         if name is not None and self.settings.overwrite_host_name is True:
             device_data["name"] = name
         if "dell" in str(manufacturer).lower():
-            chassi = grab(self.inventory_file_content, "inventory.chassi.0")
-            if chassi and "sku" in chassi:
+            chassis = grab(self.inventory_file_content, "inventory.chassis.0")
+            if chassis and "sku" in chassis:
 
                 # add ServiceTag
                 self.add_update_custom_field({
@@ -253,9 +253,9 @@ class CheckRedfish(SourceBase):
                     "description": "Dell Service Tag"
                 })
 
-                device_data["custom_fields"]["service_tag"] = chassi.get("sku")
+                device_data["custom_fields"]["service_tag"] = chassis.get("sku")
             else:
-                log.warning(f"No chassi or sku data found for "
+                log.warning(f"No chassis or sku data found for "
                             f"'{self.device_object.get_display_name()}' in inventory file.")
 
         self.device_object.update(data=device_data, source=self)
