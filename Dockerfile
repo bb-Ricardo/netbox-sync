@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.11-slim AS builder
 
 COPY requirements.txt .
 
@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && \
     $VENV/bin/pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git && \
     find $VENV -type d -name "__pycache__" -print0 | xargs -0 -n1 rm -rf
 
-FROM python:3.11-slim-bookworm AS netbox-sync
+FROM python:3.11-slim AS netbox-sync
 
 ARG VENV=/opt/netbox-sync/venv
 
