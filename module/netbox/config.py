@@ -128,7 +128,15 @@ class NetBoxConfig(ConfigBase):
             ConfigOption("cache_directory_location",
                          str,
                          description="The location of the directory where the cache files should be stored",
-                         default_value="cache")
+                         default_value="cache"),
+
+            ConfigOption("skip_prune_on_source_failure",
+                        bool,
+                        description="""Safety switch: If any enabled source fails (init/connect/query),
+                        pruning will be skipped for this run to prevent mass orphaning/deletions
+                        during temporary source outages.
+                        """,
+                        default_value=True)
         ]
 
         super().__init__()

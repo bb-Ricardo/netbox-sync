@@ -124,7 +124,23 @@ def main():
     # update data in NetBox
     nb_handler.update_instance()
 
-    # prune orphaned objects from NetBox
+# prune orphaned objects from NetBox (safe-guard)
+failed_enabled_sources = [
+    s for s in inventory.source_list
+    if getattr(getattr(s, "settings", None), "enabled", False) is True
+    and getattr(s, "init_successful", False) is False
+]
+
+if nb_handler.settings.prune_enabled and \
+   getattr(nb_handler.settings, "skip_prune_on_source_failure", True) and \
+   len(failed_enabled_sources) > 0:
+
+    failed_names = ", ".join([getattr(s, "name", "<unknown>") for s in failed_enabled_sources])
+    log.warning(
+        f"Skipping prune because {len(failed_enabled_sources)} enabled source(s) failed init: {failed_names}"
+    )
+
+else:
     nb_handler.prune_data()
 
     # delete tags which are not used anymore
