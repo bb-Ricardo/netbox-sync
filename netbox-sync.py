@@ -87,6 +87,13 @@ def main():
     log.info("Initializing sources")
     sources = instantiate_sources()
 
+    # disable pruning if an enabled source is unavailable
+    if nb_handler.settings.prune_enabled is True:
+        for source in inventory.source_list:
+            if getattr(source.settings, "enabled", False) is True and source.init_successful is False:
+                nb_handler.settings.prune_enabled = False
+                log.warning(f"disabling pruning as source '{source.name}' is unavailable")
+
     # all sources are unavailable
     if len(sources) == 0:
         log.error("No working sources found. Exit.")
