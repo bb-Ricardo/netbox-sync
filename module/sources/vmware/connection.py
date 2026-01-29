@@ -2196,9 +2196,14 @@ class VMWareHandler(SourceBase):
                 detailed_data_dict[detailed_data_key] = detailed_data_value.strip("'")
             if len(detailed_data_dict.get("prettyName","")) > 0:
                 platform = detailed_data_dict.get("prettyName")
-            if detailed_data_dict.get("familyName", "").lower() == "linux" and \
-                    detailed_data_dict.get("distroVersion") not in platform:
-                platform = f'{platform} {detailed_data_dict.get("distroVersion")}'
+                
+            distro_version = detailed_data_dict.get("distroVersion")
+            if detailed_data_dict.get("familyName", "").lower() == "linux" and distro_version:
+                if distro_version not in platform:
+                    platform = f'{platform} {distro_version}'
+        if platform is not None:
+            platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
+
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
