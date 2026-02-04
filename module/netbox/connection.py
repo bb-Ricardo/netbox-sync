@@ -200,7 +200,7 @@ class NetBoxHandler:
 
         try:
             response = self.session.get(
-                f"{self.url}/status",
+                f"{self.url}status",
                 timeout=self.settings.timeout,
                 verify=self.settings.validate_tls_certs)
         except Exception as e:
