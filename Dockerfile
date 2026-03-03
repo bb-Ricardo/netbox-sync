@@ -5,7 +5,7 @@ COPY requirements.txt .
 ARG VENV=/opt/netbox-sync/venv
 
 # Install dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends git && \
+RUN apt-get update && apt-get install -y --no-install-recommends git gcc libc-dev && \
     rm -rf /var/lib/apt/lists/* && \
     python3 -m venv $VENV && \
     $VENV/bin/python3 -m pip install --upgrade pip && \
