@@ -2186,8 +2186,14 @@ class VMWareHandler(SourceBase):
 
         # first try 'guestInfo.detailed.data' and then 'guestOS.detailed.data'
         detailed_data = extra_config.get("guestInfo.detailed.data") or extra_config.get("guestOS.detailed.data")
+
+        # if guestOS tools ar installed but are not able to determine the os-release
+        # then check against this pattern to guess if a correct os string has been returned
+        invalid_patterns = ["Usage:", "Error:", "command not found", "No such file"]
+
         if isinstance(detailed_data, str):
             detailed_data_dict = dict()
+            pretty_name = None
             for detailed_data_item in quoted_split(detailed_data.replace("' ", "', ")):
                 if "=" not in detailed_data_item:
                     continue
@@ -2195,13 +2201,15 @@ class VMWareHandler(SourceBase):
                 detailed_data_key, detailed_data_value = detailed_data_item.split("=")
                 detailed_data_dict[detailed_data_key] = detailed_data_value.strip("'")
             if len(detailed_data_dict.get("prettyName", "")) > 0:
-                platform = detailed_data_dict.get("prettyName")
-                
-            distro_version = detailed_data_dict.get("distroVersion")
-            if detailed_data_dict.get("familyName", "").lower() == "linux" and \
-                    distro_version is not None and \
-                    distro_version not in platform:
-                platform = f'{platform} {distro_version}'
+                pretty_name = detailed_data_dict.get("prettyName")
+
+            if pretty_name and not any(pretty_name.startswith(p) for p in invalid_patterns):
+                platform = pretty_name
+                distro_version = detailed_data_dict.get("distroVersion")
+                if detailed_data_dict.get("familyName", "").lower() == "linux" and \
+                        distro_version is not None and \
+                        distro_version not in platform:
+                    platform = f'{platform} {distro_version}'
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
