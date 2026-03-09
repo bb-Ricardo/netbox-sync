@@ -71,7 +71,7 @@ jobs:
         id: meta_dhub
         uses: docker/metadata-action@v5
         with:
-          images: docker.io/bbricardo/netbox-sync:${{ github.ref.name }}
+          images: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.docker_image.outputs.lowercase }}
           tags: |
             type=semver,pattern={{version}}
             type=ref,event=branch
