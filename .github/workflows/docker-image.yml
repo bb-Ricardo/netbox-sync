@@ -7,6 +7,7 @@ on:
     branches:
       - development
     paths:
+      - .github/**
       - module/**
       - netbox-sync.py
       - requirements.txt
@@ -36,6 +37,14 @@ jobs:
         with:
           string: ${{ github.repository }}
 
+      - name: set dockerhub repo name
+        uses: mad9000/actions-find-and-replace-string@5
+        id: dockerhub_image
+        with:
+          source: ${{ steps.docker_image.outputs.lowercase }}
+          find: 'bb-ricardo'
+          replace: ${{ vars.DOCKER_HUB_USERNAME }}
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -64,19 +73,19 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          username: ${{ vars.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
       - name: Docker hub meta
         id: meta_dhub
         uses: docker/metadata-action@v5
         with:
-          images: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ steps.docker_image.outputs.lowercase }}
+          images: docker.io/${{ steps.dockerhub_image.outputs.value }}
           tags: |
             type=semver,pattern={{version}}
             type=ref,event=branch
 
-      - name: Build and push with tags - ${{ steps.meta_dhub.outputs.tags }}
+      - name: Build and push with tags - ${{ steps.dockerhub_image.outputs.value }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -84,3 +93,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta_dhub.outputs.tags }}
           labels: ${{ steps.meta_dhub.outputs.labels }}
+
+      - name: push README to Dockerhub
+        uses: christian-korneck/update-container-description-action@v1
+        env:
+          DOCKER_USER: ${{ vars.DOCKER_HUB_USERNAME }}
+          DOCKER_PASS: ${{ secrets.DOCKER_HUB_PASSWORD }}
+        with:
+          destination_container_repo: ${{ steps.dockerhub_image.outputs.value }}
+          provider: dockerhub
