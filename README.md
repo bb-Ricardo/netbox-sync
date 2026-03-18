@@ -30,14 +30,8 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 
 ## Requirements
 ### Software
-* python >= 3.6
-* packaging
-* urllib3==2.2.1
-* wheel
-* requests==2.31.0
-* pyvmomi==8.0.2.0.1
-* aiodns==3.0.0
-* pyyaml==6.0.1
+* python >= 3.12
+* see [requirements.txt](requirements.txt)
 
 ### Environment
 * NetBox >= 2.9
@@ -49,20 +43,17 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 # Installing
 * here we assume we install in ```/opt```
 
-## RedHat based OS
-* on RedHat/CentOS 7 you need to install python3.6 and pip from EPEL first
-* on RedHat/CentOS 8 systems the package name changed to `python3-pip`
+## RedHat based distributions
 ```shell
-yum install python36-pip
+yum install python3-pip
 ```
 
-## Ubuntu 18.04 & 20.04 && 22.04
+## Debian (Ubuntu) based distributions
 ```shell
 apt-get update && apt-get install python3-venv
 ```
 
 ## Clone repo and install dependencies
-* If you need to use python 3.6 then you would need `requirements_3.6.txt` to install requirements
 * download and setup of virtual environment
 ```shell
 cd /opt
