@@ -99,18 +99,18 @@ usage: netbox-sync.py [-h] [-c settings.ini [settings.ini ...]] [-g]
 
 Sync objects from various sources to NetBox
 
-Version: 1.8.0 (2025-03-07)
+Version: 1.8.1 (2026-03-18)
 Project URL: https://github.com/bb-ricardo/netbox-sync
 
 options:
   -h, --help            show this help message and exit
-  -c settings.ini [settings.ini ...], --config settings.ini [settings.ini ...]
+  -c, --config settings.ini [settings.ini ...]
                         points to the config file to read config data from
                         which is not installed under the default path
                         './settings.ini'
   -g, --generate_config
                         generates default config file.
-  -l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}, --log_level {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}
+  -l, --log_level {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}
                         set log level (overrides config)
   -n, --dry_run         Operate as usual but don't change anything in NetBox.
                         Great if you want to test and see what would be

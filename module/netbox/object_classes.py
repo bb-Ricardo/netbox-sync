@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -683,7 +683,7 @@ class NetBoxObject:
             if self.data_model.get(key) == NBCustomField:
                 if current_value is None:
                     current_value = dict()
-                
+
                 # Fix for object/multi-object custom fields
                 # When patching, we only need the IDs, not the full object representation
                 new_value_copy = new_value.copy()
@@ -692,11 +692,11 @@ class NetBoxObject:
                     custom_field = self.inventory.get_by_data(NBCustomField, data={"name": field_name})
                     if custom_field is not None:
                         field_type = grab(custom_field, "data.type")
-                        
+
                         # Handle object type custom fields - need only ID
                         if field_type == "object" and isinstance(field_value, dict) and field_value.get('id') is not None:
                             new_value[field_name] = field_value.get('id')
-                        
+
                         # Handle multi-object type custom fields - need list of IDs
                         elif field_type == "multi-object" and isinstance(field_value, list):
                             ids = []
@@ -705,7 +705,7 @@ class NetBoxObject:
                                     ids.append(item.get('id'))
                             if ids:
                                 new_value[field_name] = ids
-                
+
                 new_value = {**current_value, **new_value}
                 new_value_str = str(new_value)
             elif isinstance(new_value, (NetBoxObject, NBObjectList)):
