@@ -94,11 +94,11 @@ jobs:
           tags: ${{ steps.meta_dhub.outputs.tags }}
           labels: ${{ steps.meta_dhub.outputs.labels }}
 
-      - name: push README to Dockerhub
-        uses: christian-korneck/update-container-description-action@v1
-        env:
-          DOCKER_USER: ${{ vars.DOCKER_HUB_USERNAME }}
-          DOCKER_PASS: ${{ secrets.DOCKER_HUB_PASSWORD }}
-        with:
-          destination_container_repo: ${{ steps.dockerhub_image.outputs.value }}
-          provider: dockerhub
+#      - name: push README to Dockerhub
+#        uses: christian-korneck/update-container-description-action@v1
+#        env:
+#          DOCKER_USER: ${{ vars.DOCKER_HUB_USERNAME }}
+#          DOCKER_PASS: ${{ secrets.DOCKER_HUB_PASSWORD }}
+#        with:
+#          destination_container_repo: ${{ steps.dockerhub_image.outputs.value }}
+#          provider: dockerhub
