@@ -89,7 +89,7 @@ class VMWareConfig(ConfigBase):
                               If a filter is unset it will be ignored. Filters are all treated as regex expressions!
                               If more then one expression should match, a '|' needs to be used
                               """,
-                              config_example="""Example: (exclude all VMs with "replica" in their name 
+                              config_example="""Example: (exclude all VMs with "replica" in their name
                               and all VMs starting with "backup"): vm_exclude_filter = .*replica.*|^backup.*""",
                               options=[
                                 ConfigOption("cluster_exclude_filter",
@@ -143,7 +143,7 @@ class VMWareConfig(ConfigBase):
                                              description="""Same as cluster site but on host level.
                                              If unset it will fall back to cluster_site_relation""",
                                              config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
-                                ConfigOption("cluster_scope_type_relation", 
+                                ConfigOption("cluster_scope_type_relation",
                                              str,
                                              description="""This option defines the scope type for a cluster.
                                              The scope type can be 'dcim.site', 'dcim.sitegroup', 'dcim.location' or 'dcim.region'.

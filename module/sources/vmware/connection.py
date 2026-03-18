@@ -501,7 +501,7 @@ class VMWareHandler(SourceBase):
         log.debug2(f"Returning site name '{site_name}' for {object_type.name} '{object_name}'.")
 
         return site_name
-    
+
     def get_scope_type(self, object_type, object_name):
         """
         Retrieve the scope_type for a NBCluster instance by object name or from the config option
@@ -524,12 +524,12 @@ class VMWareHandler(SourceBase):
         # Validate object type
         if object_type != NBCluster:
             raise ValueError(f"Object type must be '{NBCluster.name}'.")
-        
+
         # get scope type from relation config
         relation_name = "cluster_scope_type_relation"
         scope_type = self.get_object_relation(object_name, relation_name)
         log.debug(f"Retrieved scope type '{scope_type}' for {object_type.name} '{object_name}' from relation '{relation_name}'.")
-        
+
         # if the scope_type is a list, use the first element
         if scope_type is not None and type(scope_type) is list:
             scope_type_list = scope_type
@@ -545,7 +545,7 @@ class VMWareHandler(SourceBase):
         if scope_type == "<NONE>":
             log.debug(f"Scope type for {object_type.name} '{object_name}' is set to None")
             return None
-        
+
         log.debug2(f"Returning scope type '{scope_type}' for {object_type.name} '{object_name}'.")
         return scope_type
 
@@ -577,16 +577,16 @@ class VMWareHandler(SourceBase):
 
         # return None if scope_id is None or not a string
         if scope_id is None:
-            log.debug(f"No scope id found for {object_name}.") 
+            log.debug(f"No scope id found for {object_name}.")
             return None
         if type(scope_id) is not str:
             log.debug(f"scope_id is type: {type(scope_id)}, not str")
             return None
-        
+
         log.debug2(f"Retrieved scope id '{scope_id}' for {object_type.name} '{object_name}' from relation '{relation_name}'. End of method.")
 
         return scope_id
-    
+
     def get_object_based_on_macs(self, object_type, mac_list=None):
         """
         Try to find a NetBox object based on list of MAC addresses.
@@ -1480,10 +1480,10 @@ class VMWareHandler(SourceBase):
         scope_type = self.get_scope_type(NBCluster, full_cluster_name)
         if scope_type is None:
             scope_type = self.get_scope_type(NBCluster, name)
-        
+
         site_name = self.get_site_name(NBCluster, full_cluster_name)
 
-        scope_id = self.get_scope_id(NBCluster, full_cluster_name)        
+        scope_id = self.get_scope_id(NBCluster, full_cluster_name)
         if scope_id is None:
             scope_id = self.get_scope_id(NBCluster, name)
         log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
