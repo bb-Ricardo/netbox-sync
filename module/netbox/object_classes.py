@@ -377,7 +377,7 @@ class NetBoxObject:
                     if isinstance(data_value, list):
                         new_data_value = list()
                         for possible_option in data_value:
-                            if type(possible_option) == type:
+                            if type(possible_option) is type:
                                 new_data_value.append(str(possible_option))
                             else:
                                 new_data_value.append(possible_option)
@@ -385,7 +385,7 @@ class NetBoxObject:
                         data_value = new_data_value
 
                     # if value is class name then print class name
-                    if type(data_value) == type:
+                    if type(data_value) is type:
                         data_value = str(data_value)
 
                     data_model[data_key] = data_value
@@ -458,7 +458,7 @@ class NetBoxObject:
         # Enforce max length
         return text[0:max_len]
 
-    def get_uniq_slug(self, text=None, max_len=50)-> str:
+    def get_uniq_slug(self, text=None, max_len=50) -> str:
         """
         return an uniq slug. If the default slug is already used try to
         append a number until a slug is found which has not been used.
@@ -480,7 +480,7 @@ class NetBoxObject:
         if self.inventory.slug_used(self.__class__, slug) is False:
             return slug
 
-        for x in range(1,20):
+        for x in range(1, 20):
             new_slug = f"{slug}-{x}"
             if self.inventory.slug_used(self.__class__, new_slug) is False and len(new_slug) <= max_len:
                 log.info(f"Slug '{slug}' for {self.name} '{text}' has been used. "
@@ -1272,6 +1272,7 @@ class NetBoxObject:
             if isinstance(this_site, dict):
                 return this_site.get("name")
 
+
 class NBObjectList(list):
     """
     Base class of listed NetBox objects. Extends list(). Currently used for tags and untagged VLANs
@@ -1696,7 +1697,6 @@ class NBPrefix(NetBoxObject):
                 return
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
-
 
     def resolve_relations(self):
 
@@ -2141,18 +2141,6 @@ class NBIPAddress(NetBoxObject):
         object_type = data.get("assigned_object_type")
         assigned_object = data.get("assigned_object_id")
 
-        # Skip IP assignments when the IP is assigned to FHRP groups when config option
-        # skip_fhrp_group_ips is set to True, or if the IP is manually assigned to an FHRP group (no source)
-        if source is not None:
-            if source.source_type == "vmware":
-                config_relation = source.get_object_relation(assigned_object, "skip_fhrp_group_ips")
-                if config_relation == True and object_type == "ipam.fhrpgroup":
-                    log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. Skipping.")
-                    return
-        elif object_type == "ipam.fhrpgroup":
-            log.debug(f"IP address with id '{assigned_object}' assigned to FHRP group. It was manually created. Skipping.")
-            return
-
         # used to track changes in object primary IP assignments
         previous_ip_device_vm = None
         is_primary_ipv4_of_previous_device = False
@@ -2240,6 +2228,7 @@ class NBIPAddress(NetBoxObject):
             self.unset_attribute("assigned_object_id")
         if o_type is not None:
             self.unset_attribute("assigned_object_type")
+
 
 class NBMACAddress(NetBoxObject):
     name = "MAC address"
