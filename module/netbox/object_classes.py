@@ -552,7 +552,6 @@ class NetBoxObject:
 
         parsed_data = dict()
         for key, value in data.items():
-
             if key not in self.data_model.keys():
                 log.error(f"Found undefined data model key '{key}' for object '{self.__class__.__name__}'")
                 continue
@@ -751,7 +750,7 @@ class NetBoxObject:
                 new_value_str = new_value_str.replace("\n", " ")
                 log.info(f"{self.name.capitalize()} '{display_name}' attribute '{key}' changed from "
                          f"'{current_value_str}' to '{new_value_str}'")
-
+            
             self.data[key] = new_value
             self.updated_items.append(key)
             data_updated = True
@@ -1273,7 +1272,6 @@ class NetBoxObject:
             if isinstance(this_site, dict):
                 return this_site.get("name")
 
-
 class NBObjectList(list):
     """
     Base class of listed NetBox objects. Extends list(). Currently used for tags and untagged VLANs
@@ -1424,39 +1422,39 @@ class NBTenant(NetBoxObject):
         super().__init__(*args, **kwargs)
 
 
-# class NBLocation(NetBoxObject):
-#     name = "location"
-#     api_path = "dcim/locations"
-#     object_type = "dcim.location"
-#     primary_key = "name"
-#     prune = False
-#     read_only = True
-#
-#     def __init__(self, *args, **kwargs):
-#         self.data_model = {
-#             "name": 100,
-#             "slug": 100,
-#             "site": NBSite,
-#             "tags": NBTagList
-#         }
-#         super().__init__(*args, **kwargs)
-#
-#
-# class NBRegion(NetBoxObject):
-#     name = "region"
-#     api_path = "dcim/regions"
-#     object_type = "dcim.region"
-#     primary_key = "name"
-#     prune = False
-#     read_only = True
-#
-#     def __init__(self, *args, **kwargs):
-#         self.data_model = {
-#             "name": 100,
-#             "slug": 100,
-#             "tags": NBTagList
-#         }
-#         super().__init__(*args, **kwargs)
+class NBLocation(NetBoxObject):
+    name = "location"
+    api_path = "dcim/locations"
+    object_type = "dcim.location"
+    primary_key = "name"
+    prune = False
+    read_only = True
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "site": NBSite,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBRegion(NetBoxObject):
+    name = "region"
+    api_path = "dcim/regions"
+    object_type = "dcim.region"
+    primary_key = "name"
+    prune = False
+    read_only = True
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "name": 100,
+            "slug": 100,
+            "tags": NBTagList
+        }
+        super().__init__(*args, **kwargs)
 
 
 class NBSite(NetBoxObject):
@@ -1868,14 +1866,14 @@ class NBCluster(NetBoxObject):
     api_path = "virtualization/clusters"
     object_type = "virtualization.cluster"
     primary_key = "name"
-    secondary_key = "site"
+    secondary_key = "scope_id"
     prune = False
-    # include_secondary_key_if_present = True
 
     def __init__(self, *args, **kwargs):
         self.mapping = NetBoxMappings()
+        # scope types allowed for clusters
         self.scopes = [
-            NBSite, NBSiteGroup
+            NBSite, NBSiteGroup, NBLocation, NBRegion
         ]
         self.data_model = {
             "name": 100,
@@ -1884,29 +1882,20 @@ class NBCluster(NetBoxObject):
             "tenant": NBTenant,
             "group": NBClusterGroup,
             "scope_type": self.mapping.scopes_object_types(self.scopes),
-            # currently only site is supported as a scope
-            "scope_id": NBSite,
+            # supports scoped clusters
+            "scope_id": NetBoxObject,
+            # supports pre4.2.0 clusters with site
+            "site": NBSite,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
     def update(self, data=None, read_from_netbox=False, source=None):
 
-        # Add adaption for change in NetBox 4.2.0 Device model
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            if data.get("site") is not None:
-                data["scope_id"] = data.get("site")
-                data["scope_type"] = "dcim.site"
-                del data["site"]
-
-            if data.get("scope_id") is not None:
-                data["scope_type"] = "dcim.site"
-
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
     def resolve_relations(self):
-
-        self.resolve_scoped_relations("scope_id", "scope_type")
+        log.debug2(f"Resolving relations for {self.name} '{self.get_display_name()}'")
         super().resolve_relations()
 
 
