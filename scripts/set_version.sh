@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -11,8 +11,9 @@
 EXAMPLE_CONFIG_FILE="settings-example.ini"
 VERSION_DATA_FILE="module/__init__.py"
 README_FILE="README.md"
+PYPROJECT_TOML="pyproject.toml"
 VERSION_TO_SET="$1"
-COPYRIGHT_PATTERN="#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved."
+COPYRIGHT_PATTERN="#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved."
 
 BASE_PATH="$(realpath "$(dirname "${0}")/..")"
 # shellcheck disable=SC2181
@@ -28,6 +29,7 @@ read -rp "Should '$VERSION_TO_SET' be set as the new version [yN]: " -n1 ANSWER 
 # setting new version and date
 sed -i "" -e 's/^__version__.*/__version__ = "'"${VERSION_TO_SET}"'"/g' "${VERSION_DATA_FILE}"
 sed -i "" -e 's/^__version_date__.*/__version_date__ = "'"$(date +%F)"'"/g' "${VERSION_DATA_FILE}"
+sed -i "" -e 's/^version = .*/version = "'"${VERSION_TO_SET}"'"/g' ${PYPROJECT_TOML}
 
 # update config
 [[ -e "${EXAMPLE_CONFIG_FILE}" ]] && rm "$EXAMPLE_CONFIG_FILE"
@@ -46,7 +48,7 @@ README_BOTTOM=$(sed -n '/## TESTING/,$ p' "${README_FILE}")
 } > "${README_FILE}"
 
 # update COPYRIGHT notice date
-NEW_COPYRIGHT_NOTICE="${COPYRIGHT_PATTERN//..../$(date +%Y)}"
+NEW_COPYRIGHT_NOTICE="${COPYRIGHT_PATTERN//2020 - $(($(date +%Y)-1))/2020 - $(date +%Y)}"
 grep -lR "$COPYRIGHT_PATTERN" "${BASE_PATH}" | while read -r FILE; do
   sed -i "" -e 's/'"${COPYRIGHT_PATTERN}"'/'"${NEW_COPYRIGHT_NOTICE}"'/g' "${FILE}"
 done

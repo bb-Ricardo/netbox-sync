@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -1388,8 +1388,9 @@ class VMWareHandler(SourceBase):
         }
 
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            data["scope_id"] = {"name": site_name}
-            data["scope_type"] = "dcim.site"
+            if site_name is not None:
+                data["scope_id"] = {"name": site_name}
+                data["scope_type"] = "dcim.site"
         else:
             data["site"] = {"name": site_name}
 
@@ -2180,12 +2181,35 @@ class VMWareHandler(SourceBase):
         platform = get_string_or_none(grab(obj, "guest.guestFullName", fallback=platform))
 
         # extract prettyName from extraConfig exposed by guest tools
-        extra_config = [x.value for x in grab(obj, "config.extraConfig", fallback=[])
-                        if x.key == "guestOS.detailed.data"]
-        if len(extra_config) > 0:
-            pretty_name = [x for x in quoted_split(extra_config[0].replace("' ", "', ")) if x.startswith("prettyName")]
-            if len(pretty_name) > 0:
-                platform = pretty_name[0].replace("prettyName='","")
+        extra_config = {x.key: x.value for x in grab(obj, "config.extraConfig", fallback=[])
+                        if x.key in ["guestOS.detailed.data", "guestInfo.detailed.data"]}
+
+        # first try 'guestInfo.detailed.data' and then 'guestOS.detailed.data'
+        detailed_data = extra_config.get("guestInfo.detailed.data") or extra_config.get("guestOS.detailed.data")
+
+        # if guestOS tools ar installed but are not able to determine the os-release
+        # then check against this pattern to guess if a correct os string has been returned
+        invalid_patterns = ["Usage:", "Error:", "command not found", "No such file"]
+
+        if isinstance(detailed_data, str):
+            detailed_data_dict = dict()
+            pretty_name = None
+            for detailed_data_item in quoted_split(detailed_data.replace("' ", "', ")):
+                if "=" not in detailed_data_item:
+                    continue
+
+                detailed_data_key, detailed_data_value = detailed_data_item.split("=")
+                detailed_data_dict[detailed_data_key] = detailed_data_value.strip("'")
+            if len(detailed_data_dict.get("prettyName", "")) > 0:
+                pretty_name = detailed_data_dict.get("prettyName")
+
+            if pretty_name and not any(pretty_name.startswith(p) for p in invalid_patterns):
+                platform = pretty_name
+                distro_version = detailed_data_dict.get("distroVersion")
+                if detailed_data_dict.get("familyName", "").lower() == "linux" and \
+                        distro_version is not None and \
+                        distro_version not in platform:
+                    platform = f'{platform} {distro_version}'
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
