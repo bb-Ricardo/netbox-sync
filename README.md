@@ -88,6 +88,8 @@ In order to updated data in NetBox you need a NetBox API token.
   * auth
   * secrets
   * users
+* Both v1 (legacy) and v2 tokens (NetBox 4.5+, `nbt_` prefix) are supported.
+  The correct authorization header (`Token` or `Bearer`) is detected automatically.
 
 A short description can be found [here](https://docs.netbox.dev/en/stable/integrations/rest-api/#authentication)
 
