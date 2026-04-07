@@ -152,8 +152,10 @@ class NetBoxHandler:
         requests.Session: session handler of new NetBox session
         """
 
+        token = self.settings.api_token
+        keyword = "Bearer" if token.startswith("nbt_") else "Token"
         header = {
-            "Authorization": f"Token {self.settings.api_token}",
+            "Authorization": f"{keyword} {token}",
             "User-Agent": f"netbox-sync/{__version__}",
             "Content-Type": "application/json"
         }
