@@ -11,6 +11,7 @@ license-files = ["LICENSE.txt"]
 requires-python = ">=3.13"
 dependencies = [
     "aiodns>=4.0.0",
+    "hcloud>=2.20.0",
     "packaging>=26.2",
     "pyvmomi==9.1.0.0",
     "pyyaml>=6.0.3",

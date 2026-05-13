@@ -67,10 +67,10 @@ pip3 install -r requirements.txt || pip install -r requirements.txt
 ```
 
 ### VMware tag sync (if necessary)
-The `vsphere-automation-sdk` must be installed if tags should be synced from vCenter to NetBox
+The `vcf-sdk` must be installed if tags should be synced from vCenter to NetBox
 * assuming we are still in an activated virtual env
 ```shell
-pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
+pip install --upgrade vcf-sdk
 ```
 
 ## NetBox API token
