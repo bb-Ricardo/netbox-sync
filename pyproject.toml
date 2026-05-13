@@ -11,13 +11,13 @@ license-files = ["LICENSE.txt"]
 requires-python = ">=3.13"
 dependencies = [
     "aiodns>=4.0.0",
-    "packaging>=26.0",
-    "pyvmomi==8.0.3.0.1",
+    "packaging>=26.2",
+    "pyvmomi==9.1.0.0",
     "pyyaml>=6.0.3",
-    "requests>=2.32.5",
-    "setuptools==81.0.0",
-    "urllib3>=2.6.3",
-    "wheel>=0.46.3",
+    "requests>=2.34.1",
+    "setuptools==82.0.1",
+    "urllib3>=2.7.0",
+    "wheel>=0.47.0",
 ]
 
 [project.urls]
