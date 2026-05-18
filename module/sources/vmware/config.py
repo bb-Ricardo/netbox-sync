@@ -143,6 +143,14 @@ class VMWareConfig(ConfigBase):
                                              description="""Same as cluster site but on host level.
                                              If unset it will fall back to cluster_site_relation""",
                                              config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
+                                ConfigOption("cluster_region_relation",
+                                             str,
+                                             description="""Same as cluster site but for regions."""),
+                                ConfigOption("host_region_relation",
+                                             str,
+                                             description="""Same as cluster region but on host level.
+                                             If unset it will fall back to cluster_region_relation""",
+                                             config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
                                 ConfigOption("cluster_tenant_relation",
                                              str,
                                              description="""\
