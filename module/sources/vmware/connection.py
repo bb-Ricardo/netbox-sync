@@ -446,9 +446,15 @@ class VMWareHandler(SourceBase):
         return True
 
     def get_site_name(self, object_type, object_name, cluster_name=""):
+        return self.get_object_relation_name(object_type, object_name, 'site', cluster_name)
+
+    def get_region_name(self, object_type, object_name, cluster_name=""):
+        return self.get_object_relation_name(object_type, object_name, 'region', cluster_name)
+
+    def get_object_relation_name(self, object_type, object_name, relation, cluster_name=""):
         """
-        Return a site name for a NBCluster or NBDevice depending on config options
-        host_site_relation and cluster_site_relation
+        Return a relation object name for a NBCluster or NBDevice depending on config options
+        host_{relation}_relation and cluster_{relation}_relation
 
         Parameters
         ----------
@@ -456,6 +462,8 @@ class VMWareHandler(SourceBase):
             object type to check site relation for
         object_name: str
             object name to check site relation for
+        relation: str
+            name of the relation (site, region)
         cluster_name: str
             cluster name of NBDevice to check for site name
 
@@ -463,33 +471,32 @@ class VMWareHandler(SourceBase):
         -------
         str: site name if a relation was found
         """
-
         if object_type not in [NBCluster, NBDevice]:
             raise ValueError(f"Object must be a '{NBCluster.name}' or '{NBDevice.name}'.")
 
-        log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
+        log.debug2(f"Trying to find {relation} name for {object_type.name} '{object_name}'")
 
-        # check if site was provided in config
-        relation_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
+        # check if relation was provided in config
+        relation_name = f"host_{relation}_relation" if object_type == NBDevice else f"cluster_{relation}_relation"
 
-        site_name = self.get_object_relation(object_name, relation_name)
+        result = self.get_object_relation(object_name, relation_name)
 
-        if object_type == NBDevice and site_name is None:
-            site_name = self.get_site_name(NBCluster, cluster_name)
-            if site_name is not None:
-                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+        if object_type == NBDevice and result is None:
+            result = self.get_object_relation_name(NBCluster, cluster_name, relation)
+            if result is not None:
+                log.debug2(f"Found a matching cluster {relation} for {object_name}, using {relation} '{result}'")
 
         # set default site name
-        if site_name is None:
-            site_name = self.site_name
-            log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
+        if result is None and relation == 'site':
+            result = self.site_name
+            log.debug(f"No {relation} relation for '{object_name}' found, using default {relation} '{result}'")
 
-        # set the site for cluster to None if None-keyword ("<NONE>") is set via cluster_site_relation
-        if object_type == NBCluster and site_name == "<NONE>":
-            site_name = None
-            log.debug2(f"Site relation for '{object_name}' set to None")
+        # set the relation for cluster to None if None-keyword ("<NONE>") is set via cluster_site_relation
+        if object_type == NBCluster and result == "<NONE>":
+            result = None
+            log.debug2(f"{relation} relation for '{object_name}' set to None")
 
-        return site_name
+        return result
 
     def get_object_based_on_macs(self, object_type, mac_list=None):
         """
@@ -1380,6 +1387,7 @@ class VMWareHandler(SourceBase):
             return
 
         site_name = self.get_site_name(NBCluster, full_cluster_name)
+        region_name = self.get_region_name(NBCluster, full_cluster_name)
 
         data = {
             "name": name,
@@ -1387,12 +1395,19 @@ class VMWareHandler(SourceBase):
             "group": group
         }
 
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            if site_name is not None:
+        if site_name:
+            if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
                 data["scope_id"] = {"name": site_name}
                 data["scope_type"] = "dcim.site"
-        else:
-            data["site"] = {"name": site_name}
+            else:
+                data["site"] = {"name": site_name}
+        elif region_name:
+            if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+                data["scope_id"] = {"name": region_name}
+                data["scope_type"] = "dcim.region"
+            else:
+                data["region"] = {"name": region_name}
+        log.info(f"full_cluster_name: {full_cluster_name}, site_name: {site_name}, region_name: {region_name}")
 
         tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:
@@ -1411,24 +1426,32 @@ class VMWareHandler(SourceBase):
             if grab(cluster_candidate, "data.name") != name:
                 continue
 
-            # try to find a cluster with matching site
-            if cluster_candidate.get_site_name() == site_name:
+            # try to find a cluster with matching site and group
+            if cluster_candidate.get_site_name() == site_name and \
+                    grab(cluster_candidate, "data.group") is not None and \
+                    grab(cluster_candidate, "data.group.data.name") == group_name:
                 cluster_object = cluster_candidate
-                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
+                log.debug2("Found an existing cluster where 'name', 'site' and 'group' are matching")
                 break
 
-            if grab(cluster_candidate, "data.group") is not None and \
+            # try to find a cluster with matching site
+            if not cluster_object and cluster_candidate.get_site_name() == site_name:
+                cluster_object = cluster_candidate
+                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
+                continue
+
+            if not cluster_object and grab(cluster_candidate, "data.group") is not None and \
                     grab(cluster_candidate, "data.group.data.name") == group_name:
                 cluster_object = cluster_candidate
                 log.debug2("Found an existing cluster where 'name' and 'cluster group' are matching")
-                break
+                continue
 
-            if grab(cluster_candidate, "data.tenant") is not None and \
+            if not cluster_object and grab(cluster_candidate, "data.tenant") is not None and \
                     tenant_name is not None and \
                     grab(cluster_candidate, "data.tenant.data.name") == tenant_name:
                 cluster_object = cluster_candidate
                 log.debug2("Found an existing cluster where 'name' and 'tenant' are matching")
-                break
+                continue
 
             # if only the name matches and there are multiple cluster with the same name we choose the first
             # cluster returned from netbox. This needs to be done to not ignore possible matches in one of
