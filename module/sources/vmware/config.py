@@ -8,7 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import re
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 
 from module.common.misc import quoted_split
 from module.config import source_config_section_name
@@ -81,6 +81,18 @@ class VMWareConfig(ConfigBase):
                          config_example=3128),
 
             ConfigOption(**config_option_permitted_subnets_definition),
+
+            ConfigOption("vm_ip_permitted_overlapping_subnets",
+                         str,
+                         description="""\
+                         Define subnets where the same IP address may legitimately appear on
+                         multiple VM interfaces simultaneously — for example, isolated HA
+                         peer-to-peer links where the same /30 addressing is reused across
+                         many VM pairs. Supply a comma-separated list of prefixes in CIDR
+                         notation. When an IP falls within one of these subnets, netbox-sync
+                         creates a separate NetBox IP address object per interface rather than
+                         sharing a single object across VMs.""",
+                         config_example="10.99.99.0/24, 192.168.200.0/24"),
 
             ConfigOptionGroup(title="filter",
                               description="""filters can be used to include/exclude certain objects from importing
@@ -166,6 +178,20 @@ class VMWareConfig(ConfigBase):
                                                value: defines the desired NetBox platform name""",
                                              config_example="VMware ESXi 7.0.3 = VMware ESXi 7.0 Update 3o"),
                                 ConfigOption("vm_platform_relation", str, config_example="centos-7.* = centos7, microsoft-windows-server-2016.* = Windows2016"),
+                                ConfigOption("vm_platform_from_annotation_relation",
+                                             str,
+                                             description="""\
+                                             Override the platform of a VM based on the content of its vCenter
+                                             annotation (the Notes field, synced to the NetBox comments field).
+                                             Useful when vSphere misidentifies the guest OS — for example, F5
+                                             BIG-IP/BIG-IQ Virtual Edition VMs report as CentOS but their
+                                             annotation contains product-identifying text.
+                                             This is done with a comma separated key = value list.
+                                               key: regex matched anywhere in the annotation text (re.search,
+                                                    re.DOTALL — patterns span newlines automatically)
+                                               value: defines the desired NetBox platform name
+                                             Takes priority over vm_platform_relation when both match.""",
+                                             config_example="Virtual Edition.*F5 = TMOS"),
                                 ConfigOption("host_role_relation",
                                              str,
                                              description="""\
@@ -469,6 +495,37 @@ class VMWareConfig(ConfigBase):
 
                 continue
 
+            if option.key == "vm_platform_from_annotation_relation":
+
+                relation_data = list()
+
+                for relation in quoted_split(option.value):
+
+                    object_name = relation.split("=")[0].strip(' "')
+                    relation_name = relation.split("=")[1].strip(' "')
+
+                    if len(object_name) == 0 or len(relation_name) == 0:
+                        log.error(f"Config option '{relation}' malformed got '{object_name}' for "
+                                  f"object name and '{relation_name}' for annotation platform name.")
+                        self.set_validation_failed()
+                        continue
+
+                    try:
+                        re_compiled = re.compile(object_name, re.DOTALL)
+                    except Exception as e:
+                        log.error(f"Problem parsing regular expression '{object_name}' for '{relation}': {e}")
+                        self.set_validation_failed()
+                        continue
+
+                    relation_data.append({
+                        "object_regex": re_compiled,
+                        "assigned_name": relation_name
+                    })
+
+                option.set_value(relation_data)
+
+                continue
+
             if "relation" in option.key and "vlan_group_relation" not in option.key:
 
                 relation_data = list()
@@ -650,3 +707,16 @@ class VMWareConfig(ConfigBase):
                 self.set_validation_failed()
 
             permitted_subnets_option.set_value(permitted_subnets)
+
+        overlapping_subnets_option = self.get_option_by_name("vm_ip_permitted_overlapping_subnets")
+
+        if overlapping_subnets_option is not None and overlapping_subnets_option.value is not None:
+            subnet_list = [x.strip() for x in overlapping_subnets_option.value.split(",") if x.strip() != ""]
+            parsed_subnets = []
+            for subnet in subnet_list:
+                try:
+                    parsed_subnets.append(ip_network(subnet, strict=False))
+                except Exception as e:
+                    log.error(f"Problem parsing vm_ip_permitted_overlapping_subnets entry '{subnet}': {e}")
+                    self.set_validation_failed()
+            overlapping_subnets_option.set_value(parsed_subnets)

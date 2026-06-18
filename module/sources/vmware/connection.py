@@ -2216,9 +2216,17 @@ class VMWareHandler(SourceBase):
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
-        annotation = None
-        if self.settings.skip_vm_comments is False:
-            annotation = get_string_or_none(grab(obj, "config.annotation"))
+        # always read annotation — needed for platform detection even when skip_vm_comments is True
+        annotation = get_string_or_none(grab(obj, "config.annotation"))
+
+        # override platform based on annotation content; takes priority over vm_platform_relation
+        if annotation is not None:
+            for relation in grab(self.settings, "vm_platform_from_annotation_relation", fallback=list()):
+                if relation.get("object_regex").search(annotation):
+                    platform = relation.get("assigned_name")
+                    log.debug2(f"Overriding VM platform to '{platform}' based on annotation content "
+                               f"(pattern: '{relation.get('object_regex').pattern}')")
+                    break
 
         # assign vm_tenant_relation
         tenant_name = self.get_object_relation(name, "vm_tenant_relation")
@@ -2272,7 +2280,7 @@ class VMWareHandler(SourceBase):
 
         if platform is not None:
             vm_data["platform"] = {"name": platform}
-        if annotation is not None:
+        if annotation is not None and self.settings.skip_vm_comments is False:
             vm_data["comments"] = annotation
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}

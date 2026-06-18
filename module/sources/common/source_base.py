@@ -442,7 +442,25 @@ class SourceBase:
             # try to find matching IP address object
             this_ip_object = None
             skip_this_ip = False
+
+            ip_is_overlapping = any(
+                ip_object.ip in subnet
+                for subnet in grab(self.settings, "vm_ip_permitted_overlapping_subnets", fallback=list())
+            )
+
+            if ip_is_overlapping:
+                for ip in self.inventory.get_all_items(NBIPAddress):
+                    ip_address_string = grab(ip, "data.address", fallback="")
+                    if not ip_address_string.startswith(f"{ip_object.ip.compressed}/"):
+                        continue
+                    if ip.get_interface() == interface_object:
+                        this_ip_object = ip
+                        break
+
             for ip in self.inventory.get_all_items(NBIPAddress):
+
+                if ip_is_overlapping:
+                    continue
 
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
