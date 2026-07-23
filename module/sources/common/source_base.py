@@ -68,6 +68,10 @@ class SourceBase:
                 ens1 > vNIC 3
                 ...  > ...
 
+            Current interfaces whose name matches the source setting 'vm_interface_exclude_filter'
+            (or 'host_interface_exclude_filter' for devices) are excluded from all matching
+            attempts and will therefore never be altered.
+
         Parameters
         ----------
         device_vm_object: (NBDevice, NBVM)
@@ -96,6 +100,11 @@ class SourceBase:
 
         log.debug2("Trying to match current object interfaces in NetBox with discovered interfaces")
 
+        if isinstance(device_vm_object, NBVM):
+            interface_exclude_filter = self.settings.vm_interface_exclude_filter
+        else:
+            interface_exclude_filter = self.settings.host_interface_exclude_filter
+
         current_object_interfaces = {
             "virtual": dict(),
             "physical": dict()
@@ -109,6 +118,12 @@ class SourceBase:
         for interface in self.inventory.get_all_interfaces(device_vm_object):
             int_mac = grab(interface, "data.mac_address")
             int_name = grab(interface, "data.name")
+
+            if interface_exclude_filter is not None and int_name is not None and \
+                    interface_exclude_filter.match(int_name):
+                log.debug2(f"Current interface '{int_name}' matches interface_exclude_filter. "
+                           f"Excluding it from all interface matching attempts")
+                continue
             int_type = "virtual"
             if "virtual" not in str(grab(interface, "data.type", fallback="virtual")):
                 int_type = "physical"
