@@ -46,6 +46,51 @@ class SourceBase:
     def finish(self):
         pass
 
+    def ip_is_primary_ip_of_object(self, ip_object, device_vm_object) -> bool:
+        """
+        Check if a NBIPAddress object is currently set as primary IPv4 or IPv6
+        address of a NBDevice or NBVM object.
+
+        Parameters
+        ----------
+        ip_object: NBIPAddress
+            IP address object to check
+        device_vm_object: NBDevice | NBVM
+            device or VM object to compare the primary IPs of
+
+        Returns
+        -------
+        bool: True if 'ip_object' is set as 'primary_ip4' or 'primary_ip6'
+        """
+
+        if not isinstance(ip_object, NBIPAddress) or not isinstance(device_vm_object, (NBDevice, NBVM)):
+            return False
+
+        ip_address = grab(ip_object, "data.address")
+
+        for primary_ip_key in ["primary_ip4", "primary_ip6"]:
+
+            primary_ip = grab(device_vm_object, f"data.{primary_ip_key}")
+
+            if primary_ip is None:
+                continue
+
+            if primary_ip is ip_object:
+                return True
+
+            primary_ip_address = None
+            if isinstance(primary_ip, NBIPAddress):
+                primary_ip_address = grab(primary_ip, "data.address")
+            elif isinstance(primary_ip, dict):
+                primary_ip_address = primary_ip.get("address")
+            elif isinstance(primary_ip, int):
+                primary_ip_address = grab(self.inventory.get_by_id(NBIPAddress, nb_id=primary_ip), "data.address")
+
+            if primary_ip_address is not None and primary_ip_address == ip_address:
+                return True
+
+        return False
+
     def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=None,
                                                     append_unmatched_interfaces=False):
         """
@@ -610,6 +655,14 @@ class SourceBase:
                 continue
 
             if current_ip not in ip_address_objects:
+
+                if bool(self.settings.preserve_primary_ips) is True and \
+                        self.ip_is_primary_ip_of_object(current_ip, device_object):
+                    log.debug(f"{current_ip.name} '{current_ip.get_display_name()}' is the primary IP of "
+                              f"'{device_object.get_display_name()}' and 'preserve_primary_ips' is enabled. "
+                              f"NOT removing it from this interface")
+                    continue
+
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
                          f"therefore removed from this interface")
                 current_ip.remove_interface_association()
