@@ -2693,6 +2693,25 @@ class VMWareHandler(SourceBase):
 
                 nic_data[int_full_name] = vm_nic_data
 
+        # if VM has only one IPv4 on all interfaces, use it as primary IPv4 address
+        if vm_primary_ip4 is None:
+            potential_primary_ipv4_list = list()
+
+            for ip in [y for xs in nic_ips.values() for y in xs]:
+                # noinspection PyBroadException
+                try:
+                    ip_address_object = ip_interface(ip)
+                except Exception:
+                    continue
+
+                if ip_address_object.version == 4:
+                    potential_primary_ipv4_list.append(ip_address_object)
+
+            if len(potential_primary_ipv4_list) == 1:
+                log.debug(f"Found one IPv4 '{potential_primary_ipv4_list[0]}' address on all interfaces of "
+                          f"VM '{name}', using it as primary IPv4.")
+                vm_primary_ip4 = potential_primary_ipv4_list[0]
+
         # if VM has only one IPv6 on all interfaces, use it as primary IPv6 address
         if vm_primary_ip6 is None or True:
             all_ips = [y for xs in nic_ips.values() for y in xs]
