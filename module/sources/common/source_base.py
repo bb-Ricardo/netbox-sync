@@ -366,6 +366,15 @@ class SourceBase:
         if type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
             log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
             skip_ip_handling = True
+        elif type(device_object) == NBVM and len(grab(vmware_object, "guest.net", fallback=list())) == 0:
+            # guest tools report "running" but returned zero NICs for the whole VM -- this is a stale/
+            # incompatible guest tools install (seen on old TMOS releases), not a real "all interfaces lost
+            # their IP" event. Trusting it would tear down otherwise-valid NetBox IP-to-interface assignments
+            # every sync cycle. A real per-NIC IP removal still reports the NIC (with no IP), so that case is
+            # unaffected by this guard.
+            log.debug(f"VM '{device_object.name}' guest tools running but reported zero network interfaces; "
+                      f"skipping IP handling (stale/incompatible VMware Tools?)")
+            skip_ip_handling = True
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
