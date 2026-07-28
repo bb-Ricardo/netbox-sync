@@ -284,6 +284,17 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_tag_source", str),
                                 ConfigOption("vm_tag_source", str)
                               ]),
+            ConfigOption("tag_name_include_category",
+                         bool,
+                         description="""\
+                         If enabled, vCenter tag names synced to NetBox will include the vCenter category as a
+                         prefix in the format 'CategoryName:TagName'. Useful if TagName and CategoryName is used 
+                         as key/value pairs in vCenter.
+                         When changed, existing synced tags are replaced on
+                         the next run. Note: vm_exclude_by_tag_filter entries must use 'CategoryName:TagName'
+                         format when this option is enabled.
+                         """,
+                         default_value=False),
             ConfigOption("sync_custom_attributes",
                          bool,
                          description="""sync custom attributes defined for hosts and VMs
