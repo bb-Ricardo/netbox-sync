@@ -2555,7 +2555,13 @@ class VMWareHandler(SourceBase):
                 "enabled": int_connected,
             }
 
-            if int_mtu is not None and self.settings.sync_vm_interface_mtu is True:
+            # For acos/tmos-platform interfaces, the vSwitch/portgroup MTU (jumbo-frame
+            # capability of the underlying network) isn't the same fact as the guest's own
+            # configured interface MTU that netbox-device-onboard.py's device-API collectors
+            # write to the same interface object — sending both here would fight forever.
+            # The device's own API stays authoritative for these platforms' interfaces.
+            if int_mtu is not None and self.settings.sync_vm_interface_mtu is True and \
+                    not self._uses_native_vnic_names(platform):
                 vm_nic_data["mtu"] = int_mtu
             if int_mode is not None:
                 vm_nic_data["mode"] = int_mode
