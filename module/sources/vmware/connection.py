@@ -2547,35 +2547,30 @@ class VMWareHandler(SourceBase):
 
                         vm_primary_ip6 = int_ip_address
 
+            # For acos/tmos-platform interfaces, netbox-device-onboard.py's device-API
+            # collectors (aXAPI/iControl) manage this same interface object and are
+            # authoritative for it - every attribute below (enabled, description, mtu,
+            # mode, tagged_vlans, untagged_vlan) was, in turn, confirmed live to fight
+            # with whatever the device-side collector had just set, each on its own next
+            # 5-minute cron cycle (see PRs #5, #6, #7 for the individual field-by-field
+            # history). Rather than keep chasing one field at a time, netbox-sync writes
+            # ONLY identity for these platforms - name, mac_address (needed to create the
+            # interface and seed MAC-object/IP matching) - and leaves every other
+            # attribute to the device-side collector entirely, including on first
+            # creation (NetBox's own defaults apply until the device-side onboarder runs).
             vm_nic_data = {
                 "name": unquote(int_full_name),
                 "virtual_machine": None,
                 "mac_address": int_mac,
-                "enabled": int_connected,
             }
 
-            # Same reasoning as mtu below: for acos/tmos-platform interfaces, the vSphere-
-            # generated description (adapter type + portgroup/VLAN) isn't the same fact as the
-            # device's own interface label that netbox-device-onboard.py writes here instead.
             if not self._uses_native_vnic_names(platform):
+                vm_nic_data["enabled"] = int_connected
                 vm_nic_data["description"] = unquote(int_description)
 
-            # For acos/tmos-platform interfaces, the vSwitch/portgroup MTU (jumbo-frame
-            # capability of the underlying network) isn't the same fact as the guest's own
-            # configured interface MTU that netbox-device-onboard.py's device-API collectors
-            # write to the same interface object — sending both here would fight forever.
-            # The device's own API stays authoritative for these platforms' interfaces.
-            if int_mtu is not None and self.settings.sync_vm_interface_mtu is True and \
-                    not self._uses_native_vnic_names(platform):
-                vm_nic_data["mtu"] = int_mtu
-            # Same reasoning as mtu/description above: for acos/tmos-platform interfaces,
-            # the vSwitch/portgroup's VLAN tag is the hypervisor's L2 view of the port, not
-            # necessarily the same thing as the device's own VLAN/trunk membership that
-            # netbox-device-onboard.py's collectors write to the same interface object.
-            # Confirmed live: bigip-ve-001's 1.2 (a real tagged VLAN member) had its 'mode'
-            # flipped tagged -> access by this vSwitch-derived write on the very next sync
-            # cycle after the device-side collector set it to 'tagged'.
-            if not self._uses_native_vnic_names(platform):
+                if int_mtu is not None and self.settings.sync_vm_interface_mtu is True:
+                    vm_nic_data["mtu"] = int_mtu
+
                 if int_mode is not None:
                     vm_nic_data["mode"] = int_mode
 
