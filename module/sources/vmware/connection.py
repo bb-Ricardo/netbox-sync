@@ -2059,6 +2059,52 @@ class VMWareHandler(SourceBase):
 
         return
 
+    # NIC slot 1 is always the management interface on these platforms' standard OVA/vmx
+    # deployment layout; subsequent slots are sequential data-plane interfaces. Confirmed by
+    # direct MAC-address cross-check between vCenter's reported vNIC order and each platform's
+    # own interface API/CLI (aXAPI 'interface/management'+'interface/ethernet', iControl REST
+    # 'mgmt'+'1.N') across multiple A10 vThunder and F5 BIG-IP VE instances.
+    _NATIVE_VNIC_NAMES_BY_PLATFORM = {
+        "acos": ("management", "ethernet{}"),
+        "tmos": ("mgmt", "1.{}"),
+    }
+
+    def _uses_native_vnic_names(self, platform):
+        return str(platform or "").strip().lower() in self._NATIVE_VNIC_NAMES_BY_PLATFORM
+
+    def get_vnic_name(self, platform, int_label):
+        """
+        Return the NetBox interface name for a vNIC: the platform's own native interface
+        name (e.g. 'mgmt', '1.1') for platforms in _NATIVE_VNIC_NAMES_BY_PLATFORM, otherwise
+        the default 'vNIC N' vSphere-generic name.
+
+        Naming interfaces to match what the guest OS itself calls them lets other tools that
+        manage these VMs by their own device APIs (e.g. netbox-device-onboard.py) write to the
+        SAME interface object instead of creating a second, differently-named one and fighting
+        over which interface owns the shared MAC address on every sync cycle.
+
+        Parameters
+        ----------
+        platform: str, None
+            VM platform name as already resolved for vm_data["platform"] (e.g. "ACOS", "TMOS")
+        int_label: str
+            vSphere deviceInfo.label for this NIC (e.g. "Network adapter 3")
+
+        Returns
+        -------
+        str: interface name to use
+        """
+
+        slot_str = int_label.split(" ")[-1]
+        native_names = self._NATIVE_VNIC_NAMES_BY_PLATFORM.get(str(platform or "").strip().lower())
+
+        if native_names is not None and slot_str.isdigit():
+            mgmt_name, data_plane_format = native_names
+            slot_num = int(slot_str)
+            return mgmt_name if slot_num == 1 else data_plane_format.format(slot_num - 1)
+
+        return "vNIC {}".format(slot_str)
+
     def add_virtual_machine(self, obj):
         """
         Parse a vCenter VM  add to NetBox once all data is gathered.
@@ -2435,10 +2481,15 @@ class VMWareHandler(SourceBase):
             int_connected = grab(vm_device, "connectable.connected", fallback=False)
             int_label = grab(vm_device, "deviceInfo.label", fallback="")
 
-            int_name = "vNIC {}".format(int_label.split(" ")[-1])
+            int_name = self.get_vnic_name(platform, int_label)
 
             int_full_name = int_name
-            if int_network_name is not None:
+            # Native platform names (e.g. "mgmt", "1.1", "ethernet1") must stay verbatim so
+            # other tools that manage these VMs via the guest's own API/CLI (e.g.
+            # netbox-device-onboard.py) look up the exact same interface name — appending the
+            # VLAN/portgroup name here would make the two tools create two different interfaces
+            # for the same physical NIC.
+            if int_network_name is not None and not self._uses_native_vnic_names(platform):
                 int_full_name = f"{int_full_name} ({int_network_name})"
 
             int_description = f"{int_label} ({device_class})"
