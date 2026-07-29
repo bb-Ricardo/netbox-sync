@@ -16,6 +16,7 @@ from packaging import version
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
+from module.common.support import normalize_mac_address
 
 log = get_logger()
 
@@ -375,6 +376,25 @@ class SourceBase:
             log.debug(f"VM '{device_object.name}' guest tools running but reported zero network interfaces; "
                       f"skipping IP handling (stale/incompatible VMware Tools?)")
             skip_ip_handling = True
+        elif type(device_object) == NBVM and interface_mac_address is not None:
+            # Same reasoning as the whole-VM guard above, but per-interface: on some guest-tools
+            # cycles an old/flaky TMOS install reports SOME interfaces in guest.net but omits one
+            # specific NIC's MAC entirely (confirmed live: bigip-ve-001's mgmt interface lost its
+            # IP even though guest.net wasn't totally empty that cycle) - the whole-VM guard above
+            # only catches a fully-empty guest.net, not this narrower case. A real per-NIC IP
+            # removal still reports the NIC's MAC (with an empty IP list); total absence of the MAC
+            # itself means guest tools simply didn't report on this NIC this cycle, not a genuine
+            # removal.
+            reported_macs = {
+                normalize_mac_address(grab(g, "macAddress"))
+                for g in grab(vmware_object, "guest.net", fallback=list())
+                if grab(g, "macAddress") is not None
+            }
+            if normalize_mac_address(interface_mac_address) not in reported_macs:
+                log.debug(f"VM '{device_object.name}' interface with MAC '{interface_mac_address}' not present "
+                          "in this cycle's guest.net at all; skipping IP handling for this interface "
+                          "(stale/incomplete VMware Tools report?)")
+                skip_ip_handling = True
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
