@@ -2568,37 +2568,45 @@ class VMWareHandler(SourceBase):
             if int_mtu is not None and self.settings.sync_vm_interface_mtu is True and \
                     not self._uses_native_vnic_names(platform):
                 vm_nic_data["mtu"] = int_mtu
-            if int_mode is not None:
-                vm_nic_data["mode"] = int_mode
+            # Same reasoning as mtu/description above: for acos/tmos-platform interfaces,
+            # the vSwitch/portgroup's VLAN tag is the hypervisor's L2 view of the port, not
+            # necessarily the same thing as the device's own VLAN/trunk membership that
+            # netbox-device-onboard.py's collectors write to the same interface object.
+            # Confirmed live: bigip-ve-001's 1.2 (a real tagged VLAN member) had its 'mode'
+            # flipped tagged -> access by this vSwitch-derived write on the very next sync
+            # cycle after the device-side collector set it to 'tagged'.
+            if not self._uses_native_vnic_names(platform):
+                if int_mode is not None:
+                    vm_nic_data["mode"] = int_mode
 
-            if int_network_vlan_ids is not None and int_mode != "tagged-all":
+                if int_network_vlan_ids is not None and int_mode != "tagged-all":
 
-                if len(int_network_vlan_ids) == 1 and int_network_vlan_ids[0] != 0:
+                    if len(int_network_vlan_ids) == 1 and int_network_vlan_ids[0] != 0:
 
-                    vm_nic_data["untagged_vlan"] = {
-                        "name": unquote(int_network_name),
-                        "vid": int_network_vlan_ids[0],
-                        "site": {
-                            "name": site_name
-                        }
-                    }
-                else:
-                    tagged_vlan_list = list()
-                    for int_network_vlan_id in int_network_vlan_ids:
-
-                        if int_network_vlan_id == 0:
-                            continue
-
-                        tagged_vlan_list.append({
-                            "name": unquote(f"{int_network_name}-{int_network_vlan_id}"),
-                            "vid": int_network_vlan_id,
+                        vm_nic_data["untagged_vlan"] = {
+                            "name": unquote(int_network_name),
+                            "vid": int_network_vlan_ids[0],
                             "site": {
                                 "name": site_name
                             }
-                        })
+                        }
+                    else:
+                        tagged_vlan_list = list()
+                        for int_network_vlan_id in int_network_vlan_ids:
 
-                    if len(tagged_vlan_list) > 0:
-                        vm_nic_data["tagged_vlans"] = tagged_vlan_list
+                            if int_network_vlan_id == 0:
+                                continue
+
+                            tagged_vlan_list.append({
+                                "name": unquote(f"{int_network_name}-{int_network_vlan_id}"),
+                                "vid": int_network_vlan_id,
+                                "site": {
+                                    "name": site_name
+                                }
+                            })
+
+                        if len(tagged_vlan_list) > 0:
+                            vm_nic_data["tagged_vlans"] = tagged_vlan_list
 
             nic_data[int_full_name] = vm_nic_data
 
