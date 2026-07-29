@@ -2063,10 +2063,12 @@ class VMWareHandler(SourceBase):
     # deployment layout; subsequent slots are sequential data-plane interfaces. Confirmed by
     # direct MAC-address cross-check between vCenter's reported vNIC order and each platform's
     # own interface API/CLI (aXAPI 'interface/management'+'interface/ethernet', iControl REST
-    # 'mgmt'+'1.N') across multiple A10 vThunder and F5 BIG-IP VE instances.
+    # 'mgmt'+'1.N', AlteonOS REST 'hwMACAddress'+'PortInfoTable' Indx) across multiple A10
+    # vThunder, F5 BIG-IP VE, and Radware Alteon VA instances.
     _NATIVE_VNIC_NAMES_BY_PLATFORM = {
         "acos": ("management", "ethernet{}"),
         "tmos": ("mgmt", "1.{}"),
+        "alteon adc": ("mgmt", "{}"),
     }
 
     def _uses_native_vnic_names(self, platform):
