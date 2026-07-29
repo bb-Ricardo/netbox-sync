@@ -2551,9 +2551,14 @@ class VMWareHandler(SourceBase):
                 "name": unquote(int_full_name),
                 "virtual_machine": None,
                 "mac_address": int_mac,
-                "description": unquote(int_description),
                 "enabled": int_connected,
             }
+
+            # Same reasoning as mtu below: for acos/tmos-platform interfaces, the vSphere-
+            # generated description (adapter type + portgroup/VLAN) isn't the same fact as the
+            # device's own interface label that netbox-device-onboard.py writes here instead.
+            if not self._uses_native_vnic_names(platform):
+                vm_nic_data["description"] = unquote(int_description)
 
             # For acos/tmos-platform interfaces, the vSwitch/portgroup MTU (jumbo-frame
             # capability of the underlying network) isn't the same fact as the guest's own
@@ -2657,6 +2662,14 @@ class VMWareHandler(SourceBase):
                 log.debug(f"Found one IPv6 '{potential_primary_ipv6_list[0]}' address on all interfaces of "
                           f"VM '{name}', using it as primary IPv6.")
                 vm_primary_ip6 = potential_primary_ipv6_list[0]
+
+        # For acos/tmos VMs, primary IP selection is netbox-device-onboard.py's job (it knows
+        # which interface is actually reachable/managed) - passing our own gateway-subnet guess
+        # here would fight it every cycle under set_primary_ip=always, the same conflict class
+        # as the interface-level mtu/description fields above.
+        if self._uses_native_vnic_names(platform):
+            vm_primary_ip4 = None
+            vm_primary_ip6 = None
 
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
