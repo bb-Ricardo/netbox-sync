@@ -2566,6 +2566,24 @@ class VMWareHandler(SourceBase):
                 "mac_address": int_mac,
             }
 
+            # Same identity-only reasoning as above, extended to IP-address ownership: for
+            # these platforms' DATA-plane interfaces (not mgmt - its IP has always come from
+            # guest.net without conflict), netbox-device-onboard.py's device-API collectors
+            # are authoritative for self-IP-to-interface assignment too. guest.net reports
+            # these addresses against the real vNIC's MAC regardless of whether the device-
+            # side collector binds the address to that same physical interface (acos/alteon)
+            # or to a separate synthetic VLAN-interface object (tmos) - confirmed live to
+            # fight over ownership of the address every 5-minute cron cycle either way
+            # (alt01a: netbox-sync tore the address back off a real vNIC guest.net never
+            # reports it on; ltm01a: netbox-sync kept reparenting it from the synthetic VLAN
+            # interface back onto the real vNIC). _skip_ip_reconciliation is a private,
+            # popped-before-write flag (same smuggling pattern as untagged_vlan/tagged_vlans
+            # above) telling add_update_interface() to leave this interface's IP assignment
+            # (both additions and removals) alone entirely.
+            native_names = self._NATIVE_VNIC_NAMES_BY_PLATFORM.get(str(platform or "").strip().lower())
+            if native_names is not None and int_full_name != native_names[0]:
+                vm_nic_data["_skip_ip_reconciliation"] = True
+
             if not self._uses_native_vnic_names(platform):
                 vm_nic_data["enabled"] = int_connected
                 vm_nic_data["description"] = unquote(int_description)

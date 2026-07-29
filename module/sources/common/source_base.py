@@ -311,6 +311,11 @@ class SourceBase:
         if len(tagged_vlans) > 0:
             del interface_data["tagged_vlans"]
 
+        # a source (currently only vmware/connection.py, for acos/tmos/alteon data-plane
+        # interfaces) can mark an interface as fully owned elsewhere for IP-address purposes -
+        # skip both adding and removing IP assignments on it entirely
+        force_skip_ip_handling = interface_data.pop("_skip_ip_reconciliation", False) is True
+
         # get device tenant
         device_tenant = grab(device_object, "data.tenant")
 
@@ -364,7 +369,11 @@ class SourceBase:
 
         # skip handling of IPs for VMs with not installed/running guest tools
         skip_ip_handling = False
-        if type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
+        if force_skip_ip_handling is True:
+            log.debug(f"Interface '{interface_object.get_display_name()}' is marked as fully owned elsewhere for "
+                      "IP-address purposes by its source; skipping IP handling for this interface")
+            skip_ip_handling = True
+        elif type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
             log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
             skip_ip_handling = True
         elif type(device_object) == NBVM and len(grab(vmware_object, "guest.net", fallback=list())) == 0:
@@ -643,6 +652,14 @@ class SourceBase:
         for current_ip in interface_object.get_ip_addresses():
 
             if skip_ip_handling is True:
+                if force_skip_ip_handling is True:
+                    # We're intentionally leaving this IP's assignment alone (a device-side
+                    # collector owns it), but still need to mark it as "seen" this cycle -
+                    # otherwise it stops being claimed by any source and netbox-sync's own
+                    # orphan-pruning (module/netbox/connection.py prune_data(), 30-day
+                    # default delay here) will tag it Orphaned and eventually delete it out
+                    # from under the collector that's actively managing it.
+                    current_ip.update(data={}, source=self)
                 continue
 
             if grab(current_ip, "data.role.value") == "anycast":
