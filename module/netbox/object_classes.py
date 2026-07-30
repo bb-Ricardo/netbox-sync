@@ -685,27 +685,47 @@ class NetBoxObject:
 
                 # Fix for object/multi-object custom fields
                 # When patching, we only need the IDs, not the full object representation
-                new_value_copy = new_value.copy()
-                for field_name, field_value in new_value_copy.items():
-                    # Check for custom field type
-                    custom_field = self.inventory.get_by_data(NBCustomField, data={"name": field_name})
-                    if custom_field is not None:
+                # returned by the NetBox API. The values of the current AND the new data
+                # need to be reduced. Reducing only the new values would miss unchanged
+                # object custom fields which get merged into the update from the current
+                # data, and comparing reduced to unreduced values would report a change
+                # on every run.
+                def reduce_object_custom_fields_to_ids(custom_field_data: dict) -> dict:
+
+                    reduced_data = dict(custom_field_data)
+                    for field_name, field_value in custom_field_data.items():
+                        # Check for custom field type
+                        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": field_name})
+                        if custom_field is None:
+                            continue
+
                         field_type = grab(custom_field, "data.type")
 
+                        # custom fields read from the NetBox API report the type as
+                        # a dict like {"value": "multiobject", "label": "Multiple objects"}
+                        if isinstance(field_type, dict):
+                            field_type = field_type.get("value")
+
                         # Handle object type custom fields - need only ID
-                        if field_type == "object" and isinstance(field_value, dict) and field_value.get('id') is not None:
-                            new_value[field_name] = field_value.get('id')
+                        if field_type == "object" and isinstance(field_value, dict) and \
+                                field_value.get('id') is not None:
+                            reduced_data[field_name] = field_value.get('id')
 
                         # Handle multi-object type custom fields - need list of IDs
-                        elif field_type == "multi-object" and isinstance(field_value, list):
+                        # NetBox reports the type of these fields as 'multiobject'
+                        elif field_type in ("multiobject", "multi-object") and isinstance(field_value, list):
                             ids = []
                             for item in field_value:
                                 if isinstance(item, dict) and item.get('id') is not None:
                                     ids.append(item.get('id'))
                             if ids:
-                                new_value[field_name] = ids
+                                reduced_data[field_name] = ids
 
-                new_value = {**current_value, **new_value}
+                    return reduced_data
+
+                current_value = reduce_object_custom_fields_to_ids(current_value)
+                current_value_str = str(current_value)
+                new_value = {**current_value, **reduce_object_custom_fields_to_ids(new_value)}
                 new_value_str = str(new_value)
             elif isinstance(new_value, (NetBoxObject, NBObjectList)):
                 new_value_str = str(new_value.get_display_name())
@@ -1310,7 +1330,8 @@ class NBCustomField(NetBoxObject):
             "object_types": list,
             # field name (object_types) for NetBox < 4.0.0
             "content_types": list,
-            "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect", "object", "multi-object"],
+            "type": ["text", "longtext", "integer", "boolean", "date", "url", "json", "select", "multiselect", "object",
+                     "multiobject", "multi-object"],
             "name": 50,
             "label": 50,
             "description": 200,
