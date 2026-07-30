@@ -709,7 +709,10 @@ class VMWareHandler(SourceBase):
 
             ip = None
             if device_primary_ip is not None and ip_needle is not None:
-                if isinstance(device_primary_ip, dict):
+                if isinstance(device_primary_ip, NBIPAddress):
+                    ip = grab(device_primary_ip, "data.address")
+
+                elif isinstance(device_primary_ip, dict):
                     ip = grab(device_primary_ip, "address")
 
                 elif isinstance(device_primary_ip, int):
