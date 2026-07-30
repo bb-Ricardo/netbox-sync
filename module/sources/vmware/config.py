@@ -259,6 +259,15 @@ class VMWareConfig(ConfigBase):
                                        as "when-undefined"
                          """,
                          default_value="when-undefined"),
+            ConfigOption("preserve_primary_ips",
+                         bool,
+                         description="""defines if primary IP addresses of devices and VMs are protected from
+                         removal. If enabled, an IP address which is set as primary IPv4/IPv6 of a device or
+                         VM in NetBox will never be removed from its interface by this source, even if the
+                         source does not report this IP address (anymore). This prevents the primary IP from
+                         being unset when i.e. an outdated guest agent does not report all IP addresses.
+                         """,
+                         default_value=False),
             ConfigOption("skip_vm_comments",
                          bool,
                          description="Do not sync notes from a VM in vCenter to the comments field on a VM in netbox",
