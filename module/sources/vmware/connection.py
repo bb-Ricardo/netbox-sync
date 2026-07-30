@@ -2591,6 +2591,17 @@ class VMWareHandler(SourceBase):
                 if int_mtu is not None and self.settings.sync_vm_interface_mtu is True:
                     vm_nic_data["mtu"] = int_mtu
 
+            # ACOS in this environment runs in routed mode with zero device-side VLAN
+            # awareness (confirmed live: aXAPI's network/vlan table is empty on every
+            # ACOS target onboarded so far) - the vSphere portgroup is the only
+            # available source of truth for which VLAN an ethernet port sits on, unlike
+            # tmos/alteon which do have real device-side VLAN data that
+            # netbox-device-onboard.py collects and manages instead. So mode/
+            # untagged_vlan/tagged_vlans stay netbox-sync-managed for acos specifically,
+            # even though its other attributes (enabled/description/mtu, handled above)
+            # remain identity-only/device-authoritative like the other two platforms.
+            if not self._uses_native_vnic_names(platform) or str(platform or "").strip().lower() == "acos":
+
                 if int_mode is not None:
                     vm_nic_data["mode"] = int_mode
 
