@@ -884,7 +884,8 @@ class SourceBase:
             # try find matching VLAN by group
             if grab(vlan, "data.group") is not None:
                 vlan_group = grab(vlan, "data.group")
-                if vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                if isinstance(vlan_group, NetBoxObject) and \
+                        vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
                     vlan_object_by_group = vlan
                     break
 
