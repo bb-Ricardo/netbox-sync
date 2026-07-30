@@ -1180,6 +1180,11 @@ class VMWareHandler(SourceBase):
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
             log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
+
+            if object_type == NBVM and self.settings.vm_status_on_create is not None and \
+                    object_data.get("status") is not None:
+                object_data["status"] = self.settings.vm_status_on_create
+
             device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
         else:
 
@@ -1190,6 +1195,16 @@ class VMWareHandler(SourceBase):
             if object_type == NBDevice and self.settings.overwrite_device_platform is False and \
                     object_data.get("platform") is not None:
                 del object_data["platform"]
+
+            if object_type == NBVM and object_data.get("status") is not None:
+                current_status = grab(device_vm_object, "data.status")
+                if isinstance(current_status, dict):
+                    current_status = current_status.get("value")
+                if current_status in (self.settings.vm_status_preserve or list()):
+                    log.debug2(f"Current status '{current_status}' of "
+                               f"'{device_vm_object.get_display_name()}' is in 'vm_status_preserve' list. "
+                               f"Not updating VM status.")
+                    del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
 
