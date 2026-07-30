@@ -426,6 +426,27 @@ class VMWareConfig(ConfigBase):
                          """,
                          config_example="AA:BB:CC:11:22:33, 66:77:88:AA:BB:CC"
                          ),
+            ConfigOption("vm_interface_exclude_filter",
+                         str,
+                         description="""defines a regex expression to exclude VM interfaces from sync by name.
+                         VM interfaces in NetBox whose name matches this filter are completely ignored by this
+                         source: they are excluded from interface matching and will never be updated or altered.
+                         Discovered VM interfaces with a matching name will be excluded from sync as well.
+                         Useful to protect interfaces which are managed by other tools inside the guest
+                         (i.e. 'tailscale0' or 'docker0') from being overwritten with data of a different
+                         interface. The filter is treated as a regex expression which is only anchored at the
+                         beginning of the name ('$' can be used to anchor the end) and is case sensitive.
+                         If more then one expression should match, a '|' needs to be used
+                         """,
+                         config_example="(tailscale|docker)\\d+$"
+                         ),
+            ConfigOption("host_interface_exclude_filter",
+                         str,
+                         description="""defines a regex expression to exclude host interfaces from sync by name.
+                         Same behavior as 'vm_interface_exclude_filter' but applies to host (device) interfaces.
+                         """,
+                         config_example="(?i)^ipmi"
+                         ),
             ConfigOption("custom_attribute_exclude",
                          str,
                          description="""defines a comma separated list of custom attribute which should be excluded

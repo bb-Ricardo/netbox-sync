@@ -1246,8 +1246,20 @@ class VMWareHandler(SourceBase):
         # compile all nic data into one dictionary
         if object_type == NBVM:
             nic_data = vnic_data
+            interface_exclude_filter = self.settings.vm_interface_exclude_filter
         else:
             nic_data = {**pnic_data, **vnic_data}
+            interface_exclude_filter = self.settings.host_interface_exclude_filter
+
+        # exclude discovered interfaces which match the exclude filter
+        if interface_exclude_filter is not None:
+            for int_name in list(nic_data.keys()):
+                if interface_exclude_filter.match(int_name):
+                    log.debug(f"Discovered interface '{int_name}' matches interface_exclude_filter. "
+                              f"Excluding it from sync")
+                    del nic_data[int_name]
+                    if nic_ips is not None:
+                        nic_ips.pop(int_name, None)
 
         # map interfaces of existing object with discovered interfaces
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
