@@ -223,6 +223,31 @@ class VMWareConfig(ConfigBase):
                          description="""Try to find existing host based on serial number. This can cause issues
                          with blade centers if VMWare does not report the blades serial number properly.""",
                          default_value=True),
+
+            ConfigOption("match_vm_by_serial",
+                         bool,
+                         description="""Fall back to matching VMs by serial number (BIOS UUID) if no name+cluster
+                         match is found. Can misattribute a VM to an unrelated NetBox object if the same UUID is
+                         reported by multiple sources, e.g. a cloned/migrated VM whose stale copy overwrites the
+                         real VM's cluster/site/status.""",
+                         default_value=True),
+
+            ConfigOption("match_vm_by_mac_address",
+                         bool,
+                         description="""Fall back to matching VMs by vNIC MAC address if no name+cluster match is
+                         found. Runs before 'match_vm_by_serial', so disabling that option alone is not enough if
+                         MACs are also shared. Same misattribution risk as match_vm_by_serial, triggered by a
+                         cloned/copied VM with a duplicate MAC.""",
+                         default_value=True),
+
+            ConfigOption("match_vm_by_ip_address",
+                         bool,
+                         description="""Fall back to matching VMs by primary IP if no name/cluster/MAC/serial
+                         match is found. Same misattribution risk, triggered even transiently, e.g. a duplicate VM
+                         in another cluster briefly powered on with the same IP. Not guaranteed to self-correct
+                         afterwards, since vCenter can keep reporting a cached IP after power-off.""",
+                         default_value=True),
+
             ConfigOption("collect_hardware_asset_tag",
                          bool,
                          description="Attempt to collect asset tags from vCenter hosts",
