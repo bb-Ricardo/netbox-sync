@@ -1135,6 +1135,10 @@ class VMWareHandler(SourceBase):
                        (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
 
         # keep searching if no exact match was found
+        elif object_type == NBVM and self.settings.match_vm_by_mac_address is False:
+
+            log.debug2("Matching VMs by MAC address is disabled via 'match_vm_by_mac_address'. Skipping.")
+
         else:
 
             log.debug2(f"No exact match found. Trying to find {object_type.name} based on MAC addresses")
@@ -1162,7 +1166,8 @@ class VMWareHandler(SourceBase):
                                                               data={"asset_tag": object_data.get("asset_tag")})
 
         # look for VMs with same serial
-        if object_type == NBVM and device_vm_object is None and object_data.get("serial") is not None:
+        if object_type == NBVM and device_vm_object is None and object_data.get("serial") is not None and \
+                self.settings.match_vm_by_serial is True:
             log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
             device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
 
@@ -1171,6 +1176,10 @@ class VMWareHandler(SourceBase):
                        (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
 
         # keep looking for devices with the same primary IP
+        elif object_type == NBVM and self.settings.match_vm_by_ip_address is False:
+
+            log.debug2("Matching VMs by primary IP address is disabled via 'match_vm_by_ip_address'. Skipping.")
+
         else:
 
             log.debug2(f"No match found. Trying to find {object_type.name} based on primary IP addresses")
