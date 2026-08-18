@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
@@ -1769,13 +1768,6 @@ class VMWareHandler(SourceBase):
 
         # now iterate over all physical interfaces and collect data
         pnic_data_dict = dict()
-        pnic_hints = dict()
-        # noinspection PyBroadException
-        try:
-            for hint in obj.configManager.networkSystem.QueryNetworkHint(""):
-                pnic_hints[hint.device] = hint
-        except Exception:
-            pass
 
         for pnic in grab(obj, "config.network.pnic", fallback=list()):
 
@@ -1807,30 +1799,25 @@ class VMWareHandler(SourceBase):
             pnic_description = f"{pnic_description} pNIC"
 
             pnic_mtu = None
-
             pnic_mode = None
 
             # check virtual switches for interface data
             for vs_name, vs_data in self.network_data["vswitch"][name].items():
-
                 if pnic_key in vs_data.get("pnics", list()):
                     pnic_description = f"{pnic_description} ({vs_name})"
                     pnic_mtu = vs_data.get("mtu")
 
             # check proxy switches for interface data
             for ps_uuid, ps_data in self.network_data["pswitch"][name].items():
-
                 if pnic_key in ps_data.get("pnics", list()):
                     ps_name = ps_data.get("name")
                     pnic_description = f"{pnic_description} ({ps_name})"
                     pnic_mtu = ps_data.get("mtu")
-
                     pnic_mode = "tagged-all"
 
             # check vlans on this pnic
             pnic_vlans = list()
             for pg_name, pg_data in self.network_data["host_pgroup"][name].items():
-
                 if pnic_name in pg_data.get("nics", list()):
                     pnic_vlans.append({
                         "name": pg_name,
@@ -1839,14 +1826,44 @@ class VMWareHandler(SourceBase):
 
             pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
 
-            if pnic_hints.get(pnic_name) is not None:
-                pnic_switch_port = grab(pnic_hints.get(pnic_name), 'connectedSwitchPort')
-                if pnic_switch_port is not None:
-                    pnic_sp_sys_name = grab(pnic_switch_port, 'systemName')
-                    if pnic_sp_sys_name is None:
-                        pnic_sp_sys_name = grab(pnic_switch_port, 'devId')
-                    if pnic_sp_sys_name is not None:
-                        pnic_description += f" (conn: {pnic_sp_sys_name} - {grab(pnic_switch_port, 'portId')})"
+            # === ИСПРАВЛЕНИЕ: получение CDP / LLDP ===
+            # Вызываем QueryNetworkHint по конкретному устройству и поддерживаем оба протокола
+            try:
+                hints = obj.configManager.networkSystem.QueryNetworkHint(pnic_name)
+                if hints:
+                    hint = hints[0]
+
+                    # 1. CDP (connectedSwitchPort)
+                    pnic_switch_port = grab(hint, "connectedSwitchPort")
+                    if pnic_switch_port is not None:
+                        pnic_sp_sys_name = grab(pnic_switch_port, "systemName")
+                        if pnic_sp_sys_name is None:
+                            pnic_sp_sys_name = grab(pnic_switch_port, "devId")
+                        if pnic_sp_sys_name is not None:
+                            pnic_description += f" (conn: {pnic_sp_sys_name} - {grab(pnic_switch_port, 'portId')})"
+
+                    # 2. LLDP (lldpInfo) — основной рабочий путь на современных ESXi
+                    else:
+                        lldp_info = grab(hint, "lldpInfo")
+                        if lldp_info is not None:
+                            lldp_params = {}
+                            for param in grab(lldp_info, "parameter", fallback=list()):
+                                key = grab(param, "key")
+                                value = grab(param, "value")
+                                if key is not None:
+                                    lldp_params[key] = value
+
+                            # Предпочитаем System Name + Port Description (как в UI)
+                            sys_name = lldp_params.get("System Name")
+                            port_desc = lldp_params.get("Port Description") or lldp_params.get("Port ID")
+
+                            if sys_name is not None:
+                                if port_desc is not None:
+                                    pnic_description += f" (conn: {sys_name} - {port_desc})"
+                                else:
+                                    pnic_description += f" (conn: {sys_name})"
+            except Exception as e:
+                log.debug2(f"Failed to get network hint for {pnic_name} on host {name}: {e}")
 
             if self.settings.host_nic_exclude_by_mac_list is not None and \
                     pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
