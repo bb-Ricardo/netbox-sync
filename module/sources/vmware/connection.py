@@ -1826,8 +1826,8 @@ class VMWareHandler(SourceBase):
 
             pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
 
-            # === ИСПРАВЛЕНИЕ: получение CDP / LLDP ===
-            # Вызываем QueryNetworkHint по конкретному устройству и поддерживаем оба протокола
+           # === РРЎРџР РђР’Р›Р•РќРР•: РїРѕР»СѓС‡РµРЅРёРµ CDP / LLDP ===
+            # Р’С‹Р·С‹РІР°РµРј QueryNetworkHint РїРѕ РєРѕРЅРєСЂРµС‚РЅРѕРјСѓ СѓСЃС‚СЂРѕР№СЃС‚РІСѓ Рё РїРѕРґРґРµСЂР¶РёРІР°РµРј РѕР±Р° РїСЂРѕС‚РѕРєРѕР»Р°
             try:
                 hints = obj.configManager.networkSystem.QueryNetworkHint(pnic_name)
                 if hints:
@@ -1842,7 +1842,7 @@ class VMWareHandler(SourceBase):
                         if pnic_sp_sys_name is not None:
                             pnic_description += f" (conn: {pnic_sp_sys_name} - {grab(pnic_switch_port, 'portId')})"
 
-                    # 2. LLDP (lldpInfo) — основной рабочий путь на современных ESXi
+                    # 2. LLDP (lldpInfo) вЂ” РѕСЃРЅРѕРІРЅРѕР№ СЂР°Р±РѕС‡РёР№ РїСѓС‚СЊ РЅР° СЃРѕРІСЂРµРјРµРЅРЅС‹С… ESXi
                     else:
                         lldp_info = grab(hint, "lldpInfo")
                         if lldp_info is not None:
@@ -1853,7 +1853,7 @@ class VMWareHandler(SourceBase):
                                 if key is not None:
                                     lldp_params[key] = value
 
-                            # Предпочитаем System Name + Port Description (как в UI)
+                            # РџСЂРµРґРїРѕС‡РёС‚Р°РµРј System Name + Port Description (РєР°Рє РІ UI)
                             sys_name = lldp_params.get("System Name")
                             port_desc = lldp_params.get("Port Description") or lldp_params.get("Port ID")
 
