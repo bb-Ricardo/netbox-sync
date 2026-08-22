@@ -2417,4 +2417,45 @@ class NBPowerPort(NetBoxObject):
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
 
+
+class NBCable(NetBoxObject):
+    name = "cable"
+    api_path = "dcim/cables"
+    object_type = "dcim.cable"
+    primary_key = "label"
+    prune = True
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "label": 100,
+            "a_terminations": list,
+            "b_terminations": list,
+            "status": ["connected", "planned", "decommissioning"],
+            "type": [
+                "cat3", "cat5", "cat5e", "cat6", "cat6a", "cat7", "cat7a", "cat8",
+                "dac-active", "dac-passive",
+                "mmf", "mmf-om1", "mmf-om2", "mmf-om3", "mmf-om4", "mmf-om5",
+                "smf", "smf-os1", "smf-os2", "aoc", "power", "usb", "coaxial",
+            ],
+            "description": 200,
+            "color": str,
+            "length": float,
+            "length_unit": ["km", "m", "cm", "mi", "ft", "in"],
+            "tags": NBTagList,
+        }
+        super().__init__(*args, **kwargs)
+
+    def get_display_name(self, data=None, including_second_key=False):
+        this_data = data if data is not None else self.data
+        if not this_data:
+            return "Cable"
+        label = this_data.get("label")
+        if label:
+            return str(label)
+        a = (this_data.get("a_terminations") or [{}])[0]
+        b = (this_data.get("b_terminations") or [{}])[0]
+        a_id = a.get("object_id") if isinstance(a, dict) else None
+        b_id = b.get("object_id") if isinstance(b, dict) else None
+        return f"Cable a={a_id} ↔ b={b_id}"
+
 # EOF
