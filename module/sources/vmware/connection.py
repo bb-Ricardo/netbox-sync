@@ -117,6 +117,13 @@ class VMWareHandler(SourceBase):
 
         self.create_api_session()
 
+        # Derive VCSA metadata from the connected vCenter source.  The source
+        # FQDN is the deterministic correlation key; these values must not be
+        # duplicated in settings.ini.
+        self.vcsa_source_fqdn = self._normalise_fqdn(self.settings.host_fqdn)
+        self.vcsa_version = get_string_or_none(grab(self.session, "about.version"))
+        self.vpxd_cert_mode = self._get_vpxd_cert_mode()
+
         self.init_successful = True
 
         # instantiate source specific vars
@@ -134,6 +141,66 @@ class VMWareHandler(SourceBase):
         self.parsing_vms_the_first_time = True
         self.objects_to_reevaluate = list()
         self.parsing_objects_to_reevaluate = False
+
+    @staticmethod
+    def _normalise_fqdn(value):
+        if value is None:
+            return None
+        return str(value).strip().rstrip(".").lower()
+
+    def _get_vpxd_cert_mode(self):
+        """Read the live, vCenter-wide certificate-management mode."""
+        try:
+            for option in self.session.setting.QueryOptions() or []:
+                if grab(option, "key") == "vpxd.certmgmt.mode":
+                    return get_string_or_none(grab(option, "value"))
+        except Exception as e:
+            log.warning(f"Unable to read vpxd.certmgmt.mode from vCenter '{self.name}': {e}")
+        return None
+
+    def _is_vcsa_vm(self, vm_name):
+        """Match only the VCSA VM for this source; do not infer by platform."""
+        vm_fqdn = self._normalise_fqdn(vm_name)
+        if vm_fqdn is None or self.vcsa_source_fqdn is None:
+            return False
+        return vm_fqdn in {
+            self.vcsa_source_fqdn,
+            self.vcsa_source_fqdn.split(".", 1)[0]
+        }
+
+    def _get_vcsa_custom_fields(self, vm_name):
+        object_type = "virtualization.virtualmachine"
+        fields = {}
+
+        field = self.add_update_custom_field({
+            "name": "is_vcsa", "label": "IS_VCSA",
+            "object_types": [object_type], "type": "boolean",
+            "description": f"Whether this VM is the VCSA for source '{self.name}'"
+        })
+        is_vcsa = self._is_vcsa_vm(vm_name)
+        fields[grab(field, "data.name")] = is_vcsa
+
+        if not is_vcsa:
+            return fields
+
+        if self.vcsa_version is not None:
+            field = self.add_update_custom_field({
+                "name": "vcsa_version", "label": "VCSA_VERSION",
+                "object_types": [object_type], "type": "text",
+                "description": f"VCSA version reported by source '{self.name}'"
+            })
+            fields[grab(field, "data.name")] = self.vcsa_version
+
+        if self.vpxd_cert_mode is not None:
+            field = self.add_update_custom_field({
+                "name": "vpxd_cert_mode", "label": "VPXD_CERT_MODE",
+                "object_types": [object_type], "type": "select",
+                "choices": ["vmca", "custom", "thumbprint"],
+                "description": f"vpxd.certmgmt.mode reported by source '{self.name}'"
+            })
+            fields[grab(field, "data.name")] = self.vpxd_cert_mode
+
+        return fields
 
     def create_sdk_session(self):
         """
@@ -2337,6 +2404,9 @@ class VMWareHandler(SourceBase):
 
         # add custom fields if present and configured
         vm_custom_fields = self.get_object_custom_fields(obj)
+        # Source-derived VCSA metadata is authoritative for the matching
+        # appliance VM and is merged after generic vCenter attributes.
+        vm_custom_fields.update(self._get_vcsa_custom_fields(name))
         if len(vm_custom_fields) > 0:
             vm_data["custom_fields"] = vm_custom_fields
 
