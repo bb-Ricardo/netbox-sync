@@ -30,7 +30,7 @@ from module.sources.common.source_base import SourceBase
 from module.sources.vmware.config import VMWareConfig
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
-from module.common.support import normalize_mac_address
+from module.common.support import normalize_mac_address, perform_forward_lookups
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
 
@@ -141,6 +141,8 @@ class VMWareHandler(SourceBase):
         self.parsing_vms_the_first_time = True
         self.objects_to_reevaluate = list()
         self.parsing_objects_to_reevaluate = False
+        # cache of resolved VM name -> [ip, ...] A records, populated once per sync run
+        self.vm_dns_lookup_cache = dict()
 
     @staticmethod
     def _normalise_fqdn(value):
@@ -454,6 +456,9 @@ class VMWareHandler(SourceBase):
                 self.parsing_vms_the_first_time = False
                 log.debug("Iterating over all virtual machines a second time ")
 
+            if view_details.get("view_type") == vim.VirtualMachine:
+                self.resolve_vm_dns_names(view_objects)
+
             for obj in view_objects:
 
                 if log.level == DEBUG3:
@@ -480,6 +485,63 @@ class VMWareHandler(SourceBase):
                 log.error(f"Unable to handle reevaluation of {obj} (type: {type(obj)})")
 
         self.update_basic_data()
+
+    def resolve_vm_dns_names(self, vm_objects):
+        """
+        Bulk-resolve A records for a list of VMs and populate 'vm_dns_lookup_cache' with the
+        results. Called once per vCenter view so 'get_vm_dns_ips' below never has to perform a
+        blocking per-VM lookup while VMs are being processed.
+
+        Only does anything if 'vm_primary_ip4_by_dns_name' is enabled.
+
+        Parameters
+        ----------
+        vm_objects: list of vim.VirtualMachine
+            VMs to resolve names for
+        """
+
+        if self.settings.vm_primary_ip4_by_dns_name is not True:
+            return
+
+        vm_names = list()
+        for vm_object in vm_objects or list():
+
+            vm_name = get_string_or_none(grab(vm_object, "name"))
+
+            if vm_name is not None and self.settings.strip_vm_domain_name is True:
+                vm_name = vm_name.split(".")[0]
+
+            if vm_name is not None and vm_name not in vm_names and vm_name not in self.vm_dns_lookup_cache:
+                vm_names.append(vm_name)
+
+        if len(vm_names) == 0:
+            return
+
+        log.debug(f"Resolving DNS A record{plural(len(vm_names))} for {len(vm_names)} VM name{plural(len(vm_names))}")
+
+        self.vm_dns_lookup_cache.update(perform_forward_lookups(vm_names, self.settings.custom_dns_servers))
+
+    def get_vm_dns_ips(self, vm_name):
+        """
+        Return the resolved IPv4 addresses for a VM name from 'vm_dns_lookup_cache', performing
+        the lookup on demand if it wasn't resolved by 'resolve_vm_dns_names' already (e.g. VMs
+        picked up via 'objects_to_reevaluate').
+
+        Parameters
+        ----------
+        vm_name: str
+            VM name to look up
+
+        Returns
+        -------
+        list: of resolved IPv4 addresses as strings, empty list if none were found
+        """
+
+        if vm_name not in self.vm_dns_lookup_cache:
+            self.vm_dns_lookup_cache.update(
+                perform_forward_lookups([vm_name], self.settings.custom_dns_servers))
+
+        return self.vm_dns_lookup_cache.get(vm_name) or list()
 
     @staticmethod
     def passes_filter(name, include_filter, exclude_filter):
@@ -1301,6 +1363,50 @@ class VMWareHandler(SourceBase):
                     log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
                               f"'{device_vm_object.get_display_name()}'")
                     device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
+
+        # some interfaces are not touched this run (e.g. a VM whose guest tools are running but
+        # not reporting any guest.net data, see 'skip_ip_handling' in source_base.py) so their
+        # IP address objects never end up in 'ip_address_objects' above and the assignment loop
+        # never sees them. Fall back to an existing NetBox IP address already assigned to one of
+        # this object's OWN interfaces that matches the requested primary IP, applying the same
+        # 'set_primary_ip' semantics as the loop above.
+        for ip_version, wanted_ip_interface in ((4, primary_ipv4_object), (6, primary_ipv6_object)):
+
+            if wanted_ip_interface is None:
+                continue
+
+            current_primary_ip_object = grab(device_vm_object, f"data.primary_ip{ip_version}")
+
+            existing_ip_object = None
+            for ip_object in self.inventory.get_all_items(NBIPAddress):
+
+                if ip_object.get_device_vm() is not device_vm_object:
+                    continue
+
+                # noinspection PyBroadException
+                try:
+                    if ip_interface(grab(ip_object, "data.address")) != wanted_ip_interface:
+                        continue
+                except Exception:
+                    continue
+
+                existing_ip_object = ip_object
+                break
+
+            # nothing found, or already set to the desired IP
+            if existing_ip_object is None or existing_ip_object is current_primary_ip_object:
+                continue
+
+            set_this_primary_ip = False
+            if self.settings.set_primary_ip == "always":
+                set_this_primary_ip = True
+            elif self.settings.set_primary_ip != "never" and current_primary_ip_object is None:
+                set_this_primary_ip = True
+
+            if set_this_primary_ip is True:
+                log.debug(f"Setting IP '{grab(existing_ip_object, 'data.address')}' as primary IPv{ip_version} "
+                          f"for '{device_vm_object.get_display_name()}' (existing assignment untouched this run)")
+                device_vm_object.update(data={f"primary_ip{ip_version}": existing_ip_object})
 
         return
 
@@ -2190,7 +2296,10 @@ class VMWareHandler(SourceBase):
         Then all necessary VM data will be collected.
             platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addresses
 
-        Primary IPv4/6 will be determined by interface that provides the default route for this VM
+        Primary IPv6 will be determined by interface that provides the default route for this VM.
+
+        Primary IPv4 is determined by 'get_vm_primary_ip4' using a tiered fallback (DNS name,
+        then default route, then a configured fallback VLAN).
 
         Note:
             IP address information can only be extracted if guest tools are installed and running.
@@ -2605,14 +2714,11 @@ class VMWareHandler(SourceBase):
 
                     nic_ips[int_full_name].append(int_ip_address)
 
-                    # check if primary gateways are in the subnet of this IP address
-                    # if it matches IP gets chosen as primary IP
-                    if vm_default_gateway_ip4 is not None and \
-                            vm_default_gateway_ip4 in ip_interface(int_ip_address).network and \
-                            vm_primary_ip4 is None:
+                    # IPv4 primary IP selection happens after this loop, in 'get_vm_primary_ip4',
+                    # once all interfaces and their VLANs are known (see tiered fallback there)
 
-                        vm_primary_ip4 = int_ip_address
-
+                    # check if the default IPv6 gateway is in the subnet of this address
+                    # if it matches, IP gets chosen as primary IPv6
                     if vm_default_gateway_ip6 is not None and \
                             vm_default_gateway_ip6 in ip_interface(int_ip_address).network and \
                             vm_primary_ip6 is None:
@@ -2747,6 +2853,10 @@ class VMWareHandler(SourceBase):
 
                 nic_data[int_full_name] = vm_nic_data
 
+        # determine primary IPv4 address using the tiered fallback (DNS name, default route,
+        # configured fallback VLAN); see 'get_vm_primary_ip4' for details
+        vm_primary_ip4 = self.get_vm_primary_ip4(name, nic_data, nic_ips, vm_default_gateway_ip4)
+
         # if VM has only one IPv6 on all interfaces, use it as primary IPv6 address
         if vm_primary_ip6 is None or True:
             all_ips = [y for xs in nic_ips.values() for y in xs]
@@ -2781,6 +2891,169 @@ class VMWareHandler(SourceBase):
                                         vmware_object=obj, disk_data=disk_data)
 
         return
+
+    def get_existing_vm_ipv4_candidates(self, vm_name, overlapping_subnets):
+        """
+        Return eligible IPv4 addresses NetBox already has assigned to this VM's interfaces
+        from a previous sync. Used only as tier-1 (DNS) candidates when vCenter's live data
+        for this run yields none at all (e.g. guest tools reporting but not populating
+        guest.net) -- see 'get_vm_primary_ip4'.
+
+        Parameters
+        ----------
+        vm_name: str
+            name of the VM as it will be synced to NetBox
+        overlapping_subnets: list
+            parsed 'vm_ip_permitted_overlapping_subnets' networks to exclude
+
+        Returns
+        -------
+        list: of (interface name, "ip/prefixlen", ip_interface) tuples
+        """
+
+        existing_vm_object = None
+        for vm_object in self.inventory.get_all_items(NBVM):
+            if grab(vm_object, "data.name") == vm_name:
+                existing_vm_object = vm_object
+                break
+
+        if existing_vm_object is None:
+            return list()
+
+        candidates = list()
+        for ip_object in self.inventory.get_all_items(NBIPAddress):
+
+            if ip_object.get_device_vm() is not existing_vm_object:
+                continue
+
+            # noinspection PyBroadException
+            try:
+                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
+            except Exception:
+                continue
+
+            if ip_interface_object.version != 4:
+                continue
+
+            if any(ip_interface_object.ip in subnet for subnet in overlapping_subnets):
+                continue
+
+            interface_object = ip_object.get_interface()
+            int_name = grab(interface_object, "data.name", fallback="unknown interface")
+
+            candidates.append((int_name, str(ip_interface_object), ip_interface_object))
+
+        return candidates
+
+    def get_vm_primary_ip4(self, vm_name, nic_data, nic_ips, default_gateway_ip4):
+        """
+        Determine the primary IPv4 address for a VM using a tiered fallback. The first tier
+        that produces a match wins:
+
+          1. an interface IP exactly matches an A record for 'vm_name'
+             (only tried if 'vm_primary_ip4_by_dns_name' is enabled). If vCenter reported no
+             interface IPs at all this run (e.g. guest tools running but not populating
+             guest.net), IPs NetBox already has assigned to this VM's interfaces from a
+             previous sync are used as candidates instead -- DNS resolving to one of them
+             each run is the independent, current confirmation that it's still valid. This
+             fallback is intentionally DNS-only: tiers 2/3 below have no such confirmation
+             for stale data and are not extended this way.
+          2. an interface IP is in the same network as the VM's default gateway
+             (the pre-existing behavior, derived from guest.ipStack)
+          3. an interface IP sits on a VLAN listed in 'vm_primary_ip4_fallback_vlans',
+             tried in the configured order (only tried if the option is set)
+
+        An IP that falls within 'vm_ip_permitted_overlapping_subnets' (deliberately shared
+        HA/heartbeat addresses, e.g. VRRP peer links) is never eligible for any tier, since such
+        an address is intentionally assigned to more than one VM and would otherwise get
+        reassigned as primary IP back and forth between those VMs on every sync run.
+
+        Parameters
+        ----------
+        vm_name: str
+            name of the VM as it will be synced to NetBox
+        nic_data: dict
+            interface data keyed by full interface name, as collected in 'add_virtual_machine'
+        nic_ips: dict
+            list of "ip/prefixlen" strings keyed by full interface name
+        default_gateway_ip4: IPv4Address
+            default IPv4 gateway reported by the VM, or None if none was found
+
+        Returns
+        -------
+        str: primary IPv4 address including prefix length, None if no candidate was found
+        """
+
+        overlapping_subnets = grab(self.settings, "vm_ip_permitted_overlapping_subnets", fallback=list())
+
+        # ordered list of (interface name, "ip/prefixlen", ip_interface) for eligible IPv4 addresses
+        ipv4_candidates = list()
+        for int_name, int_ip_list in nic_ips.items():
+            for int_ip in int_ip_list:
+                # noinspection PyBroadException
+                try:
+                    ip_interface_object = ip_interface(int_ip)
+                except Exception:
+                    continue
+
+                if ip_interface_object.version != 4:
+                    continue
+
+                if any(ip_interface_object.ip in subnet for subnet in overlapping_subnets):
+                    log.debug2(f"IP '{int_ip}' on interface '{int_name}' of VM '{vm_name}' is part of a "
+                               "permitted overlapping subnet, excluding it from primary IPv4 selection")
+                    continue
+
+                ipv4_candidates.append((int_name, int_ip, ip_interface_object))
+
+        # tier 1: VM name resolves to one of the discovered IPs, or to an existing NetBox
+        # assignment if vCenter reported no interface IPs at all this run
+        if self.settings.vm_primary_ip4_by_dns_name is True:
+
+            dns_candidates = ipv4_candidates
+            using_existing_assignments = False
+
+            if len(ipv4_candidates) == 0:
+                dns_candidates = self.get_existing_vm_ipv4_candidates(vm_name, overlapping_subnets)
+                using_existing_assignments = True
+
+            resolved_ips = self.get_vm_dns_ips(vm_name)
+            for int_name, int_ip, ip_interface_object in dns_candidates:
+                if str(ip_interface_object.ip) in resolved_ips:
+                    match_source = "matches DNS A record, no live IPs reported by vCenter this run" \
+                        if using_existing_assignments else "matches DNS A record"
+                    log.debug(f"Using '{int_ip}' on interface '{int_name}' as primary IPv4 for VM "
+                              f"'{vm_name}' ({match_source})")
+                    return int_ip
+
+            if len(resolved_ips) > 0 and len(dns_candidates) > 0:
+                log.debug2(f"DNS A record(s) for '{vm_name}' ({', '.join(resolved_ips)}) don't match any "
+                           "IPv4 address discovered on this VM")
+
+        if len(ipv4_candidates) == 0:
+            log.debug2(f"VM '{vm_name}' has no eligible IPv4 addresses, unable to determine "
+                       "a primary IPv4 address")
+            return None
+
+        # tier 2: default gateway is in the same network as this IP
+        if default_gateway_ip4 is not None:
+            for int_name, int_ip, ip_interface_object in ipv4_candidates:
+                if default_gateway_ip4 in ip_interface_object.network:
+                    log.debug(f"Using '{int_ip}' on interface '{int_name}' as primary IPv4 for VM "
+                              f"'{vm_name}' (default gateway {default_gateway_ip4})")
+                    return int_ip
+
+        # tier 3: static fallback to a configured VLAN, tried in the configured order
+        for fallback_vlan in self.settings.vm_primary_ip4_fallback_vlans or list():
+            for int_name, int_ip, ip_interface_object in ipv4_candidates:
+                if grab(nic_data, f"{int_name}|untagged_vlan|vid", separator="|") == fallback_vlan:
+                    log.debug(f"Using '{int_ip}' on interface '{int_name}' as primary IPv4 for VM "
+                              f"'{vm_name}' (fallback VLAN {fallback_vlan})")
+                    return int_ip
+
+        log.debug2(f"Unable to determine a primary IPv4 address for VM '{vm_name}'")
+
+        return None
 
     def update_basic_data(self):
         """

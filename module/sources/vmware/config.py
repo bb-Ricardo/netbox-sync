@@ -264,6 +264,27 @@ class VMWareConfig(ConfigBase):
                                        as "when-undefined"
                          """,
                          default_value="when-undefined"),
+            ConfigOption("vm_primary_ip4_by_dns_name",
+                         bool,
+                         description="""\
+                         Resolve the VM's name (as it will be synced to NetBox) via DNS and, if
+                         the A record matches one of the IP addresses discovered on the VM's
+                         interfaces, prefer it as the primary IPv4 address. This is tried before
+                         the built-in default-gateway based detection and helps with appliances
+                         that route their default traffic out a data-plane interface instead of
+                         the management interface.
+                         """,
+                         default_value=False),
+            ConfigOption("vm_primary_ip4_fallback_vlans",
+                         str,
+                         description="""\
+                         Comma separated, ordered list of VLAN IDs used as a last resort to
+                         determine a VM's primary IPv4 address if neither its DNS name (see
+                         'vm_primary_ip4_by_dns_name' above) nor its default gateway could be
+                         used. The first VLAN in the list that has an IPv4 address on one of the
+                         VM's interfaces wins. Usually points at a management VLAN.
+                         """,
+                         config_example="1370"),
             ConfigOption("skip_vm_comments",
                          bool,
                          description="Do not sync notes from a VM in vCenter to the comments field on a VM in netbox",
@@ -584,8 +605,14 @@ class VMWareConfig(ConfigBase):
             if option.key == "custom_dns_servers":
 
                 dns_name_lookup = self.get_option_by_name("dns_name_lookup")
+                vm_primary_ip4_by_dns_name = self.get_option_by_name("vm_primary_ip4_by_dns_name")
 
-                if not isinstance(dns_name_lookup, ConfigOption) or dns_name_lookup.value is False:
+                dns_lookup_needed = any([
+                    isinstance(dns_name_lookup, ConfigOption) and dns_name_lookup.value is True,
+                    isinstance(vm_primary_ip4_by_dns_name, ConfigOption) and vm_primary_ip4_by_dns_name.value is True
+                ])
+
+                if dns_lookup_needed is False:
                     continue
 
                 custom_dns_servers = quoted_split(option.value)
@@ -720,3 +747,15 @@ class VMWareConfig(ConfigBase):
                     log.error(f"Problem parsing vm_ip_permitted_overlapping_subnets entry '{subnet}': {e}")
                     self.set_validation_failed()
             overlapping_subnets_option.set_value(parsed_subnets)
+
+        fallback_vlans_option = self.get_option_by_name("vm_primary_ip4_fallback_vlans")
+
+        if fallback_vlans_option is not None and fallback_vlans_option.value is not None:
+            parsed_vlan_ids = list()
+            for vlan_id in quoted_split(fallback_vlans_option.value) or list():
+                try:
+                    parsed_vlan_ids.append(int(vlan_id))
+                except ValueError:
+                    log.error(f"Problem parsing vm_primary_ip4_fallback_vlans entry '{vlan_id}', must be an integer")
+                    self.set_validation_failed()
+            fallback_vlans_option.set_value(parsed_vlan_ids)
