@@ -16,6 +16,7 @@ from packaging import version
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
+from module.common.support import normalize_mac_address
 
 log = get_logger()
 
@@ -310,6 +311,11 @@ class SourceBase:
         if len(tagged_vlans) > 0:
             del interface_data["tagged_vlans"]
 
+        # a source (currently only vmware/connection.py, for acos/tmos/alteon data-plane
+        # interfaces) can mark an interface as fully owned elsewhere for IP-address purposes -
+        # skip both adding and removing IP assignments on it entirely
+        force_skip_ip_handling = interface_data.pop("_skip_ip_reconciliation", False) is True
+
         # get device tenant
         device_tenant = grab(device_object, "data.tenant")
 
@@ -363,9 +369,41 @@ class SourceBase:
 
         # skip handling of IPs for VMs with not installed/running guest tools
         skip_ip_handling = False
-        if type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
+        if force_skip_ip_handling is True:
+            log.debug(f"Interface '{interface_object.get_display_name()}' is marked as fully owned elsewhere for "
+                      "IP-address purposes by its source; skipping IP handling for this interface")
+            skip_ip_handling = True
+        elif type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
             log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
             skip_ip_handling = True
+        elif type(device_object) == NBVM and len(grab(vmware_object, "guest.net", fallback=list())) == 0:
+            # guest tools report "running" but returned zero NICs for the whole VM -- this is a stale/
+            # incompatible guest tools install (seen on old TMOS releases), not a real "all interfaces lost
+            # their IP" event. Trusting it would tear down otherwise-valid NetBox IP-to-interface assignments
+            # every sync cycle. A real per-NIC IP removal still reports the NIC (with no IP), so that case is
+            # unaffected by this guard.
+            log.debug(f"VM '{device_object.name}' guest tools running but reported zero network interfaces; "
+                      f"skipping IP handling (stale/incompatible VMware Tools?)")
+            skip_ip_handling = True
+        elif type(device_object) == NBVM and interface_mac_address is not None:
+            # Same reasoning as the whole-VM guard above, but per-interface: on some guest-tools
+            # cycles an old/flaky TMOS install reports SOME interfaces in guest.net but omits one
+            # specific NIC's MAC entirely (confirmed live: bigip-ve-001's mgmt interface lost its
+            # IP even though guest.net wasn't totally empty that cycle) - the whole-VM guard above
+            # only catches a fully-empty guest.net, not this narrower case. A real per-NIC IP
+            # removal still reports the NIC's MAC (with an empty IP list); total absence of the MAC
+            # itself means guest tools simply didn't report on this NIC this cycle, not a genuine
+            # removal.
+            reported_macs = {
+                normalize_mac_address(grab(g, "macAddress"))
+                for g in grab(vmware_object, "guest.net", fallback=list())
+                if grab(g, "macAddress") is not None
+            }
+            if normalize_mac_address(interface_mac_address) not in reported_macs:
+                log.debug(f"VM '{device_object.name}' interface with MAC '{interface_mac_address}' not present "
+                          "in this cycle's guest.net at all; skipping IP handling for this interface "
+                          "(stale/incomplete VMware Tools report?)")
+                skip_ip_handling = True
 
         ip_address_objects = list()
         matching_ip_prefixes = list()
@@ -442,7 +480,25 @@ class SourceBase:
             # try to find matching IP address object
             this_ip_object = None
             skip_this_ip = False
+
+            ip_is_overlapping = any(
+                ip_object.ip in subnet
+                for subnet in grab(self.settings, "vm_ip_permitted_overlapping_subnets", fallback=list())
+            )
+
+            if ip_is_overlapping:
+                for ip in self.inventory.get_all_items(NBIPAddress):
+                    ip_address_string = grab(ip, "data.address", fallback="")
+                    if not ip_address_string.startswith(f"{ip_object.ip.compressed}/"):
+                        continue
+                    if ip.get_interface() == interface_object:
+                        this_ip_object = ip
+                        break
+
             for ip in self.inventory.get_all_items(NBIPAddress):
+
+                if ip_is_overlapping:
+                    continue
 
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
@@ -596,6 +652,14 @@ class SourceBase:
         for current_ip in interface_object.get_ip_addresses():
 
             if skip_ip_handling is True:
+                if force_skip_ip_handling is True:
+                    # We're intentionally leaving this IP's assignment alone (a device-side
+                    # collector owns it), but still need to mark it as "seen" this cycle -
+                    # otherwise it stops being claimed by any source and netbox-sync's own
+                    # orphan-pruning (module/netbox/connection.py prune_data(), 30-day
+                    # default delay here) will tag it Orphaned and eventually delete it out
+                    # from under the collector that's actively managing it.
+                    current_ip.update(data={}, source=self)
                 continue
 
             if grab(current_ip, "data.role.value") == "anycast":
