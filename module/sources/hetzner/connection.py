@@ -72,8 +72,6 @@ class HetznerHandler(SourceBase):
 
         token = self.settings.api_token
 
-        self.log.error(f"TOKEN DEBUG >>> {repr(token)}")
-
         if not token:
             self.log.error("Hetzner api_token not defined in settings.ini")
             return
