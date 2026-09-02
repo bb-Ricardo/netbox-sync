@@ -1,0 +1,46 @@
+name: Test
+
+on:
+  push:
+    branches: [ "main", "development" ]
+  pull_request:
+    branches: [ "main", "development" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    env:
+      # vcsim serves the captured vCenter inventories in tests/fixtures/vcsim
+      GOVMOMI_VERSION: v0.56.0
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Install vcsim
+        run: |
+          curl -fsSL -o vcsim.tar.gz \
+            "https://github.com/vmware/govmomi/releases/download/${GOVMOMI_VERSION}/vcsim_Linux_x86_64.tar.gz"
+          tar -xzf vcsim.tar.gz vcsim
+          sudo install -m 0755 vcsim /usr/local/bin/vcsim
+          vcsim -h 2>&1 | head -1 || true
+
+      - name: Run tests
+        run: pytest -v
