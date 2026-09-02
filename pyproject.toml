@@ -28,3 +28,6 @@ Issues = "https://github.com/bb-ricardo/netbox-sync/issues"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+# the modules under test live in the repository root, which plain `pytest` does
+# not put on sys.path (unlike `python -m pytest`)
+pythonpath = ["."]
