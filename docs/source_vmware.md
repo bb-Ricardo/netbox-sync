@@ -103,7 +103,14 @@ First VM is filtered:
 Then all necessary VM data will be collected:<br>
 platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addresses
 
-Primary IPv4/6 will be determined by interface that provides the default route for this VM.
+Primary IPv6 will be determined by the interface that provides the default route for this VM.
+
+Primary IPv4 is determined by a tiered fallback, first match wins:
+1. an interface IP matches the DNS (A record) name of the VM (`vm_primary_ip4_by_dns_name`)
+2. interface with this IP provides the default route for this VM
+3. an interface IP sits on a VLAN listed in `vm_primary_ip4_fallback_vlans` (tried in order)
+
+An IP that falls within `vm_ip_permitted_overlapping_subnets` is never eligible for any tier.
 
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
