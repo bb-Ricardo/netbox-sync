@@ -24,3 +24,7 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/bb-ricardo/netbox-sync.git"
 Issues = "https://github.com/bb-ricardo/netbox-sync/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
