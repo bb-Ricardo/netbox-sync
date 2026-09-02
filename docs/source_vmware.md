@@ -107,3 +107,44 @@ Primary IPv4/6 will be determined by interface that provides the default route f
 
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
+
+#### 6. Sync VMware Tools guest hostname to a custom field
+
+The vCenter VM name (used as the NetBox VM `name`) and the hostname reported from inside the
+guest OS by VMware Tools are not always identical. This can happen if:
+* a VM was renamed in vCenter but the OS hostname was not changed (or vice versa)
+* an OS administrator changed the hostname without informing the virtualization team
+* a VM was cloned and the guest hostname was not adjusted afterwards
+
+To make this drift visible in NetBox, the option `vm_guest_hostname_custom_field` can be set to
+the name of a NetBox custom field. If set, the guest hostname reported by VMware Tools (vCenter
+property `guest.hostName`) is synced into that custom field on every synced VM, while the NetBox
+VM `name` keeps reflecting the vCenter inventory name unchanged. This allows administrators to
+compare the NetBox VM name against the custom field value on the same VM record to spot naming
+drift.
+
+```ini
+vm_guest_hostname_custom_field = vmware_guest_hostname
+```
+
+If the custom field does not exist in NetBox yet it will be created automatically (type `Text`,
+assigned to the `Virtual Machine` object type), the same way other custom fields managed by
+netbox-sync (e.g. `vcsa_*` custom attributes) are created. An administrator can also pre-create
+the field beforehand; netbox-sync will then just use the existing field.
+
+This option is unset by default, so the feature is disabled and no additional custom field is
+created unless explicitly configured.
+
+VMware Tools may not always report a hostname, for example if Tools are not installed, not
+running, outdated, or simply have not reported guest information yet. In that case
+netbox-sync leaves the custom field untouched and keeps the last known value, instead of
+clearing it. A message is logged at debug level (`-l DEBUG2`) whenever this happens.
+
+Example result in NetBox for a VM named `APPPRD01` in vCenter whose guest OS reports
+`appprd01.corp.example.com` as its hostname:
+
+```text
+Virtual Machine Name:        APPPRD01
+Custom Fields:
+  VMware Guest Hostname:     appprd01.corp.example.com
+```

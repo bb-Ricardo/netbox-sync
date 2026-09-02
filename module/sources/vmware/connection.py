@@ -921,6 +921,28 @@ class VMWareHandler(SourceBase):
 
                 return_custom_fields[grab(custom_field, "data.name")] = f"{memory_size} {memory_unit}"
 
+        # add VMware Tools guest hostname to VM
+        if object_type == "virtualization.virtualmachine" and self.settings.vm_guest_hostname_custom_field:
+
+            guest_hostname_field_name = self.settings.vm_guest_hostname_custom_field
+            guest_hostname = get_string_or_none(grab(obj, "guest.hostName"))
+
+            if guest_hostname is not None:
+                custom_field = self.add_update_custom_field({
+                    "name": guest_hostname_field_name,
+                    "label": "VMware Guest Hostname",
+                    "object_types": [object_type],
+                    "type": "text",
+                    "description": "Hostname reported by VMware Tools from inside the guest OS"
+                })
+
+                return_custom_fields[grab(custom_field, "data.name")] = guest_hostname
+
+            else:
+                log.debug2(f"VM '{grab(obj, 'name')}' guest hostname not reported by VMware Tools "
+                           "(not installed, not running or no data available yet). Keeping current "
+                           f"value of custom field '{guest_hostname_field_name}' untouched.")
+
         field_definition = {grab(k, "key"): grab(k, "name") for k in grab(obj, "availableField", fallback=list())}
 
         for obj_custom_field in custom_value:
