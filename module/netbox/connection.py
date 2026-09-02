@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -152,8 +152,10 @@ class NetBoxHandler:
         requests.Session: session handler of new NetBox session
         """
 
+        token = self.settings.api_token
+        keyword = "Bearer" if token.startswith("nbt_") else "Token"
         header = {
-            "Authorization": f"Token {self.settings.api_token}",
+            "Authorization": f"{keyword} {token}",
             "User-Agent": f"netbox-sync/{__version__}",
             "Content-Type": "application/json"
         }
@@ -200,7 +202,7 @@ class NetBoxHandler:
 
         try:
             response = self.session.get(
-                f"{self.url}/status",
+                f"{self.url}status",
                 timeout=self.settings.timeout,
                 verify=self.settings.validate_tls_certs)
         except Exception as e:

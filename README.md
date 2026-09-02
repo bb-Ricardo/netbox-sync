@@ -1,9 +1,6 @@
 
 # NetBox-Sync
 
-> [!CAUTION]
-> **Maintainer wanted - sunsetting this repository by 31.10.2025 [#474](https://github.com/bb-Ricardo/netbox-sync/issues/474)**
-
 This is a tool to sync data from different sources to a NetBox instance.
 
 Available source types:
@@ -33,14 +30,8 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 
 ## Requirements
 ### Software
-* python >= 3.6
-* packaging
-* urllib3==2.2.1
-* wheel
-* requests==2.31.0
-* pyvmomi==8.0.2.0.1
-* aiodns==3.0.0
-* pyyaml==6.0.1
+* python >= 3.12
+* see [requirements.txt](requirements.txt)
 
 ### Environment
 * NetBox >= 2.9
@@ -52,20 +43,17 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 # Installing
 * here we assume we install in ```/opt```
 
-## RedHat based OS
-* on RedHat/CentOS 7 you need to install python3.6 and pip from EPEL first
-* on RedHat/CentOS 8 systems the package name changed to `python3-pip`
+## RedHat based distributions
 ```shell
-yum install python36-pip
+yum install python3-pip
 ```
 
-## Ubuntu 18.04 & 20.04 && 22.04
+## Debian (Ubuntu) based distributions
 ```shell
 apt-get update && apt-get install python3-venv
 ```
 
 ## Clone repo and install dependencies
-* If you need to use python 3.6 then you would need `requirements_3.6.txt` to install requirements
 * download and setup of virtual environment
 ```shell
 cd /opt
@@ -79,10 +67,10 @@ pip3 install -r requirements.txt || pip install -r requirements.txt
 ```
 
 ### VMware tag sync (if necessary)
-The `vsphere-automation-sdk` must be installed if tags should be synced from vCenter to NetBox
+The `vcf-sdk` must be installed if tags should be synced from vCenter to NetBox
 * assuming we are still in an activated virtual env
 ```shell
-pip install --upgrade git+https://github.com/vmware/vsphere-automation-sdk-python.git
+pip install --upgrade vcf-sdk
 ```
 
 ## NetBox API token
@@ -91,6 +79,8 @@ In order to updated data in NetBox you need a NetBox API token.
   * auth
   * secrets
   * users
+* Both v1 (legacy) and v2 tokens (NetBox 4.5+, `nbt_` prefix) are supported.
+  The correct authorization header (`Token` or `Bearer`) is detected automatically.
 
 A short description can be found [here](https://docs.netbox.dev/en/stable/integrations/rest-api/#authentication)
 
@@ -102,18 +92,18 @@ usage: netbox-sync.py [-h] [-c settings.ini [settings.ini ...]] [-g]
 
 Sync objects from various sources to NetBox
 
-Version: 1.8.0 (2025-03-07)
+Version: 1.8.1 (2026-03-18)
 Project URL: https://github.com/bb-ricardo/netbox-sync
 
 options:
   -h, --help            show this help message and exit
-  -c settings.ini [settings.ini ...], --config settings.ini [settings.ini ...]
+  -c, --config settings.ini [settings.ini ...]
                         points to the config file to read config data from
                         which is not installed under the default path
                         './settings.ini'
   -g, --generate_config
                         generates default config file.
-  -l {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}, --log_level {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}
+  -l, --log_level {DEBUG3,DEBUG2,DEBUG,INFO,WARNING,ERROR}
                         set log level (overrides config)
   -n, --dry_run         Operate as usual but don't change anything in NetBox.
                         Great if you want to test and see what would be

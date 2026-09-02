@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import json
+import asyncio
 
 from module.netbox import *
 from module.common.misc import grab
@@ -428,7 +429,7 @@ class NetBoxInventory:
                 continue
 
             # get DNS names for IP addresses:
-            records = perform_ptr_lookups(data.get("ips"), data.get("servers"))
+            records = asyncio.run(perform_ptr_lookups(data.get("ips"), data.get("servers")))
 
             for ip in self.get_all_items(NBIPAddress):
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -44,7 +44,7 @@ def normalize_mac_address(mac_address=None):
     return mac_address
 
 
-def perform_ptr_lookups(ips, dns_servers=None):
+async def perform_ptr_lookups(ips, dns_servers=None):
     """
     Perform DNS reverse lookups for IP addresses to find corresponding DNS name
 
@@ -60,9 +60,7 @@ def perform_ptr_lookups(ips, dns_servers=None):
     dict: of {"ip": "hostname"} for requested ips, hostname will be None if no hostname returned
     """
 
-    loop = asyncio.get_event_loop()
-
-    resolver = aiodns.DNSResolver(loop=loop)
+    resolver = aiodns.DNSResolver()
 
     if dns_servers is not None:
         if isinstance(dns_servers, list):
@@ -71,8 +69,12 @@ def perform_ptr_lookups(ips, dns_servers=None):
         else:
             log.error(f"List of provided DNS servers invalid: {dns_servers}")
 
-    queue = asyncio.gather(*(reverse_lookup(resolver, ip) for ip in ips))
-    results = loop.run_until_complete(queue)
+    # TaskGroup is faster than gather in 3.14 and provides better error safety
+    async with asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(reverse_lookup(resolver, ip)) for ip in ips]
+
+    # After the 'async with' block, all tasks are guaranteed complete
+    results = [task.result() for task in tasks]
 
     # return dictionary instead of a list of dictionaries
     return {k: v for x in results for k, v in x.items()}

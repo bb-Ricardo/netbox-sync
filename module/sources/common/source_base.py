@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -465,6 +465,13 @@ class SourceBase:
             this_ip_object = None
             skip_this_ip = False
             for ip in self.inventory.get_all_items(NBIPAddress):
+                # stops fhrp group assigned ip addresses from being overridden and assigned to another object type
+                # if the config skip_fhrp_group_ips is set to True
+                if grab(ip, "data.assigned_object_type", fallback="") == "ipam.fhrpgroup" and self.settings.skip_fhrp_group_ips:
+                    log.info(f"Ip address {grab(ip, "data.address")} is assigned to an FHRP Group and skip_fhrp_group_ips is set to {self.settings.skip_fhrp_group_ips}, skipping.")
+                    skip_this_ip = True
+                    continue
+
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
 

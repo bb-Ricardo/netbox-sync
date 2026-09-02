@@ -1,0 +1,26 @@
+[project]
+name = "netbox-sync"
+version = "1.8.1"
+description = "Sync objects from various sources to NetBox"
+authors = [
+    { name = "Ricardo Bartels", email = "ricardo.bartels@telekom.de" }
+]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.txt"]
+requires-python = ">=3.13"
+dependencies = [
+    "aiodns>=4.0.3",
+    "hcloud>=2.20.0",
+    "packaging>=26.2",
+    "pyvmomi==9.1.0.0",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+    "setuptools==82.0.1",
+    "urllib3>=2.7.0",
+    "wheel>=0.47.0",
+]
+
+[project.urls]
+Repository = "https://github.com/bb-ricardo/netbox-sync.git"
+Issues = "https://github.com/bb-ricardo/netbox-sync/issues"

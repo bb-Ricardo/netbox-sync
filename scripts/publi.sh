@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #

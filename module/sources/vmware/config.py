@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -89,7 +89,7 @@ class VMWareConfig(ConfigBase):
                               If a filter is unset it will be ignored. Filters are all treated as regex expressions!
                               If more then one expression should match, a '|' needs to be used
                               """,
-                              config_example="""Example: (exclude all VMs with "replica" in their name 
+                              config_example="""Example: (exclude all VMs with "replica" in their name
                               and all VMs starting with "backup"): vm_exclude_filter = .*replica.*|^backup.*""",
                               options=[
                                 ConfigOption("cluster_exclude_filter",
@@ -143,6 +143,27 @@ class VMWareConfig(ConfigBase):
                                              description="""Same as cluster site but on host level.
                                              If unset it will fall back to cluster_site_relation""",
                                              config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
+                                ConfigOption("cluster_scope_type_relation",
+                                             str,
+                                             description="""This option defines the scope type for a cluster.
+                                             The scope type can be 'dcim.site', 'dcim.sitegroup', 'dcim.location' or 'dcim.region'.
+                                             This is done with a comma separated key = value list.
+                                             Can be set to "<NONE>" to not assign a scope type.
+                                             Note: this does not remove scope types from existing clusters in NetBox.
+                                               key: defines a cluster name as regex
+                                               value: defines the NetBox scope type name (use quotes if name contains commas)
+                                             """,
+                                             config_example="Cluster_NYC = dcim.site, Cluster_FFM = dcim.sitegroup, Cluster_BER = dcim.location"),
+                                ConfigOption("cluster_scope_id_relation",
+                                             str,
+                                             description="""This option defines the scope id for a cluster.
+                                             The scope id is the NetBox ID of the scope type.
+                                             This is done with a comma separated key = value list.
+                                             To be used in combination with the 'cluster_scope_type_relation'.
+                                               key: defines a cluster name as regex
+                                               value: defines the NetBox scope id (use quotes if name contains commas)
+                                             """,
+                                             config_example="Cluster_NYC = 1, Cluster_FFM.* = 2, Cluster_BER = 7"),
                                 ConfigOption("cluster_tenant_relation",
                                              str,
                                              description="""\

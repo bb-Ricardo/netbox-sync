@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -62,6 +62,8 @@ class VMWareHandler(SourceBase):
         NBDeviceRole,
         NBSite,
         NBSiteGroup,
+        NBLocation,
+        NBRegion,
         NBCluster,
         NBDevice,
         NBVM,
@@ -474,13 +476,20 @@ class VMWareHandler(SourceBase):
 
         site_name = self.get_object_relation(object_name, relation_name)
 
-        if object_type == NBDevice and site_name is None:
+        # check if cluster is in a different site than the host and override the site name if so
+        if object_type == NBDevice:
             site_name = self.get_site_name(NBCluster, cluster_name)
             if site_name is not None:
-                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
+                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'. Overriding host site relation '{relation_name}'")
+            else:
+                site_name = self.get_object_relation(object_name, relation_name)
+                # set deault site name if no relation was found
+                if site_name is None:
+                    site_name = self.site_name
+                    log.debug2(f"No site relation for {type(object_name)}: '{object_name}' found, using default site '{site_name}'")
 
-        # set default site name
-        if site_name is None:
+        # set default site name for devices
+        if site_name is None and object_type == NBDevice:
             site_name = self.site_name
             log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
 
@@ -489,7 +498,94 @@ class VMWareHandler(SourceBase):
             site_name = None
             log.debug2(f"Site relation for '{object_name}' set to None")
 
+        log.debug2(f"Returning site name '{site_name}' for {object_type.name} '{object_name}'.")
+
         return site_name
+
+    def get_scope_type(self, object_type, object_name):
+        """
+        Retrieve the scope_type for a NBCluster instance by object name or from the config option
+        cluster_scope_type_relation
+
+        Note: Only NBCluster is supported as the object_type.
+
+        Parameters
+        ----------
+        object_type: object type
+            The NetBox object type (must be NBCluster).
+        object_name: str
+            The name of the object to look up.
+
+        Returns
+        -------
+        str or None: scope type if one is found, otherwise None
+        """
+
+        # Validate object type
+        if object_type != NBCluster:
+            raise ValueError(f"Object type must be '{NBCluster.name}'.")
+
+        # get scope type from relation config
+        relation_name = "cluster_scope_type_relation"
+        scope_type = self.get_object_relation(object_name, relation_name)
+        log.debug(f"Retrieved scope type '{scope_type}' for {object_type.name} '{object_name}' from relation '{relation_name}'.")
+
+        # if the scope_type is a list, use the first element
+        if scope_type is not None and type(scope_type) is list:
+            scope_type_list = scope_type
+            scope_type = scope_type_list[0] if len(scope_type_list) > 0 else None
+            log.debug(f"Scope type for {object_type.name} '{object_name}' is a list, using first element: '{scope_type}'")
+
+        # if scope_type is not a str, return None
+        if type(scope_type) is not str:
+            log.debug(f"scope_type is type: {type(scope_type)}, not str")
+            return None
+
+        # set scope_type to None if it is configured as "<NONE>"
+        if scope_type == "<NONE>":
+            log.debug(f"Scope type for {object_type.name} '{object_name}' is set to None")
+            return None
+
+        log.debug2(f"Returning scope type '{scope_type}' for {object_type.name} '{object_name}'.")
+        return scope_type
+
+    def get_scope_id(self, object_type, object_name):
+        """
+        Retrieve the scope_id for a NBCluster instance by object name or from the config option
+        cluster_scope_id_relation
+
+        Note: Only NBCluster is supported as the object_type.
+
+        Parameters
+        ----------
+        object_type: type
+            The NetBox object type (must be NBCluster).
+        object_name: str
+            The name of the object to look up.
+
+        Returns
+        -------
+        str or None: scope id if one is found, otherwise None
+        """
+        # Validate object type
+        if object_type != NBCluster:
+            raise ValueError(f"Object type must be '{NBCluster.name}'.")
+
+        # get scope id from relation config
+        relation_name = "cluster_scope_id_relation"
+        scope_id = self.get_object_relation(object_name, relation_name)
+
+        # return None if scope_id is None or not a string
+        if scope_id is None:
+            log.debug(f"No scope id found for {object_name}.")
+            return None
+        if type(scope_id) is not str:
+            log.debug(f"scope_id is type: {type(scope_id)}, not str")
+            return None
+
+        log.debug2(f"Retrieved scope id '{scope_id}' for {object_type.name} '{object_name}' from relation '{relation_name}'. End of method.")
+
+        return scope_id
 
     def get_object_based_on_macs(self, object_type, mac_list=None):
         """
@@ -1378,8 +1474,19 @@ class VMWareHandler(SourceBase):
                                       self.settings.cluster_include_filter,
                                       self.settings.cluster_exclude_filter) is False:
             return
+        log.debug2(f"Cluster '{name}' passes include and exclude filters. Continuing.")
+
+        # get scope type and id, or site name
+        scope_type = self.get_scope_type(NBCluster, full_cluster_name)
+        if scope_type is None:
+            scope_type = self.get_scope_type(NBCluster, name)
 
         site_name = self.get_site_name(NBCluster, full_cluster_name)
+
+        scope_id = self.get_scope_id(NBCluster, full_cluster_name)
+        if scope_id is None:
+            scope_id = self.get_scope_id(NBCluster, name)
+        log.debug(f"Cluster '{full_cluster_name}' has scope id '{scope_id}' of type {type(scope_id)}.")
 
         data = {
             "name": name,
@@ -1388,11 +1495,23 @@ class VMWareHandler(SourceBase):
         }
 
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            if site_name is not None:
-                data["scope_id"] = {"name": site_name}
+            # set the scope type and id if they are defined
+            if scope_type is not None:
+                data["scope_type"] = scope_type
+                data["scope_id"] = scope_id
+                log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
+                          f"and scope id '{scope_id}'.")
+            elif site_name is not None:
                 data["scope_type"] = "dcim.site"
+                data["scope_id"] = {"name": site_name}
+            else:
+                log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
-            data["site"] = {"name": site_name}
+            # set site_name in the pre-4.2.0 NetBox versions if one is found
+            if site_name is not None:
+                data["site"] = {"name": site_name}
+
+        log.debug(f"Cluster '{full_cluster_name}' (or {name}) has data items '{data.items()}'.")
 
         tenant_name = self.get_object_relation(full_cluster_name, "cluster_tenant_relation")
         if tenant_name is not None:
@@ -1411,11 +1530,12 @@ class VMWareHandler(SourceBase):
             if grab(cluster_candidate, "data.name") != name:
                 continue
 
-            # try to find a cluster with matching site
-            if cluster_candidate.get_site_name() == site_name:
-                cluster_object = cluster_candidate
-                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
-                break
+            if site_name is not None:
+                # try to find a cluster with matching site
+                if cluster_candidate.get_site_name() == site_name:
+                    cluster_object = cluster_candidate
+                    log.debug2("Found an existing cluster where 'name' and 'site' are matching")
+                    break
 
             if grab(cluster_candidate, "data.group") is not None and \
                     grab(cluster_candidate, "data.group.data.name") == group_name:
@@ -2186,19 +2306,30 @@ class VMWareHandler(SourceBase):
 
         # first try 'guestInfo.detailed.data' and then 'guestOS.detailed.data'
         detailed_data = extra_config.get("guestInfo.detailed.data") or extra_config.get("guestOS.detailed.data")
+
+        # if guestOS tools ar installed but are not able to determine the os-release
+        # then check against this pattern to guess if a correct os string has been returned
+        invalid_patterns = ["Usage:", "Error:", "command not found", "No such file"]
+
         if isinstance(detailed_data, str):
             detailed_data_dict = dict()
+            pretty_name = None
             for detailed_data_item in quoted_split(detailed_data.replace("' ", "', ")):
                 if "=" not in detailed_data_item:
                     continue
 
                 detailed_data_key, detailed_data_value = detailed_data_item.split("=")
                 detailed_data_dict[detailed_data_key] = detailed_data_value.strip("'")
-            if len(detailed_data_dict.get("prettyName","")) > 0:
-                platform = detailed_data_dict.get("prettyName")
-            if detailed_data_dict.get("familyName", "").lower() == "linux" and \
-                    detailed_data_dict.get("distroVersion") not in platform:
-                platform = f'{platform} {detailed_data_dict.get("distroVersion")}'
+            if len(detailed_data_dict.get("prettyName", "")) > 0:
+                pretty_name = detailed_data_dict.get("prettyName")
+
+            if pretty_name and not any(pretty_name.startswith(p) for p in invalid_patterns):
+                platform = pretty_name
+                distro_version = detailed_data_dict.get("distroVersion")
+                if detailed_data_dict.get("familyName", "").lower() == "linux" and \
+                        distro_version is not None and \
+                        distro_version not in platform:
+                    platform = f'{platform} {distro_version}'
 
         if platform is not None:
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)

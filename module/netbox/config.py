@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2025 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -26,7 +26,8 @@ class NetBoxConfig(ConfigBase):
             ConfigOption("api_token",
                          str,
                          description="""Requires an NetBox API token with full permissions on all objects except
-                         'auth', 'secrets' and 'users'
+                         'auth', 'secrets' and 'users'.
+                         Both v1 (legacy) and v2 (NetBox 4.5+, nbt_ prefix) tokens are supported.
                          """,
                          config_example="XYZ",
                          mandatory=True,
