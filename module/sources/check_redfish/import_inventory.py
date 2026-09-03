@@ -107,41 +107,8 @@ class CheckRedfish(SourceBase):
             if self.read_inventory_file_content(filename) is False:
                 continue
 
-            # try to get device by supplied NetBox id
-            inventory_id = grab(self.inventory_file_content, "meta.inventory_id")
-
-            # parse inventory id to int as all NetBox ids are type integer
-            try:
-                inventory_id = int(inventory_id)
-            except (ValueError, TypeError):
-                log.warning(f"Value for meta.inventory_id '{inventory_id}' must be an integer. "
-                            f"Cannot use inventory_id to match device in NetBox.")
-
-            self.device_object = self.inventory.get_by_id(NBDevice, inventory_id)
-
-            if self.device_object is not None:
-                log.debug2("Found a matching %s object '%s' based on inventory id '%d'" %
-                           (self.device_object.name,
-                            self.device_object.get_display_name(including_second_key=True),
-                            inventory_id))
-
-            else:
-                # try to find device by serial of first system in inventory
-                device_serial = grab(self.inventory_file_content, "inventory.system.0.serial")
-                if self.device_object is None:
-                    self.device_object = self.inventory.get_by_data(NBDevice, data={
-                        "serial": device_serial
-                    })
-
-                if self.device_object is None:
-                    log.error(f"Unable to find {NBDevice.name} with id '{inventory_id}' or "
-                              f"serial '{device_serial}' in NetBox inventory from inventory file {filename}")
-                    continue
-                else:
-                    log.debug2("Found a matching %s object '%s' based on serial '%s'" %
-                               (self.device_object.name,
-                                self.device_object.get_display_name(including_second_key=True),
-                                device_serial))
+            if self.find_device_object(filename) is False:
+                continue
 
             # parse all components
             self.update_device()
@@ -155,6 +122,78 @@ class CheckRedfish(SourceBase):
             self.update_storage_enclosure()
             self.update_network_adapter()
             self.update_network_interface()
+
+    def find_device_object(self, filename):
+        """
+        Match the current inventory file to a NetBox device and store it in self.device_object.
+        Tried in order: meta.inventory_id, the system serial, then the Dell Service Tag.
+
+        Parameters
+        ----------
+        filename: str
+            inventory file name, used for logging only
+
+        Returns
+        -------
+        bool: True if a matching device was found
+        """
+
+        supplied_id = grab(self.inventory_file_content, "meta.inventory_id")
+        inventory_id = None
+
+        # bool is a subclass of int and float truncates, so int() would turn both `true` and
+        # `1.9` into the id of a real but unrelated device
+        if isinstance(supplied_id, bool) or not isinstance(supplied_id, (int, str)):
+            parsed_id = None
+        else:
+            try:
+                parsed_id = int(str(supplied_id).strip())
+            except ValueError:
+                parsed_id = None
+
+        if parsed_id is not None and parsed_id > 0:
+            inventory_id = parsed_id
+        elif supplied_id is not None:
+            # an absent id is the normal case, so only warn about a supplied one which is unusable
+            log.warning(f"Value for meta.inventory_id '{supplied_id}' must be a positive integer. "
+                        f"Cannot use inventory_id to match device in NetBox.")
+
+        self.device_object = None
+        if inventory_id is not None:
+            self.device_object = self.inventory.get_by_id(NBDevice, inventory_id)
+
+        if self.device_object is not None:
+            log.debug2("Found a matching %s object '%s' based on inventory id '%d'" %
+                       (self.device_object.name,
+                        self.device_object.get_display_name(including_second_key=True),
+                        inventory_id))
+            return True
+
+        # normalize as update_device() stores it, and never probe serial=None: get_by_data()
+        # compares dicts exactly, so it would match a device which has no serial at all
+        device_serial = get_string_or_none(grab(self.inventory_file_content, "inventory.system.0.serial"))
+        if device_serial is not None:
+            self.device_object = self.inventory.get_by_data(NBDevice, data={"serial": device_serial})
+
+        # unconditional, so disabling the option cannot strand a device already persisted
+        # with its Service Tag as the serial. get_service_tag() self-gates on the vendor.
+        if self.device_object is None:
+            service_tag = self.get_service_tag()
+            if service_tag is not None:
+                self.device_object = self.inventory.get_by_data(NBDevice, data={"serial": service_tag})
+                if self.device_object is not None:
+                    device_serial = service_tag
+
+        if self.device_object is None:
+            log.error(f"Unable to find {NBDevice.name} with id '{inventory_id}' or "
+                      f"serial '{device_serial}' in NetBox inventory from inventory file {filename}")
+            return False
+
+        log.debug2("Found a matching %s object '%s' based on serial '%s'" %
+                   (self.device_object.name,
+                    self.device_object.get_display_name(including_second_key=True),
+                    device_serial))
+        return True
 
     def reset_inventory_state(self):
         """
@@ -209,6 +248,22 @@ class CheckRedfish(SourceBase):
 
         return True
 
+    def get_service_tag(self):
+        """
+        Return the Dell Service Tag (the chassis SKU), or None when this is not a Dell or no
+        Service Tag is reported. Shared so matching and updating agree on the value.
+
+        Returns
+        -------
+        (str, None): the Dell Service Tag
+        """
+
+        manufacturer = get_string_or_none(grab(self.inventory_file_content, "inventory.system.0.manufacturer"))
+        if manufacturer is None or "dell" not in manufacturer.lower():
+            return None
+
+        return get_string_or_none(grab(self.inventory_file_content, "inventory.chassis.0.sku"))
+
     def update_device(self):
 
         system = grab(self.inventory_file_content, "inventory.system.0")
@@ -217,7 +272,7 @@ class CheckRedfish(SourceBase):
             log.error(f"No system data found for '{self.device_object.get_display_name()}' in inventory file.")
             return
 
-        serial = get_string_or_none(grab(system, "serial"))
+        system_serial = get_string_or_none(grab(system, "serial"))
         name = get_string_or_none(grab(system, "host_name"))
         manufacturer = get_string_or_none(grab(system, "manufacturer"))
 
@@ -234,13 +289,13 @@ class CheckRedfish(SourceBase):
             }
         }
 
-        if serial is not None:
-            device_data["serial"] = serial
+        serial = system_serial
+
         if name is not None and self.settings.overwrite_host_name is True:
             device_data["name"] = name
         if "dell" in str(manufacturer).lower():
-            chassis = grab(self.inventory_file_content, "inventory.chassis.0")
-            if chassis and "sku" in chassis:
+            service_tag = self.get_service_tag()
+            if service_tag is not None:
 
                 # add ServiceTag
                 self.add_update_custom_field({
@@ -253,10 +308,30 @@ class CheckRedfish(SourceBase):
                     "description": "Dell Service Tag"
                 })
 
-                device_data["custom_fields"]["service_tag"] = chassis.get("sku")
+                device_data["custom_fields"]["service_tag"] = service_tag
+
+                if grab(self.settings, "dell_serial_from_service_tag", fallback=False) is True:
+                    serial = service_tag
+
+                    # custom fields are merged, not None-skipped, so a missing value would clear it
+                    if system_serial is not None:
+                        self.add_update_custom_field({
+                            "name": "system_serial",
+                            "label": "System Serial Number",
+                            "object_types": [
+                                "dcim.device"
+                            ],
+                            "type": "text",
+                            "description": "System serial number reported by the BMC (Dell PPID)"
+                        })
+
+                        device_data["custom_fields"]["system_serial"] = system_serial
             else:
                 log.warning(f"No chassis or sku data found for "
                             f"'{self.device_object.get_display_name()}' in inventory file.")
+
+        if serial is not None:
+            device_data["serial"] = serial
 
         self.device_object.update(data=device_data, source=self)
 
