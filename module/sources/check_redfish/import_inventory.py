@@ -311,7 +311,6 @@ class CheckRedfish(SourceBase):
 
             # compile inventory item data
             ps_items.append({
-                "inventory_type": "Power Supply",
                 "health": health_status,
                 "description": description,
                 "full_name": name,
@@ -358,7 +357,7 @@ class CheckRedfish(SourceBase):
 
             ps_index += 1
 
-        self.update_all_items(ps_items)
+        self.update_all_items(ps_items, "Power Supply")
 
     def update_fan(self):
 
@@ -385,14 +384,13 @@ class CheckRedfish(SourceBase):
                 speed = f"{reading}{reading_unit}"
 
             items.append({
-                "inventory_type": "Fan",
                 "description": description,
                 "full_name": f"{fan_name} (ID: {fan_id})",
                 "health": health_status,
                 "speed": speed
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "Fan")
 
     def update_memory(self):
 
@@ -436,7 +434,6 @@ class CheckRedfish(SourceBase):
                 speed = f"{speed}MHz"
 
             items.append({
-                "inventory_type": "DIMM",
                 "description": description,
                 "full_name": name or "None",
                 "serial": get_string_or_none(grab(memory, "serial")),
@@ -447,7 +444,7 @@ class CheckRedfish(SourceBase):
                 "speed": speed,
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "DIMM")
 
         if memory_size_total > 0:
             memory_size_total = memory_size_total / 1024
@@ -496,7 +493,6 @@ class CheckRedfish(SourceBase):
                 description.append(f"Threads: {threads}")
 
             items.append({
-                "inventory_type": "CPU",
                 "description": description,
                 "manufacturer": get_string_or_none(grab(processor, "manufacturer")),
                 "full_name": name,
@@ -506,7 +502,7 @@ class CheckRedfish(SourceBase):
                 "speed": current_speed
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "CPU")
 
         if num_cores > 0:
             custom_fields_data = {"custom_fields": {"host_cpu_cores": f"{num_cores} {cpu_name}"}}
@@ -568,7 +564,6 @@ class CheckRedfish(SourceBase):
                 speed = f"{speed_in_rpm}RPM"
 
             items.append({
-                "inventory_type": "Physical Drive",
                 "description": description,
                 "manufacturer": get_string_or_none(grab(pd, "manufacturer")),
                 "full_name": name or "None",
@@ -580,7 +575,7 @@ class CheckRedfish(SourceBase):
                 "speed": speed
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "Physical Drive")
 
     def update_storage_controller(self):
 
@@ -614,7 +609,6 @@ class CheckRedfish(SourceBase):
                 size = f"{cache_size_in_mb}MB"
 
             items.append({
-                "inventory_type": "Storage Controller",
                 "description": description,
                 "manufacturer": get_string_or_none(grab(sc, "manufacturer")),
                 "full_name": name or "None",
@@ -624,7 +618,7 @@ class CheckRedfish(SourceBase):
                 "size": size
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "Storage Controller")
 
     def update_storage_enclosure(self):
 
@@ -650,7 +644,6 @@ class CheckRedfish(SourceBase):
                 size = f"Bays: {num_bays}"
 
             items.append({
-                "inventory_type": "Storage Enclosure",
                 "manufacturer": get_string_or_none(grab(se, "manufacturer")),
                 "full_name": name or "None",
                 "serial": get_string_or_none(grab(se, "serial")),
@@ -659,7 +652,7 @@ class CheckRedfish(SourceBase):
                 "size": size
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "Storage Enclosure")
 
     def update_network_adapter(self):
 
@@ -710,7 +703,6 @@ class CheckRedfish(SourceBase):
                 self.interface_adapter_type_dict[adapter_id] = nic_type
 
             items.append({
-                "inventory_type": "NIC",
                 "manufacturer": manufacturer,
                 "full_name": name,
                 "serial": serial,
@@ -721,7 +713,7 @@ class CheckRedfish(SourceBase):
                 "speed": nic_type.get_speed_human()
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "NIC")
 
     def update_network_interface(self):
 
@@ -900,7 +892,6 @@ class CheckRedfish(SourceBase):
                 description = f"Licenses: %s" % (", ".join(licenses))
 
             items.append({
-                "inventory_type": "Manager",
                 "description": description,
                 "full_name": name,
                 "manufacturer": grab(self.device_object, "data.device_type.data.manufacturer.data.name"),
@@ -908,9 +899,9 @@ class CheckRedfish(SourceBase):
                 "health": get_string_or_none(grab(manager, "health_status"))
             })
 
-        self.update_all_items(items)
+        self.update_all_items(items, "Manager")
 
-    def update_all_items(self, items):
+    def update_all_items(self, items, inventory_type):
         """
         Updates all inventory items of a certain type. Both (current and supplied list of items) will
         be sorted by name and matched 1:1.
@@ -919,6 +910,9 @@ class CheckRedfish(SourceBase):
         ----------
         items: list
             a list of items to update
+        inventory_type: str
+            the component type this batch is about (CPU, DIMM, Fan, ...), stated by the caller
+            so an empty batch still says which components are gone
 
         Returns
         -------
@@ -928,15 +922,9 @@ class CheckRedfish(SourceBase):
         if not isinstance(items, list):
             raise ValueError(f"Value for 'items' must be type 'list' got: {items}")
 
-        if len(items) == 0:
-            return
-
-        # get device
-        inventory_type = grab(items, "0.inventory_type")
-
-        if inventory_type is None:
-            log.error(f"Unable to find inventory type for inventory item {items[0]}")
-            return
+        # stamp the type so the lookup value and the stored value cannot drift apart
+        for item in items:
+            item["inventory_type"] = inventory_type
 
         # get current inventory items for this device and type
         current_inventory_items = dict()
@@ -977,8 +965,8 @@ class CheckRedfish(SourceBase):
                 if len(unmatched_inventory_items) > 0:
                     matched_inventory[nb_inventory_item] = unmatched_inventory_items.pop(0)
 
-                # set item health to absent if item can't be found in redfish inventory anymore
-                elif grab(nb_inventory_item, "data.custom_fields.health") != "Absent":
+                # unconditional: an object a run does not touch is tagged orphaned
+                else:
                     nb_inventory_item.update(data={"custom_fields": {"health": "Absent"}}, source=self)
 
         # update items with matching NetBox inventory item
