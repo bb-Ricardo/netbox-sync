@@ -270,6 +270,11 @@ class NetBoxHandler:
             if "limit" not in params.keys():
                 params["limit"] = self.settings.default_netbox_result_limit
 
+            # rows tied on a non-unique default ordering have no stable position across pages,
+            # so a walk can repeat one and skip another; the primary key makes the sort total
+            if nb_id is None and "ordering" not in params:
+                params["ordering"] = "id"
+
             # always exclude config context
             params["exclude"] = "config_context"
 
