@@ -159,6 +159,8 @@ def get_string_or_none(text=None):
     """
     Only return stripped content of text if text is not None and not empty
 
+    A structured value is not a name and returns None. Scalars, including ints, still stringify.
+
     Parameters
     ----------
     text: str
@@ -168,6 +170,9 @@ def get_string_or_none(text=None):
     -------
     (str, None): content of text
     """
+
+    if isinstance(text, (dict, list, set, tuple)):
+        return None
 
     if text is not None and len(str(text).strip()) > 0:
         return str(text).strip()
