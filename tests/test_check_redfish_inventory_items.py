@@ -4,35 +4,7 @@ Drives the real CheckRedfish methods against the real NetBoxInventory and NetBox
 classes. Only the NetBox REST API itself is out of scope.
 """
 
-import types
-
-from module.netbox.inventory import NetBoxInventory
-from module.netbox.object_classes import NBDevice, NBInventoryItem
-from module.sources.check_redfish.import_inventory import CheckRedfish
-
-
-def make_source():
-    """Build a CheckRedfish source on a fresh inventory, with the real base objects registered."""
-
-    inventory = NetBoxInventory()
-    # reset the singleton state so each test starts from an empty inventory
-    inventory.init()
-    inventory.source_list = list()
-    inventory.netbox_api_version = "4.3.0"
-
-    source = object.__new__(CheckRedfish)
-    source.inventory = inventory
-    source.name = "test"
-    source.source_tag = "Source: test"
-    source.settings = types.SimpleNamespace()
-
-    source.add_necessary_base_objects()
-
-    device = inventory.add_object(NBDevice, data={"name": "server01"}, source=source)
-    source.device_object = device
-
-    return source, inventory, device
-
+from module.netbox.object_classes import NBInventoryItem
 
 # a Dell `location` as check_redfish can hand it back: a nested Oem object, not a string
 DELL_LOCATION = {
@@ -53,15 +25,15 @@ def enclosure(name, location, serial="ENC-AAA"):
          "operation_status": "Enabled"}]}}
 
 
-def test_structured_location_is_not_stringified_into_the_item_name():
+def test_structured_location_is_not_stringified_into_the_item_name(check_redfish_source):
     """A structured location must not reach the name as its Python repr."""
 
-    source, inventory, _ = make_source()
+    context = check_redfish_source()
 
-    source.inventory_file_content = enclosure("BP_PSV 0:1", DELL_LOCATION)
-    source.update_storage_enclosure()
+    context.source.inventory_file_content = enclosure("BP_PSV 0:1", DELL_LOCATION)
+    context.source.update_storage_enclosure()
 
-    items = inventory.get_all_items(NBInventoryItem)
+    items = context.inventory.get_all_items(NBInventoryItem)
     assert len(items) == 1
 
     name = items[0].data["name"]
@@ -72,29 +44,29 @@ def test_structured_location_is_not_stringified_into_the_item_name():
     assert name == "BP_PSV 0:1"
 
 
-def test_plain_string_location_is_kept_in_the_item_name():
+def test_plain_string_location_is_kept_in_the_item_name(check_redfish_source):
     """A location that really is a string is still used."""
 
-    source, inventory, _ = make_source()
+    context = check_redfish_source()
 
-    source.inventory_file_content = enclosure("BP_PSV 0:1", "Slot 3")
-    source.update_storage_enclosure()
+    context.source.inventory_file_content = enclosure("BP_PSV 0:1", "Slot 3")
+    context.source.update_storage_enclosure()
 
-    items = inventory.get_all_items(NBInventoryItem)
+    items = context.inventory.get_all_items(NBInventoryItem)
     assert len(items) == 1
     assert items[0].data["name"] == "BP_PSV 0:1 Slot 3"
 
 
-def test_two_enclosures_with_structured_locations_stay_distinct():
+def test_two_enclosures_with_structured_locations_stay_distinct(check_redfish_source):
     """Dropping the unusable location must not merge two enclosures onto one name."""
 
-    source, inventory, _ = make_source()
+    context = check_redfish_source()
 
-    source.inventory_file_content = {"inventory": {"storage_enclosure": [
+    context.source.inventory_file_content = {"inventory": {"storage_enclosure": [
         enclosure("BP_PSV 0:1", DELL_LOCATION, "ENC-AAA")["inventory"]["storage_enclosure"][0],
         enclosure("BP_PSV 0:2", DELL_LOCATION, "ENC-BBB")["inventory"]["storage_enclosure"][0],
     ]}}
-    source.update_storage_enclosure()
+    context.source.update_storage_enclosure()
 
-    names = sorted(item.data["name"] for item in inventory.get_all_items(NBInventoryItem))
+    names = sorted(item.data["name"] for item in context.inventory.get_all_items(NBInventoryItem))
     assert names == ["BP_PSV 0:1", "BP_PSV 0:2"]
