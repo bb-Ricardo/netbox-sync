@@ -439,17 +439,32 @@ class SourceBase:
                     log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP address to NetBox")
                     continue
 
+            # If skip_fhrp_group_ips is set and this address is already assigned to an FHRP
+            # group in NetBox, leave it on the FHRP group instead of rebinding it to this
+            # interface (issue #445). The whole inventory is scanned for a match on this
+            # address, so the outcome does not depend on inventory order, and only a
+            # candidate in the same VRF counts, so an unrelated FHRP-group IP does not cause
+            # this address to be skipped and every regular IP to be unbound (issue #476).
+            if self.settings.skip_fhrp_group_ips:
+                skip_fhrp_ip = False
+                for ip in self.inventory.get_all_items(NBIPAddress):
+                    if grab(ip, "data.assigned_object_type", fallback="") != "ipam.fhrpgroup":
+                        continue
+                    if not grab(ip, "data.address", fallback="").startswith(f"{ip_object.ip.compressed}/"):
+                        continue
+                    if possible_ip_vrf != grab(ip, "data.vrf"):
+                        continue
+                    log.info(f"IP address '{grab(ip, 'data.address')}' is assigned to an FHRP Group and "
+                             f"skip_fhrp_group_ips is set to True, skipping.")
+                    skip_fhrp_ip = True
+                    break
+                if skip_fhrp_ip is True:
+                    continue
+
             # try to find matching IP address object
             this_ip_object = None
             skip_this_ip = False
             for ip in self.inventory.get_all_items(NBIPAddress):
-                # stops fhrp group assigned ip addresses from being overridden and assigned to another object type
-                # if the config skip_fhrp_group_ips is set to True
-                if grab(ip, "data.assigned_object_type", fallback="") == "ipam.fhrpgroup" and self.settings.skip_fhrp_group_ips:
-                    log.info(f"Ip address {grab(ip, "data.address")} is assigned to an FHRP Group and skip_fhrp_group_ips is set to {self.settings.skip_fhrp_group_ips}, skipping.")
-                    skip_this_ip = True
-                    continue
-
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
 
