@@ -22,9 +22,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from module.config.base import ConfigOptions
+from module.config.group import ConfigOptionGroup
+from module.config.option import ConfigOption
 from module.config.parser import ConfigParser
+from module.netbox.connection import NetBoxHandler
 from module.netbox.inventory import NetBoxInventory
+from module.netbox.object_classes import NBDevice, NBTag
 from module.sources import instantiate_sources
+from module.sources.check_redfish.config import CheckRedfishConfig
+from module.sources.check_redfish.import_inventory import CheckRedfish
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "vcsim"
 
@@ -194,3 +201,53 @@ def sdk(vcsim):
         yield instance.RetrieveContent()
     finally:
         connect.Disconnect(instance)
+
+
+@pytest.fixture
+def check_redfish_source(inventory):
+    """
+    Returns a function building a minimally initialized CheckRedfish source on the fresh
+    inventory, with a device to hang components off. The real add_necessary_base_objects()
+    runs, so the source tag and every custom field are registered as they are in production.
+
+    Settings start from the declared defaults of every CheckRedfishConfig option and are
+    overridden by keyword arguments, so a test states only what it cares about and an option
+    added to the config later reaches the tests with its real default.
+    """
+    def _make(**overrides: object) -> SimpleNamespace:
+        source = object.__new__(CheckRedfish)
+        source.inventory = inventory
+        source.name = "test"
+        source.source_tag = "Source: test"
+        source.settings = check_redfish_settings(**overrides)
+
+        source.add_necessary_base_objects()
+        # the primary tag is normally registered by the NetBox handler, not by the source
+        inventory.add_update_object(NBTag, data={"name": NetBoxHandler.primary_tag})
+
+        device = inventory.add_object(NBDevice, data={"name": "server01"}, source=source)
+        source.device_object = device
+
+        return SimpleNamespace(source=source, inventory=inventory, device=device)
+
+    return _make
+
+
+def check_redfish_settings(**overrides) -> ConfigOptions:
+    """
+    The settings a parsed check_redfish config produces: every declared option at its default,
+    with the given overrides applied. ConfigOptions is what ConfigBase.parse() returns, so an
+    option this source does not declare reads as None here exactly as it does in production.
+    """
+    values = {}
+    for entry in CheckRedfishConfig().options:
+        declared = entry.options if isinstance(entry, ConfigOptionGroup) else [entry]
+        for option in declared:
+            if isinstance(option, ConfigOption) and option.removed is not True:
+                values[option.key] = option.default_value
+
+    unknown = set(overrides) - set(values)
+    assert not unknown, f"not declared by CheckRedfishConfig: {sorted(unknown)}"
+
+    values.update(overrides)
+    return ConfigOptions(**values)
