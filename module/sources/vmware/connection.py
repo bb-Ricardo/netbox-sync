@@ -813,10 +813,13 @@ class VMWareHandler(SourceBase):
                     log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
                     continue  # skip tag entirely if basic fetch fails
 
-                try:
-                    category_name = self.tag_session.tagging.Category.get(tag.category_id).name
-                except Exception:
-                    category_name = None  # gracefully degrade — tag still gets added
+                category_name = None
+                if bool(self.settings.tag_name_include_category) is True:
+                    # noinspection PyBroadException
+                    try:
+                        category_name = self.tag_session.tagging.Category.get(tag.category_id).name
+                    except Exception as e:
+                        log.debug(f"Unable to retrieve category of vCenter tag '{tag_name}': {e}")
 
                 if tag_name is not None:
                     if tag_description is not None and len(f"{tag_description}") > 0:
@@ -824,14 +827,11 @@ class VMWareHandler(SourceBase):
                     else:
                         tag_description = primary_tag_name
 
-                    if category_name and not self.settings.tag_name_include_category:
-                        tag_description = f"{category_name}: {tag_description}" if tag_description else category_name
-
-                    effective_tag_name = f"{category_name}:{tag_name}" \
-                        if category_name and self.settings.tag_name_include_category else tag_name
+                    if category_name is not None:
+                        tag_name = f"{category_name}:{tag_name}"
 
                     tag_list.append(self.inventory.add_update_object(NBTag, data={
-                        "name": effective_tag_name,
+                        "name": tag_name,
                         "description": tag_description
                     }))
 
