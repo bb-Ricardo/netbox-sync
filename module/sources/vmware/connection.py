@@ -2319,7 +2319,8 @@ class VMWareHandler(SourceBase):
         # get VM UUID
         vm_uuid = grab(obj, "config.instanceUuid")
 
-        if vm_uuid is None or vm_uuid in self.processed_vm_uuid and obj not in self.objects_to_reevaluate:
+        if (vm_uuid is None or vm_uuid in self.processed_vm_uuid) and \
+                not (self.parsing_objects_to_reevaluate is True and obj in self.objects_to_reevaluate):
             return
 
         log.debug(f"Parsing vCenter VM: {name}")
