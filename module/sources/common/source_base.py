@@ -292,7 +292,7 @@ class SourceBase:
         return current_longest_matching_prefix
 
     def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None,
-                             vmware_object=None):
+                             vmware_object=None, keep_undiscovered_ips=False):
         """
         Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
         Validates/enriches data in following order:
@@ -317,6 +317,8 @@ class SourceBase:
             a list of ip addresses which are assigned to this interface
         vmware_object: vim.HostSystem | vim.VirtualMachine
             object to add to list of objects to reevaluate
+        keep_undiscovered_ips: bool
+            if True, keep the existing IPs of an interface the source discovered no IPs for
 
         Returns
         -------
@@ -674,9 +676,13 @@ class SourceBase:
 
             ip_address_objects.append(this_ip_object)
 
+        # keyed on what the source reported, not on what survived parsing: an unusable address
+        # is still a statement that the interface was seen
+        skip_ip_removal = keep_undiscovered_ips is True and len(interface_ips or list()) == 0
+
         for current_ip in interface_object.get_ip_addresses():
 
-            if skip_ip_handling is True:
+            if skip_ip_handling is True or skip_ip_removal is True:
                 continue
 
             if grab(current_ip, "data.role.value") == "anycast":
