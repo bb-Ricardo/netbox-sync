@@ -511,8 +511,8 @@ class VMWareConfig(ConfigBase):
                          ),
             ConfigOption("skip_host_nics",
                          bool,
-                         description="""Skip creating or updating host physical nics in Netobx. Normal operation
-                         will maintain all phisical nics in netbox. This option will skip this part.""" ,
+                         description="""Skip creating or updating host physical nics in NetBox. Normal operation
+                         will maintain all physical nics in netbox. This option will skip this part.""" ,
                          default_value=False
                          ),
 
