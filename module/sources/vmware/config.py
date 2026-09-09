@@ -445,8 +445,8 @@ class VMWareConfig(ConfigBase):
 
             ConfigOption("track_vm_host",
                          bool,
-                         description="""enabling this option will add the ESXi host
-                         this VM is running on to the VM details""",
+                         description="""fills the 'Host Device' field of a VM in NetBox with
+                         the ESXi host it currently runs on. Needs NetBox 3.3 or newer""",
                          default_value=False),
             ConfigOption("overwrite_device_interface_name",
                          bool,
