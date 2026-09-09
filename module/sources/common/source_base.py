@@ -407,8 +407,9 @@ class SourceBase:
             # if a new interface or not matching assigned MAC address, try to find an existing unassigned mac address
             if primary_mac_address_object is None:
                 for mac_address_object in self.inventory.get_all_items(NBMACAddress):
+                    # an object already assigned to this very interface is the one we want, not a duplicate
                     if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
-                            grab(mac_address_object, "data.assigned_object_id") is None):
+                            grab(mac_address_object, "data.assigned_object_id") in (None, interface_object)):
                         primary_mac_address_object = mac_address_object
                         break
 
