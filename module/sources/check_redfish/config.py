@@ -46,6 +46,13 @@ class CheckRedfishConfig(ConfigBase):
                          overwrites the device host name in NetBox""",
                          default_value=False),
 
+            ConfigOption("model_components_as_modules",
+                         bool,
+                         description="""model discovered hardware components (CPUs, memory, drives,
+                         controllers, NICs, ...) as NetBox modules instead of the deprecated inventory
+                         items. Requires NetBox >= 4.3, on older versions inventory items are used""",
+                         default_value=False),
+
             ConfigOption("overwrite_power_supply_name",
                          bool,
                          description="""define if the name of the power supply discovered via check_redfish

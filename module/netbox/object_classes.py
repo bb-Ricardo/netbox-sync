@@ -1323,7 +1323,8 @@ class NBCustomField(NetBoxObject):
             NBPowerPort.object_type,
             NBClusterGroup.object_type,
             NBVMInterface.object_type,
-            NBVM.object_type
+            NBVM.object_type,
+            NBModule.object_type
         ]
 
         self.data_model = {
@@ -2073,7 +2074,9 @@ class NBInterface(NetBoxObject):
             "description": 200,
             "mark_connected": bool,
             "tags": NBTagList,
-            "parent": object
+            "parent": object,
+            # NetBox cascade-deletes module components, so the module owns its interfaces
+            "module": NBModule
         }
         super().__init__(*args, **kwargs)
 
@@ -2409,7 +2412,9 @@ class NBPowerPort(NetBoxObject):
             "allocated_draw": int,
             "mark_connected": bool,
             "tags": NBTagList,
-            "custom_fields": NBCustomField
+            "custom_fields": NBCustomField,
+            # the PSU module owns its power port, NetBox cascade-deletes it with the module
+            "module": NBModule
         }
         super().__init__(*args, **kwargs)
 
@@ -2427,5 +2432,91 @@ class NBPowerPort(NetBoxObject):
                 data.pop("maximum_draw")
 
         super().update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+
+class NBModuleType(NetBoxObject):
+    name = "module type"
+    api_path = "dcim/module-types"
+    object_type = "dcim.moduletype"
+    # matched by model only, like NBDeviceType (server part models are effectively unique)
+    primary_key = "model"
+    prune = False
+    # modules replace the deprecated inventory items starting with NetBox 4.3
+    min_netbox_version = "4.3"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "model": 100,
+            "manufacturer": NBManufacturer,
+            "part_number": 50,
+            "description": 200,
+            "comments": str,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBModuleBay(NetBoxObject):
+    name = "module bay"
+    api_path = "dcim/module-bays"
+    object_type = "dcim.modulebay"
+    primary_key = "name"
+    secondary_key = "device"
+    prune = True
+    min_netbox_version = "4.3"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "device": NBDevice,
+            "name": 64,
+            "label": 64,
+            "position": 30,
+            "description": 200,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBModule(NetBoxObject):
+    name = "module"
+    api_path = "dcim/modules"
+    object_type = "dcim.module"
+    # a module has no name of its own, it is identified by the bay it is installed in
+    primary_key = "module_bay"
+    secondary_key = "device"
+    prune = True
+    min_netbox_version = "4.3"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "device": NBDevice,
+            "module_bay": NBModuleBay,
+            "module_type": NBModuleType,
+            "status": ["offline", "active", "planned", "staged", "failed", "inventory", "decommissioning"],
+            "serial": 50,
+            "asset_tag": 50,
+            "description": 200,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
+
+    def get_display_name(self, data=None, including_second_key=False):
+
+        # a module has no name on its own, derive its display name from the module bay it lives in
+        this_data_set = data if data is not None else self.data
+
+        if this_data_set is not None:
+            module_bay = this_data_set.get("module_bay")
+            if isinstance(module_bay, NetBoxObject):
+                return module_bay.get_display_name(including_second_key=including_second_key)
+            if isinstance(module_bay, dict):
+                bay_name = module_bay.get("name") or module_bay.get("display")
+                if bay_name is not None:
+                    return bay_name
+
+        return super().get_display_name(data=data, including_second_key=including_second_key)
 
 # EOF
