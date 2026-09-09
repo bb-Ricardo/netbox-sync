@@ -90,6 +90,11 @@ class VMWareHandler(SourceBase):
 
     site_name = None
 
+    # values a BIOS reports when the vendor left the SMBIOS fields unset, plus the dummy vendor/model
+    # used for hosts where nothing better is known. None of these identify real hardware.
+    unknown_hardware_identifiers = ["Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
+                                    "to be filled by o.e.m.", "Unknown", "Generic Vendor", "Generic Model"]
+
     def __init__(self, name=None):
 
         if name is None:
@@ -446,6 +451,27 @@ class VMWareHandler(SourceBase):
             return False
 
         return True
+
+    @staticmethod
+    def hardware_identifier_is_unknown(value):
+        """
+        checks if a hardware identifier (vendor, model, asset tag) reported for a host
+        is a placeholder rather than a real value.
+
+        Parameters
+        ----------
+        value: str
+            identifier to check
+
+        Returns
+        -------
+        bool: True if value is unset or one of the known placeholders, otherwise False
+        """
+
+        if value is None:
+            return True
+
+        return value.lower() in [x.lower() for x in VMWareHandler.unknown_hardware_identifiers]
 
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
@@ -1225,6 +1251,12 @@ class VMWareHandler(SourceBase):
                     object_data.get("platform") is not None:
                 del object_data["platform"]
 
+            # a device type made up from a BIOS placeholder carries no information. Keep the one
+            # already set in NetBox instead of replacing it on every run (issue #460)
+            if object_type == NBDevice and object_data.get("device_type") is not None and \
+                    self.hardware_identifier_is_unknown(grab(object_data, "device_type.model")):
+                del object_data["device_type"]
+
             device_vm_object.update(data=object_data, source=self)
 
         # add object to cache
@@ -1814,11 +1846,11 @@ class VMWareHandler(SourceBase):
         platform = f"{product_name} {product_version}"
         platform = self.get_object_relation(platform, "host_platform_relation", fallback=platform)
 
-        # if the device vendor/model cannot be retrieved (due to problem on the host),
-        # set a dummy value so the host still gets synced
-        if manufacturer is None:
+        # if the device vendor/model cannot be retrieved (due to problem on the host) or the BIOS
+        # only reports a placeholder, set a dummy value so the host still gets synced
+        if self.hardware_identifier_is_unknown(manufacturer):
             manufacturer = "Generic Vendor"
-        if model is None:
+        if self.hardware_identifier_is_unknown(model):
             model = "Generic Model"
 
         # get status
@@ -1848,12 +1880,9 @@ class VMWareHandler(SourceBase):
 
         if self.settings.collect_hardware_asset_tag is True and "AssetTag" in identifier_dict.keys():
 
-            banned_tags = ["Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
-                           "to be filled by o.e.m.", "Unknown"]
-
             this_asset_tag = identifier_dict.get("AssetTag")
 
-            if this_asset_tag.lower() not in [x.lower() for x in banned_tags]:
+            if not self.hardware_identifier_is_unknown(this_asset_tag):
                 asset_tag = this_asset_tag
 
         # get host_tenant_relation
