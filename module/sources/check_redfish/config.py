@@ -46,6 +46,14 @@ class CheckRedfishConfig(ConfigBase):
                          overwrites the device host name in NetBox""",
                          default_value=False),
 
+            ConfigOption("dell_serial_from_service_tag",
+                         bool,
+                         description="""for Dell devices, use the Service Tag as the NetBox device
+                         serial number (matching what dmidecode and the OS report) instead of the
+                         system serial number. The original system serial number (the Dell PPID)
+                         is then stored in the 'system_serial' custom field""",
+                         default_value=False),
+
             ConfigOption("overwrite_power_supply_name",
                          bool,
                          description="""define if the name of the power supply discovered via check_redfish
