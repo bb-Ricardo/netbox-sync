@@ -98,6 +98,30 @@ class NetBoxConfig(ConfigBase):
                          """,
                          default_value=False),
 
+            ConfigOption("orphaned_device_status",
+                         str,
+                         description="""Set the NetBox status of orphaned devices to this value.
+                        If unset, the status will not be changed when a device is orphaned.
+                        The status must be a valid device status in NetBox (e.g. 'decommissioning',
+                        'offline', 'planned').
+                        Note: only devices which support a 'status' field will be affected.
+                        When an orphaned object reappears in a source, the status will be
+                        restored to 'active'.
+                        """,
+                         config_example="decommissioning"),
+
+            ConfigOption("orphaned_vm_status",
+                         str,
+                         description="""Set the NetBox status of orphaned virtual machines to this value.
+                        If unset, the status will not be changed when a VM is orphaned.
+                        The status must be a valid VM status in NetBox (e.g. 'decommissioning',
+                        'offline', 'planned').
+                        Note: only VMs which support a 'status' field will be affected.
+                        When an orphaned object reappears in a source, the status will be
+                        restored to 'active'.
+                        """,
+                         config_example="decommissioning"),
+
             ConfigOption("default_netbox_result_limit",
                          int,
                          description="""The maximum number of objects returned in a single request.
