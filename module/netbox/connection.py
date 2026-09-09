@@ -9,6 +9,7 @@
 
 import json
 import os
+import re
 import pickle
 import pprint
 from datetime import datetime
@@ -152,7 +153,10 @@ class NetBoxHandler:
         requests.Session: session handler of new NetBox session
         """
 
-        token = self.settings.api_token
+        # the config value is the bare token; a scheme typed in front of it
+        # ("Bearer nbt_...", "Token abc...") must not be sent twice
+        token = re.sub(r"^\s*(?:bearer|token)\s+", "", str(self.settings.api_token), flags=re.IGNORECASE).strip()
+        # NetBox 4.5+ API tokens (nbt_<key>.<token>) use the Bearer scheme
         keyword = "Bearer" if token.startswith("nbt_") else "Token"
         header = {
             "Authorization": f"{keyword} {token}",
