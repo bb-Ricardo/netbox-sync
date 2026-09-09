@@ -42,9 +42,36 @@ class SourceBase:
 
         return False
 
+    # NetBox exempts addresses with these roles from its uniqueness check, they are
+    # meant to exist on more than one interface at the same time
+    non_unique_ip_roles = ("anycast", "vip", "vrrp", "hsrp", "glbp", "carp")
+
     # stub function to implement a finish call for each source
     def finish(self):
         pass
+
+    @staticmethod
+    def get_ip_address_role(ip_object):
+        """
+        Returns the role of an IP address object. The NetBox API reports it as a dict,
+        an object this program created itself carries the plain value.
+
+        Parameters
+        ----------
+        ip_object: NBIPAddress
+            IP address object to get the role from
+
+        Returns
+        -------
+        (str, None): role of this IP address or None if unset
+        """
+
+        role = grab(ip_object, "data.role")
+
+        if isinstance(role, dict):
+            return role.get("value")
+
+        return role
 
     def ip_is_primary_ip_of_object(self, ip_object, device_vm_object) -> bool:
         """
@@ -527,6 +554,7 @@ class SourceBase:
             # try to find matching IP address object
             this_ip_object = None
             skip_this_ip = False
+            non_unique_ip_role = None
             for ip in self.inventory.get_all_items(NBIPAddress):
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
@@ -571,6 +599,16 @@ class SourceBase:
                     this_ip_object = ip
                     break
 
+                # an address whose role marks it as non unique belongs on several interfaces at
+                # the same time, so this interface gets an object of its own rather than taking
+                # this one over. Keep looking, this interface may already have its own object
+                current_ip_role = self.get_ip_address_role(ip)
+                if current_ip_role in self.non_unique_ip_roles:
+                    log.debug(f"{ip.name} '{ip.get_display_name()}' is a '{current_ip_role}' address and "
+                              f"can be assigned to multiple interfaces at the same time.")
+                    non_unique_ip_role = current_ip_role
+                    continue
+
                 # get current IP interface status
                 current_nic_enabled = grab(current_ip_nic, "data.enabled", fallback=True)
                 this_nic_enabled = grab(interface_object, "data.enabled", fallback=True)
@@ -592,12 +630,6 @@ class SourceBase:
                               f"IP will be assigned to this interface.")
 
                     this_ip_object = ip
-
-                if grab(ip, "data.role.value") == "anycast":
-                    log.debug(f"{ip.name} '{ip.get_display_name()}' is an Anycast address and "
-                              f"can be assigned to multiple interfaces at the same time.")
-                    skip_this_ip = True
-                    break
 
                 if current_nic_enabled == this_nic_enabled:
 
@@ -664,6 +696,10 @@ class SourceBase:
                 nic_ip_data["tenant"] = ip_tenant
 
             if not isinstance(this_ip_object, NBIPAddress):
+
+                if non_unique_ip_role is not None:
+                    nic_ip_data["role"] = non_unique_ip_role
+
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
@@ -686,9 +722,10 @@ class SourceBase:
             if skip_ip_handling is True or skip_ip_removal is True:
                 continue
 
-            if grab(current_ip, "data.role.value") == "anycast":
-                log.debug2(f"{current_ip.name} '{current_ip.get_display_name()}' is an Anycast address and will "
-                          f"NOT be deleted from interface")
+            current_ip_role = self.get_ip_address_role(current_ip)
+            if current_ip_role in self.non_unique_ip_roles:
+                log.debug2(f"{current_ip.name} '{current_ip.get_display_name()}' is a '{current_ip_role}' address "
+                           f"and will NOT be deleted from interface")
                 continue
 
             if current_ip not in ip_address_objects:
