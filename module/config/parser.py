@@ -9,6 +9,7 @@
 
 
 import os
+import re
 import configparser
 from typing import Dict
 import yaml
@@ -300,11 +301,14 @@ class ConfigParser:
                 env_var_list[key.upper()] = value
                 env_var_names[key.upper()] = key
 
+        # a source is identified by NBS_SOURCE_<index>_NAME. The index carries no
+        # underscore, so an option that merely ends in _NAME (strip_host_domain_name,
+        # vlan_sync_exclude_by_name, ...) is not mistaken for a source of its own
+        source_name_pattern = re.compile(rf"^{re.escape(env_var_source_prefix)}_(?P<index>[^_]+)_NAME$")
         for env_var in env_var_list.keys():
-
-            # try to find a var which contains the source name
-            if env_var.endswith("_NAME"):
-                source_indexes.add(env_var.replace(f"{env_var_source_prefix}_", "", 1).replace("_NAME", "", 1))
+            match = source_name_pattern.match(env_var)
+            if match is not None:
+                source_indexes.add(match.group("index"))
 
         for source_index in source_indexes:
 
@@ -316,6 +320,11 @@ class ConfigParser:
                 continue
 
             for key, value in env_var_list.items():
+
+                # only this source's own variables; anything else belongs to another
+                # source or to nobody and must not end up in this config
+                if not key.startswith(f"{source_prefix}_"):
+                    continue
 
                 if key != f"{source_prefix}_NAME":
                     source_env_config[key.replace(f"{source_prefix}_", "", 1).lower()] = value
