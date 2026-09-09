@@ -126,11 +126,12 @@ def inventory():
 @pytest.fixture
 def load_config(tmp_path):
     """
-    Returns a function that feeds a settings.ini text to netbox-sync's ConfigParser
-    singleton, replacing whatever a previous test loaded.
+    Returns a function that feeds a config file text to netbox-sync's ConfigParser
+    singleton, replacing whatever a previous test loaded. The file name decides the
+    format, settings.ini by default.
     """
-    def _load(text: str) -> ConfigParser:
-        config_file = tmp_path / "settings.ini"
+    def _load(text: str, filename: str = "settings.ini") -> ConfigParser:
+        config_file = tmp_path / filename
         config_file.write_text(text)
         parser = ConfigParser()
         parser.file_list.clear()

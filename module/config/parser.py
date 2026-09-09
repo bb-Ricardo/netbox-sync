@@ -162,6 +162,11 @@ class ConfigParser:
 
                 for source_name, source_data in section_data.items():
 
+                    if not isinstance(source_data, dict):
+                        self._add_error(f"Parsed config data from file '{config_file}' for "
+                                        f"'{section}/{source_name}' is not a dictionary")
+                        continue
+
                     current_data = grab(self.content, f"{section}|{source_name}", separator="|")
 
                     if current_data is None:
