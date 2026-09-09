@@ -1896,9 +1896,6 @@ class VMWareHandler(SourceBase):
         if len(host_custom_fields) > 0:
             host_data["custom_fields"] = host_custom_fields
 
-        if self.settings.skip_host_nics is True:
-            return
-
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
         for vswitch in grab(obj, "config.network.vswitch", fallback=list()):
@@ -1968,7 +1965,11 @@ class VMWareHandler(SourceBase):
         except Exception:
             pass
 
-        for pnic in grab(obj, "config.network.pnic", fallback=list()):
+        pnic_list = grab(obj, "config.network.pnic", fallback=list())
+        if self.settings.skip_host_nics is True:
+            log.debug(f"Skipping physical interfaces of host '{name}' (skip_host_nics)")
+            pnic_list = list()
+        for pnic in pnic_list:
 
             pnic_name = grab(pnic, "device")
             pnic_key = grab(pnic, "key")
