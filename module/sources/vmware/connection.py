@@ -806,18 +806,29 @@ class VMWareHandler(SourceBase):
 
                 # noinspection PyBroadException
                 try:
-                    tag_name = self.tag_session.tagging.Tag.get(tag_id).name
-                    tag_description = self.tag_session.tagging.Tag.get(tag_id).description
+                    tag = self.tag_session.tagging.Tag.get(tag_id)  # store the object
+                    tag_name = tag.name
+                    tag_description = tag.description
                 except Exception as e:
                     log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
-                    continue
+                    continue  # skip tag entirely if basic fetch fails
+
+                category_name = None
+                if bool(self.settings.tag_name_include_category) is True:
+                    # noinspection PyBroadException
+                    try:
+                        category_name = self.tag_session.tagging.Category.get(tag.category_id).name
+                    except Exception as e:
+                        log.debug(f"Unable to retrieve category of vCenter tag '{tag_name}': {e}")
 
                 if tag_name is not None:
-
                     if tag_description is not None and len(f"{tag_description}") > 0:
                         tag_description = f"{primary_tag_name}: {tag_description}"
                     else:
                         tag_description = primary_tag_name
+
+                    if category_name is not None:
+                        tag_name = f"{category_name}:{tag_name}"
 
                     tag_list.append(self.inventory.add_update_object(NBTag, data={
                         "name": tag_name,
@@ -1240,6 +1251,11 @@ class VMWareHandler(SourceBase):
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
             log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
+
+            if object_type == NBVM and self.settings.vm_status_on_create is not None and \
+                    object_data.get("status") is not None:
+                object_data["status"] = self.settings.vm_status_on_create
+
             device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
         else:
 
@@ -1256,6 +1272,16 @@ class VMWareHandler(SourceBase):
             if object_type == NBDevice and object_data.get("device_type") is not None and \
                     self.hardware_identifier_is_unknown(grab(object_data, "device_type.model")):
                 del object_data["device_type"]
+
+            if object_type == NBVM and object_data.get("status") is not None:
+                current_status = grab(device_vm_object, "data.status")
+                if isinstance(current_status, dict):
+                    current_status = current_status.get("value")
+                if current_status in (self.settings.vm_status_preserve or list()):
+                    log.debug2(f"Current status '{current_status}' of "
+                               f"'{device_vm_object.get_display_name()}' is in 'vm_status_preserve' list. "
+                               f"Not updating VM status.")
+                    del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
 
@@ -2452,8 +2478,9 @@ class VMWareHandler(SourceBase):
         vcenter_tags = self.collect_object_tags(obj)
 
         # check if VM tag excludes VM from being synced to NetBox
+        vcenter_tag_names = [NetBoxObject.extract_tag_name(t) for t in vcenter_tags]
         for sync_exclude_tag in self.settings.vm_exclude_by_tag_filter or list():
-            if sync_exclude_tag in vcenter_tags:
+            if sync_exclude_tag in vcenter_tag_names:
                 log.debug(f"Virtual machine vCenter tag '{sync_exclude_tag}' in matches 'vm_exclude_by_tag_filter'. "
                           f"Skipping")
                 return
