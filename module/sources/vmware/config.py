@@ -333,6 +333,25 @@ class VMWareConfig(ConfigBase):
                          description="""If an IP address is assigned to a FHRP group (like HSRP, VRRP, GLBP)
                          then this IP address will be skipped and not synced to NetBox to prevent incorrect syncing.""",
                          default_value=False),
+            ConfigOption("vm_status_on_create",
+                         str,
+                         description="""defines the status a VM gets assigned in NetBox when netbox-sync
+                         creates it as a new NetBox VM. Updates of already existing NetBox VMs are not
+                         affected by this option. This way new VMs can start their lifecycle in NetBox
+                         as i.e. 'planned' until changed manually in NetBox.
+                         possible values: offline, active, planned, staged, failed, decommissioning
+                         """,
+                         config_example="planned"),
+            ConfigOption("vm_status_preserve",
+                         str,
+                         description="""defines a comma separated list of NetBox VM statuses which will be
+                         preserved on updates. If the current status of an existing NetBox VM matches one of
+                         these values then netbox-sync will not change the status of this VM. This way VMs
+                         can be kept in i.e. 'planned' or 'staged' until changed manually in NetBox.
+                         Set to an empty value to always update the VM status.
+                         possible values: offline, active, planned, staged, failed, decommissioning
+                         """,
+                         config_example="planned, staged, decommissioning"),
             ConfigOption("strip_host_domain_name",
                          bool,
                          description="strip domain part from host name before syncing device to NetBox",
@@ -359,6 +378,17 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_tag_source", str),
                                 ConfigOption("vm_tag_source", str)
                               ]),
+            ConfigOption("tag_name_include_category",
+                         bool,
+                         description="""\
+                         If enabled, vCenter tag names synced to NetBox will include the vCenter category as a
+                         prefix in the format 'CategoryName:TagName'. Useful if TagName and CategoryName is used 
+                         as key/value pairs in vCenter.
+                         When changed, existing synced tags are replaced on
+                         the next run. Note: vm_exclude_by_tag_filter entries must use 'CategoryName:TagName'
+                         format when this option is enabled.
+                         """,
+                         default_value=False),
             ConfigOption("sync_custom_attributes",
                          bool,
                          description="""sync custom attributes defined for hosts and VMs
@@ -445,8 +475,8 @@ class VMWareConfig(ConfigBase):
 
             ConfigOption("track_vm_host",
                          bool,
-                         description="""enabling this option will add the ESXi host
-                         this VM is running on to the VM details""",
+                         description="""fills the 'Host Device' field of a VM in NetBox with
+                         the ESXi host it currently runs on. Needs NetBox 3.3 or newer""",
                          default_value=False),
             ConfigOption("overwrite_device_interface_name",
                          bool,
@@ -657,6 +687,28 @@ class VMWareConfig(ConfigBase):
                 if option.value not in ["always", "when-undefined", "never"]:
                     log.error(f"Primary IP option '{option.key}' value '{option.value}' invalid.")
                     self.set_validation_failed()
+
+            # keep in sync with NBVM data_model status values in module/netbox/object_classes.py
+            valid_vm_statuses = ["offline", "active", "planned", "staged", "failed", "decommissioning"]
+
+            if option.key == "vm_status_on_create":
+                option.set_value(option.value.lower())
+                if option.value not in valid_vm_statuses:
+                    log.error(f"Config option '{option.key}' value '{option.value}' invalid. "
+                              f"Possible values: {', '.join(valid_vm_statuses)}")
+                    self.set_validation_failed()
+
+                continue
+
+            if option.key == "vm_status_preserve":
+                option.set_value([x.lower() for x in quoted_split(option.value) or list()])
+                for status_value in option.value:
+                    if status_value not in valid_vm_statuses:
+                        log.error(f"Config option '{option.key}' value '{status_value}' invalid. "
+                                  f"Possible values: {', '.join(valid_vm_statuses)}")
+                        self.set_validation_failed()
+
+                continue
 
             if option.key == "custom_dns_servers":
 

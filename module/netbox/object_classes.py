@@ -1905,7 +1905,7 @@ class NBCluster(NetBoxObject):
             "group": NBClusterGroup,
             "scope_type": self.mapping.scopes_object_types(self.scopes),
             # supports scoped clusters
-            "scope_id": NetBoxObject,
+            "scope_id": self.scopes,
             # supports pre4.2.0 clusters with site
             "site": NBSite,
             "tags": NBTagList
@@ -1918,6 +1918,9 @@ class NBCluster(NetBoxObject):
 
     def resolve_relations(self):
         log.debug2(f"Resolving relations for {self.name} '{self.get_display_name()}'")
+        # NetBox reports the scope as an id, turn it back into the object it points to,
+        # otherwise every run sees a change from the id to the object and updates the cluster
+        self.resolve_scoped_relations("scope_id", "scope_type")
         super().resolve_relations()
 
 
