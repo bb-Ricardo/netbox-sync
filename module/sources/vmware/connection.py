@@ -1628,8 +1628,11 @@ class VMWareHandler(SourceBase):
                 log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
                           f"and scope id '{scope_id}'.")
             elif site_name is not None:
+                # NetBox wants the id of the scoped object, so the site has to be a real
+                # object here. A plain dict is sent as is and rejected with
+                # "scope_id: A valid integer is required."
                 data["scope_type"] = "dcim.site"
-                data["scope_id"] = {"name": site_name}
+                data["scope_id"] = self.inventory.add_update_object(NBSite, data={"name": site_name})
             else:
                 log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
