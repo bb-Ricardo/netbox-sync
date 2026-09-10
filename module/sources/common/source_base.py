@@ -681,6 +681,17 @@ class SourceBase:
         # is still a statement that the interface was seen
         skip_ip_removal = keep_undiscovered_ips is True and len(interface_ips or list()) == 0
 
+        # guest tools which report as running but hand back no interface at all are broken
+        # (seen on old TMOS releases), not a statement that every address is gone. Keep what is
+        # in NetBox instead of tearing it off on every run. A real removal still reports the
+        # interface, just without an address, so that case is unaffected
+        reported_interfaces = grab(vmware_object, "guest.net")
+        if type(device_object) == NBVM and isinstance(reported_interfaces, list) and \
+                len(reported_interfaces) == 0:
+            log.debug(f"VM '{device_object.name}' guest tools report no network interface at all, "
+                      f"keeping the addresses currently assigned in NetBox")
+            skip_ip_removal = True
+
         for current_ip in interface_object.get_ip_addresses():
 
             if skip_ip_handling is True or skip_ip_removal is True:
