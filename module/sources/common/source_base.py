@@ -409,8 +409,9 @@ class SourceBase:
             # if a new interface or not matching assigned MAC address, try to find an existing unassigned mac address
             if primary_mac_address_object is None:
                 for mac_address_object in self.inventory.get_all_items(NBMACAddress):
+                    # an object already assigned to this very interface is the one we want, not a duplicate
                     if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
-                            grab(mac_address_object, "data.assigned_object_id") is None):
+                            grab(mac_address_object, "data.assigned_object_id") in (None, interface_object)):
                         primary_mac_address_object = mac_address_object
                         break
 
@@ -679,6 +680,17 @@ class SourceBase:
         # keyed on what the source reported, not on what survived parsing: an unusable address
         # is still a statement that the interface was seen
         skip_ip_removal = keep_undiscovered_ips is True and len(interface_ips or list()) == 0
+
+        # guest tools which report as running but hand back no interface at all are broken
+        # (seen on old TMOS releases), not a statement that every address is gone. Keep what is
+        # in NetBox instead of tearing it off on every run. A real removal still reports the
+        # interface, just without an address, so that case is unaffected
+        reported_interfaces = grab(vmware_object, "guest.net")
+        if type(device_object) == NBVM and isinstance(reported_interfaces, list) and \
+                len(reported_interfaces) == 0:
+            log.debug(f"VM '{device_object.name}' guest tools report no network interface at all, "
+                      f"keeping the addresses currently assigned in NetBox")
+            skip_ip_removal = True
 
         for current_ip in interface_object.get_ip_addresses():
 

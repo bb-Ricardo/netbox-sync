@@ -309,6 +309,35 @@ class NetBoxInventory:
 
         return interfaces
 
+    @staticmethod
+    def get_orphaned_status(this_object, netbox_handler):
+        """
+        Return the status this program assigns to $this_object while it is orphaned.
+
+        Only devices and virtual machines have such an option and only if the user
+        configured one. An undefined option also means that this program never touches
+        the status of these objects.
+
+        Parameters
+        ----------
+        this_object: NetBoxObject
+            the object to return the configured orphaned status for
+        netbox_handler: NetBoxHandler
+            the object instance of a NetBox handler to get the settings from
+
+        Returns
+        -------
+        (str, None): the configured status, None if unconfigured or unsupported object type
+        """
+
+        if isinstance(this_object, NBDevice):
+            return netbox_handler.settings.orphaned_device_status
+
+        if isinstance(this_object, NBVM):
+            return netbox_handler.settings.orphaned_vm_status
+
+        return None
+
     def tag_all_the_things(self, netbox_handler):
         """
         Tag all items which have been created/updated/inherited by this program
@@ -346,6 +375,17 @@ class NetBoxInventory:
                     # if object was orphaned remove tag again
                     if netbox_handler.orphaned_tag in this_object_tags:
                         this_object.remove_tags(netbox_handler.orphaned_tag)
+
+                        # set the status back to active, but only if this program parked this
+                        # object at the configured orphaned status. Any other status was set
+                        # by a user or reported by the source and has to be left alone.
+                        orphaned_status = self.get_orphaned_status(this_object, netbox_handler)
+                        if orphaned_status is not None:
+                            current_status = grab(this_object, "data.status")
+                            if isinstance(current_status, dict):
+                                current_status = current_status.get("value")
+                            if current_status == orphaned_status:
+                                this_object.update(data={"status": "active"})
 
                 # if object was tagged by this program in previous runs but is not present
                 # anymore then add the orphaned tag except it originated from a disabled source
@@ -389,6 +429,14 @@ class NetBoxInventory:
                             continue
 
                     this_object.add_tags(netbox_handler.orphaned_tag)
+
+                    # set orphaned status on devices/VMs if configured
+                    # and pruning is enabled (if a source was unavailable,
+                    # pruning is disabled to prevent false orphaning)
+                    if netbox_handler.settings.prune_enabled is True:
+                        orphaned_status = self.get_orphaned_status(this_object, netbox_handler)
+                        if orphaned_status is not None:
+                            this_object.update(data={"status": orphaned_status})
 
     def query_ptr_records_for_all_ips(self):
         """
