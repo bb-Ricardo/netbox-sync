@@ -122,7 +122,6 @@ class VMWareHandler(SourceBase):
         # duplicated in settings.ini.
         self.vcsa_source_fqdn = self._normalise_fqdn(self.settings.host_fqdn)
         self.vcsa_version = get_string_or_none(grab(self.session, "about.version"))
-        self.vpxd_cert_mode = self._get_vpxd_cert_mode()
 
         self.init_successful = True
 
@@ -149,16 +148,6 @@ class VMWareHandler(SourceBase):
         if value is None:
             return None
         return str(value).strip().rstrip(".").lower()
-
-    def _get_vpxd_cert_mode(self):
-        """Read the live, vCenter-wide certificate-management mode."""
-        try:
-            for option in self.session.setting.QueryOptions() or []:
-                if grab(option, "key") == "vpxd.certmgmt.mode":
-                    return get_string_or_none(grab(option, "value"))
-        except Exception as e:
-            log.warning(f"Unable to read vpxd.certmgmt.mode from vCenter '{self.name}': {e}")
-        return None
 
     def _is_vcsa_vm(self, vm_name):
         """Match only the VCSA VM for this source; do not infer by platform."""
@@ -192,15 +181,6 @@ class VMWareHandler(SourceBase):
                 "description": f"VCSA version reported by source '{self.name}'"
             })
             fields[grab(field, "data.name")] = self.vcsa_version
-
-        if self.vpxd_cert_mode is not None:
-            field = self.add_update_custom_field({
-                "name": "vpxd_cert_mode", "label": "VPXD_CERT_MODE",
-                "object_types": [object_type], "type": "select",
-                "choices": ["vmca", "custom", "thumbprint"],
-                "description": f"vpxd.certmgmt.mode reported by source '{self.name}'"
-            })
-            fields[grab(field, "data.name")] = self.vpxd_cert_mode
 
         return fields
 
