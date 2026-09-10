@@ -12,6 +12,11 @@ self_description = """
 Sync objects from various sources to NetBox
 """
 
+import warnings
+# vmware-vapi-runtime 2.52.0 imports pkg_resources at runtime, which emits a
+# DeprecationWarning on setuptools >= 81. Suppress it until the vapi stack is
+# upgraded to 9.x where the import is replaced with importlib.resources.
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
 
 from datetime import datetime
 

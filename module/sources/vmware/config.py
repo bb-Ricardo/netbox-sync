@@ -8,7 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import re
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 
 from module.common.misc import quoted_split
 from module.config import source_config_section_name
@@ -81,6 +81,18 @@ class VMWareConfig(ConfigBase):
                          config_example=3128),
 
             ConfigOption(**config_option_permitted_subnets_definition),
+
+            ConfigOption("vm_ip_permitted_overlapping_subnets",
+                         str,
+                         description="""\
+                         Define subnets where the same IP address may legitimately appear on
+                         multiple VM interfaces simultaneously — for example, isolated HA
+                         peer-to-peer links where the same /30 addressing is reused across
+                         many VM pairs. Supply a comma-separated list of prefixes in CIDR
+                         notation. When an IP falls within one of these subnets, netbox-sync
+                         creates a separate NetBox IP address object per interface rather than
+                         sharing a single object across VMs.""",
+                         config_example="10.99.99.0/24, 192.168.200.0/24"),
 
             ConfigOptionGroup(title="filter",
                               description="""filters can be used to include/exclude certain objects from importing
@@ -166,6 +178,20 @@ class VMWareConfig(ConfigBase):
                                                value: defines the desired NetBox platform name""",
                                              config_example="VMware ESXi 7.0.3 = VMware ESXi 7.0 Update 3o"),
                                 ConfigOption("vm_platform_relation", str, config_example="centos-7.* = centos7, microsoft-windows-server-2016.* = Windows2016"),
+                                ConfigOption("vm_platform_from_annotation_relation",
+                                             str,
+                                             description="""\
+                                             Override the platform of a VM based on the content of its vCenter
+                                             annotation (the Notes field, synced to the NetBox comments field).
+                                             Useful when vSphere misidentifies the guest OS — for example, F5
+                                             BIG-IP/BIG-IQ Virtual Edition VMs report as CentOS but their
+                                             annotation contains product-identifying text.
+                                             This is done with a comma separated key = value list.
+                                               key: regex matched anywhere in the annotation text (re.search,
+                                                    re.DOTALL — patterns span newlines automatically)
+                                               value: defines the desired NetBox platform name
+                                             Takes priority over vm_platform_relation when both match.""",
+                                             config_example="Virtual Edition.*F5 = TMOS"),
                                 ConfigOption("host_role_relation",
                                              str,
                                              description="""\
@@ -238,6 +264,27 @@ class VMWareConfig(ConfigBase):
                                        as "when-undefined"
                          """,
                          default_value="when-undefined"),
+            ConfigOption("vm_primary_ip4_by_dns_name",
+                         bool,
+                         description="""\
+                         Resolve the VM's name (as it will be synced to NetBox) via DNS and, if
+                         the A record matches one of the IP addresses discovered on the VM's
+                         interfaces, prefer it as the primary IPv4 address. This is tried before
+                         the built-in default-gateway based detection and helps with appliances
+                         that route their default traffic out a data-plane interface instead of
+                         the management interface.
+                         """,
+                         default_value=False),
+            ConfigOption("vm_primary_ip4_fallback_vlans",
+                         str,
+                         description="""\
+                         Comma separated, ordered list of VLAN IDs used as a last resort to
+                         determine a VM's primary IPv4 address if neither its DNS name (see
+                         'vm_primary_ip4_by_dns_name' above) nor its default gateway could be
+                         used. The first VLAN in the list that has an IPv4 address on one of the
+                         VM's interfaces wins. Usually points at a management VLAN.
+                         """,
+                         config_example="1370"),
             ConfigOption("skip_vm_comments",
                          bool,
                          description="Do not sync notes from a VM in vCenter to the comments field on a VM in netbox",
@@ -469,6 +516,37 @@ class VMWareConfig(ConfigBase):
 
                 continue
 
+            if option.key == "vm_platform_from_annotation_relation":
+
+                relation_data = list()
+
+                for relation in quoted_split(option.value):
+
+                    object_name = relation.split("=")[0].strip()
+                    relation_name = relation.split("=")[1].strip()
+
+                    if len(object_name) == 0 or len(relation_name) == 0:
+                        log.error(f"Config option '{relation}' malformed got '{object_name}' for "
+                                  f"object name and '{relation_name}' for annotation platform name.")
+                        self.set_validation_failed()
+                        continue
+
+                    try:
+                        re_compiled = re.compile(object_name, re.DOTALL)
+                    except Exception as e:
+                        log.error(f"Problem parsing regular expression '{object_name}' for '{relation}': {e}")
+                        self.set_validation_failed()
+                        continue
+
+                    relation_data.append({
+                        "object_regex": re_compiled,
+                        "assigned_name": relation_name
+                    })
+
+                option.set_value(relation_data)
+
+                continue
+
             if "relation" in option.key and "vlan_group_relation" not in option.key:
 
                 relation_data = list()
@@ -477,8 +555,8 @@ class VMWareConfig(ConfigBase):
 
                 for relation in quoted_split(option.value):
 
-                    object_name = relation.split("=")[0].strip(' "')
-                    relation_name = relation.split("=")[1].strip(' "')
+                    object_name = relation.split("=")[0].strip()
+                    relation_name = relation.split("=")[1].strip()
 
                     if len(object_name) == 0 or len(relation_name) == 0:
                         log.error(f"Config option '{relation}' malformed got '{object_name}' for "
@@ -527,8 +605,14 @@ class VMWareConfig(ConfigBase):
             if option.key == "custom_dns_servers":
 
                 dns_name_lookup = self.get_option_by_name("dns_name_lookup")
+                vm_primary_ip4_by_dns_name = self.get_option_by_name("vm_primary_ip4_by_dns_name")
 
-                if not isinstance(dns_name_lookup, ConfigOption) or dns_name_lookup.value is False:
+                dns_lookup_needed = any([
+                    isinstance(dns_name_lookup, ConfigOption) and dns_name_lookup.value is True,
+                    isinstance(vm_primary_ip4_by_dns_name, ConfigOption) and vm_primary_ip4_by_dns_name.value is True
+                ])
+
+                if dns_lookup_needed is False:
                     continue
 
                 custom_dns_servers = quoted_split(option.value)
@@ -650,3 +734,28 @@ class VMWareConfig(ConfigBase):
                 self.set_validation_failed()
 
             permitted_subnets_option.set_value(permitted_subnets)
+
+        overlapping_subnets_option = self.get_option_by_name("vm_ip_permitted_overlapping_subnets")
+
+        if overlapping_subnets_option is not None and overlapping_subnets_option.value is not None:
+            subnet_list = [x.strip() for x in overlapping_subnets_option.value.split(",") if x.strip() != ""]
+            parsed_subnets = []
+            for subnet in subnet_list:
+                try:
+                    parsed_subnets.append(ip_network(subnet, strict=False))
+                except Exception as e:
+                    log.error(f"Problem parsing vm_ip_permitted_overlapping_subnets entry '{subnet}': {e}")
+                    self.set_validation_failed()
+            overlapping_subnets_option.set_value(parsed_subnets)
+
+        fallback_vlans_option = self.get_option_by_name("vm_primary_ip4_fallback_vlans")
+
+        if fallback_vlans_option is not None and fallback_vlans_option.value is not None:
+            parsed_vlan_ids = list()
+            for vlan_id in quoted_split(fallback_vlans_option.value) or list():
+                try:
+                    parsed_vlan_ids.append(int(vlan_id))
+                except ValueError:
+                    log.error(f"Problem parsing vm_primary_ip4_fallback_vlans entry '{vlan_id}', must be an integer")
+                    self.set_validation_failed()
+            fallback_vlans_option.set_value(parsed_vlan_ids)
