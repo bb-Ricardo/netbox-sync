@@ -13,7 +13,7 @@ from ipaddress import ip_network, IPv4Network, IPv6Network
 # noinspection PyUnresolvedReferences
 from packaging import version
 
-from module.common.misc import grab
+from module.common.misc import grab, get_string_or_none
 from module.common.logging import get_logger
 from module.netbox.manufacturer_mapping import sanitize_manufacturer_name
 
@@ -2433,8 +2433,11 @@ class NBCable(NetBoxObject):
     name = "cable"
     api_path = "dcim/cables"
     object_type = "dcim.cable"
+    # a cable has no natural name, the label is the only free form text attribute it has
     primary_key = "label"
     prune = True
+    # cable terminations are lists of objects since NetBox 3.3
+    min_netbox_version = "3.3"
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
@@ -2446,27 +2449,72 @@ class NBCable(NetBoxObject):
                 "cat3", "cat5", "cat5e", "cat6", "cat6a", "cat7", "cat7a", "cat8",
                 "dac-active", "dac-passive",
                 "mmf", "mmf-om1", "mmf-om2", "mmf-om3", "mmf-om4", "mmf-om5",
-                "smf", "smf-os1", "smf-os2", "aoc", "power", "usb", "coaxial",
+                "smf", "smf-os1", "smf-os2", "aoc", "power", "usb", "coaxial"
             ],
             "description": 200,
             "color": str,
             "length": float,
             "length_unit": ["km", "m", "cm", "mi", "ft", "in"],
-            "tags": NBTagList,
+            "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
 
+    def format_termination(self, termination):
+        """
+        format a single cable termination as string
+
+        Parameters
+        ----------
+        termination: dict
+            a single entry of a cable "a_terminations"/"b_terminations" list
+
+        Returns
+        -------
+        (str, None): the name of the terminated object, None if it can't be determined
+        """
+
+        if not isinstance(termination, dict):
+            return None
+
+        # data read from NetBox contains the terminated object, data compiled by a source only the ID
+        termination_object = termination.get("object")
+        if isinstance(termination_object, dict) and termination_object.get("display") is not None:
+            return f"{termination_object.get('display')}"
+
+        object_id = termination.get("object_id")
+        if object_id is None:
+            return None
+
+        # a source only knows the ID of an interface it compiled a cable for
+        if termination.get("object_type") == NBInterface.object_type and self.inventory is not None:
+            interface_object = self.inventory.get_by_id(NBInterface, nb_id=object_id)
+            if interface_object is not None:
+                return interface_object.get_display_name(including_second_key=True)
+
+        return f"{termination.get('object_type')} {object_id}"
+
     def get_display_name(self, data=None, including_second_key=False):
+        """
+        A cable label is optional and mostly unset. Fall back to the objects this cable
+        connects to get a name which actually says something.
+        """
+
         this_data = data if data is not None else self.data
-        if not this_data:
-            return "Cable"
-        label = this_data.get("label")
-        if label:
-            return str(label)
-        a = (this_data.get("a_terminations") or [{}])[0]
-        b = (this_data.get("b_terminations") or [{}])[0]
-        a_id = a.get("object_id") if isinstance(a, dict) else None
-        b_id = b.get("object_id") if isinstance(b, dict) else None
-        return f"Cable a={a_id} ↔ b={b_id}"
+
+        label = get_string_or_none(this_data.get(self.primary_key))
+        if label is not None:
+            return label
+
+        terminations = list()
+        for side in ["a_terminations", "b_terminations"]:
+            side_names = [self.format_termination(x) for x in this_data.get(side) or list()]
+            side_names = [x for x in side_names if x is not None]
+            if len(side_names) > 0:
+                terminations.append(", ".join(side_names))
+
+        if len(terminations) == 0:
+            return None
+
+        return " <> ".join(terminations)
 
 # EOF

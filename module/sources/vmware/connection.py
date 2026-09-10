@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
 #
 #  netbox-sync.py
@@ -76,43 +77,23 @@ class VMWareHandler(SourceBase):
         NBVLANGroup,
         NBCustomField,
         NBVirtualDisk,
-        NBMACAddress,
-        NBCable
+        NBMACAddress
     ]
 
-    IFACE_PREFIX_MAP = [
-        # 100G
-        ("HundredGigabitEthernet", "HundredGigE"),
-        ("HundredGigabitEthernet", "Hu"),
-        ("HundredGigE", "Hu"),
-        # 50G
-        ("FiftyGigabitEthernet", "FiftyGigE"),
-        ("FiftyGigabitEthernet", "Fi"),
-        ("FiftyGigE", "Fi"),
-        # 40G
-        ("FortyGigabitEthernet", "Fo"),
-        ("FortyGigabitEthernet", "FortyGigE"),
-        # 25G
-        ("TwentyFiveGigabitEthernet", "TwentyFiveGigE"),
-        ("TwentyFiveGigabitEthernet", "Twe"),
-        ("TwentyFiveGigabitEthernet", "TF"),
-        ("TwentyFiveGigabitEthernet", "25GigE"),
-        ("TwentyFiveGigE", "Twe"),
-        ("TwentyFiveGigE", "TF"),
-        ("TwentyFiveGigE", "25GigE"),
-        # 10G (Te после Twe!)
-        ("TenGigabitEthernet", "Te"),
-        ("TenGigabitEthernet", "TenGigE"),
-        # Huawei-style 10G
-        ("XGigabitEthernet", "XGi"),
-        ("XGigabitEthernet", "XGE"),
-        # 1G
-        ("GigabitEthernet", "Gi"),
-        ("GigabitEthernet", "GE"),
-        # 100M
-        ("FastEthernet", "Fa"),
-        # generic
-        ("Ethernet", "Eth"),
+    # maps the long interface name a CDP/LLDP neighbor can report to the short forms which are
+    # commonly used as interface name in NetBox and the other way around: Fa0/16 <> FastEthernet0/16
+    # the first entry which matches a reported name wins, longer prefixes need to be listed first
+    interface_name_prefixes = [
+        ("HundredGigabitEthernet", ["HundredGigE", "Hu"]),
+        ("FiftyGigabitEthernet", ["FiftyGigE", "Fi"]),
+        ("FortyGigabitEthernet", ["FortyGigE", "Fo"]),
+        ("TwentyFiveGigabitEthernet", ["TwentyFiveGigE", "25GigE", "Twe", "TF"]),
+        ("TenGigabitEthernet", ["TenGigE", "Te"]),
+        # Huawei style 10G
+        ("XGigabitEthernet", ["XGE", "XGi"]),
+        ("GigabitEthernet", ["GigE", "Gi", "GE"]),
+        ("FastEthernet", ["Fa"]),
+        ("Ethernet", ["Eth", "Et"])
     ]
 
     source_type = "vmware"
@@ -146,6 +127,18 @@ class VMWareHandler(SourceBase):
         self.set_source_tag()
         self.site_name = f"vCenter: {name}"
 
+        # index of NetBox interface id to the cable terminated on it, compiled on demand
+        self.cable_index = None
+
+        # cables are only read from and written to NetBox if this source is meant to maintain them
+        if self.settings.sync_host_cables is True:
+            if version.parse(self.inventory.netbox_api_version) < version.parse(NBCable.min_netbox_version):
+                log.warning(f"Option 'sync_host_cables' needs NetBox version {NBCable.min_netbox_version} "
+                            f"or newer. Disabling it for source '{name}'.")
+                self.settings.sync_host_cables = False
+            else:
+                self.dependent_netbox_objects = self.dependent_netbox_objects + [NBCable]
+
         if self.settings.enabled is False:
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
@@ -177,245 +170,349 @@ class VMWareHandler(SourceBase):
         self.objects_to_reevaluate = list()
         self.parsing_objects_to_reevaluate = False
 
-    def _expand_interface_names(self, name):
-        """Generates interface name variants (Fa0/16 ↔ FastEthernet0/16)"""
-        if not name:
-            return []
+    @classmethod
+    def get_interface_name_variants(cls, name):
+        """
+        return all spellings of an interface name a CDP/LLDP neighbor reported
+
+        A neighbor can report the long name of a port ("FastEthernet0/16") while the very same
+        interface is named with a short form in NetBox ("Fa0/16") or the other way around.
+        Comparing names is done case-insensitive, that's why only one spelling per variant
+        is returned.
+
+        Parameters
+        ----------
+        name: str
+            interface name as reported by the neighbor
+
+        Returns
+        -------
+        list: of all name variants, empty if no name was reported
+        """
+
+        name = get_string_or_none(name)
+        if name is None:
+            return list()
+
         variants = [name]
-        name_l = name.lower()
-        for long_form, short_form in self.IFACE_PREFIX_MAP:
-            long_l = long_form.lower()
-            short_l = short_form.lower()
-            if name_l.startswith(long_l):
-                rest = name[len(long_form):]
-                variants.extend([short_form + rest, short_form.lower() + rest, short_form.upper() + rest])
-            if name_l.startswith(short_l) and not name_l.startswith(long_l):
-                rest = name[len(short_form):]
-                if rest and (rest[0].isdigit() or rest[0] in "/-"):
-                    variants.append(long_form + rest)
-        seen = set()
-        unique = []
-        for v in variants:
-            if v and v not in seen:
-                seen.add(v)
-                unique.append(v)
-        return unique
+        name_lower = name.lower()
 
-    def _get_pnic_neighbor_info(self, host_obj, pnic_name, host_name):
-        """
-        CDP/LLDP neighbor для pNIC.
-        Returns dict: system_name, port_id, port_description, protocol
-        or None.
-        """
-        try:
-            hints = host_obj.configManager.networkSystem.QueryNetworkHint(pnic_name)
-            if not hints:
-                return None
-            hint = hints[0]
+        for long_prefix, short_prefixes in cls.interface_name_prefixes:
 
-            # --- CDP (priority) ---
-            cdp = grab(hint, "connectedSwitchPort")
-            if cdp is not None:
-                sys_name = grab(cdp, "systemName") or grab(cdp, "devId")
-                port_id = grab(cdp, "portId")
-                if sys_name:
-                    return {
-                        "system_name": str(sys_name).strip(),
-                        "port_id": str(port_id).strip() if port_id else None,
-                        "port_description": str(port_id).strip() if port_id else None,
-                        "protocol": "CDP",
-                    }
-
-            # --- LLDP ---
-            lldp = grab(hint, "lldpInfo")
-            if lldp is not None:
-                params = {}
-                for param in grab(lldp, "parameter", fallback=list()) or []:
-                    key = grab(param, "key")
-                    value = grab(param, "value")
-                    if key is not None and value is not None:
-                        params[str(key).strip().lower()] = str(value).strip()
-
-                sys_name = (
-                    params.get("system name")
-                    or params.get("systemname")
-                    or grab(lldp, "chassisId")
-                )
-                # Port ID — real name port (ex: XGigabitEthernet0/0/14)
-                port_id = (
-                    params.get("port id")
-                    or params.get("portid")
-                    or grab(lldp, "portId")
-                )
-                # Port Description — description from Network Switch (ex: MAIN-DETAIL12/Eth1)
-                port_desc = (
-                    params.get("port description")
-                    or params.get("portdescription")
-                )
-
-                if sys_name:
-                    return {
-                        "system_name": str(sys_name).strip(),
-                        "port_id": str(port_id).strip() if port_id else None,
-                        "port_description": str(port_desc).strip() if port_desc else None,
-                        "protocol": "LLDP",
-                    }
-        except Exception as e:
-            log.debug2(f"[{host_name}/{pnic_name}] QueryNetworkHint failed: {e}")
-        return None
-
-    def _cable_type_for_port(self, port_name):
-        """FastEthernet/Fa → cat5, others → dac-active. (for next optional edit)"""
-        if not port_name:
-            return "dac-active"
-        n = port_name.lower()
-        if n.startswith("fastethernet") or n.startswith("fa") and (
-            len(n) == 2 or (len(n) > 2 and n[2] in "0123456789/-")
-        ):
-            return "cat5"
-        return "dac-active"
-
-    def _find_device_by_name(self, name):
-        if not name:
-            return None
-        name_l = name.strip().lower()
-        name_short = name_l.split(".")[0]
-        for dev in self.inventory.get_all_items(NBDevice):
-            dname = (grab(dev, "data.name") or "").strip()
-            if not dname:
-                continue
-            dname_l = dname.lower()
-            if dname_l == name_l:
-                return dev
-            if dname_l == name_short or dname_l.split(".")[0] == name_short:
-                return dev
-            if dname_l.split(".")[0] == name_short:
-                return dev
-        return None
-
-    def _find_iface_on_device(self, device, port_candidates):
-        """Find interface on Switch/Device (with alias Fa/Gi/...)."""
-        if device is None or not port_candidates:
-            return None
-        cand_l = {c.lower() for c in port_candidates if c}
-        for iface in self.inventory.get_all_items(NBInterface):
-            if grab(iface, "data.device") is not device and grab(iface, "data.device") != device:
-                dev_ref = grab(iface, "data.device")
-                if dev_ref is None:
-                    continue
-                if getattr(dev_ref, "nb_id", None) != getattr(device, "nb_id", None):
-                    if grab(dev_ref, "data.name") != grab(device, "data.name"):
+            remainder = None
+            if name_lower.startswith(long_prefix.lower()):
+                remainder = name[len(long_prefix):]
+            else:
+                for short_prefix in short_prefixes:
+                    if not name_lower.startswith(short_prefix.lower()):
                         continue
-            iname = (grab(iface, "data.name") or "")
-            if iname.lower() in cand_l:
-                return iface
-        return None
+                    short_remainder = name[len(short_prefix):]
+                    # "Te0/1" uses the short form, "TenGigE0/1" just starts with the same letters
+                    if len(short_remainder) > 0 and (short_remainder[0].isdigit() or short_remainder[0] in "/-"):
+                        remainder = short_remainder
+                        break
 
-    def _find_switch_interface(self, system_name, port_id, port_description):
+            if remainder is None:
+                continue
+
+            variants.append(f"{long_prefix}{remainder}")
+            variants.extend([f"{x}{remainder}" for x in short_prefixes])
+            break
+
+        return list(dict.fromkeys(variants))
+
+    @staticmethod
+    def get_pnic_neighbor(hint):
         """
-        Find switch and interface in inventory
-        Returns (NBDevice|None, NBInterface|None)
+        extract the neighbor a physical host interface reported via CDP or LLDP
+
+        CDP is preferred as it reports the name of the connected switch directly. LLDP
+        reports the same information in a list of key/value parameters.
+
+        Parameters
+        ----------
+        hint: vim.host.PhysicalNic.NetworkHint
+            network hint of a single physical interface as returned by QueryNetworkHint()
+
+        Returns
+        -------
+        (dict, None): "system_name", "port_id", "port_description" and "protocol" of the
+                      reported neighbor, None if this interface reported no usable neighbor
         """
-        if not system_name:
-            return None, None
 
-        switch = self._find_device_by_name(system_name)
-        if switch is None:
-            return None, None
-
-        candidates = []
-        if port_id:
-            candidates.extend(self._expand_interface_names(port_id))
-        if port_description and port_description != port_id:
-            candidates.extend(self._expand_interface_names(port_description))
-        seen = set()
-        uniq = []
-        for c in candidates:
-            if c and c not in seen:
-                seen.add(c)
-                uniq.append(c)
-
-        iface = self._find_iface_on_device(switch, uniq)
-        return switch, iface
-
-    def _find_existing_cable(self, iface_a, iface_b):
-        """Valid existing сables."""
-        id_a = getattr(iface_a, "nb_id", 0) or 0
-        id_b = getattr(iface_b, "nb_id", 0) or 0
-        if id_a == 0 or id_b == 0:
+        if hint is None:
             return None
-        for cable in self.inventory.get_all_items(NBCable):
-            terms = []
-            for side in ("a_terminations", "b_terminations"):
-                for t in grab(cable, f"data.{side}", fallback=[]) or []:
-                    if isinstance(t, dict):
-                        terms.append(t.get("object_id"))
-            if id_a in terms and id_b in terms:
-                return cable
+
+        connected_switch_port = grab(hint, "connectedSwitchPort")
+        if connected_switch_port is not None:
+            system_name = get_string_or_none(grab(connected_switch_port, "systemName")) or \
+                          get_string_or_none(grab(connected_switch_port, "devId"))
+
+            if system_name is not None:
+                return {
+                    "system_name": system_name,
+                    "port_id": get_string_or_none(grab(connected_switch_port, "portId")),
+                    "port_description": None,
+                    "protocol": "CDP"
+                }
+
+        lldp_info = grab(hint, "lldpInfo")
+        if lldp_info is not None:
+
+            parameters = dict()
+            for parameter in grab(lldp_info, "parameter", fallback=list()):
+                key = get_string_or_none(grab(parameter, "key"))
+                value = get_string_or_none(grab(parameter, "value"))
+                if key is not None and value is not None:
+                    parameters[key.lower()] = value
+
+            system_name = parameters.get("system name") or parameters.get("systemname")
+
+            # the port id is the interface name of the neighbor (i.e.: "XGigabitEthernet0/0/14")
+            port_id = parameters.get("port id") or parameters.get("portid")
+            if port_id is None:
+                port_id = get_string_or_none(grab(lldp_info, "portId"))
+
+            # the port description is maintained by the switch admin (i.e.: "MAIN-DETAIL12/Eth1")
+            port_description = parameters.get("port description") or parameters.get("portdescription")
+
+            if system_name is not None:
+                return {
+                    "system_name": system_name,
+                    "port_id": port_id,
+                    "port_description": port_description,
+                    "protocol": "LLDP"
+                }
+
         return None
 
-    def _create_cable_if_possible(self, server_iface, neighbor, host_name, pnic_name):
+    @staticmethod
+    def get_cable_interface_ids(cable):
         """
-        Creates an NBCable server_iface ↔ switch_iface if both ends 
-        resolve and both have an nb_id (otherwise, it’s handled in the next sync).
+        return the NetBox IDs of all interfaces a cable is terminated on
+
+        Parameters
+        ----------
+        cable: NBCable
+            the cable object to read the terminations from
+
+        Returns
+        -------
+        list: of NetBox interface IDs
         """
-        if neighbor is None or server_iface is None:
+
+        interface_ids = list()
+        for side in ["a_terminations", "b_terminations"]:
+            for termination in grab(cable, f"data.{side}", fallback=list()):
+
+                if not isinstance(termination, dict):
+                    continue
+                if termination.get("object_type") != NBInterface.object_type:
+                    continue
+                if isinstance(termination.get("object_id"), int):
+                    interface_ids.append(termination.get("object_id"))
+
+        return interface_ids
+
+    def get_cable_for_interface_id(self, interface_id):
+        """
+        return the cable which is terminated on a NetBox interface
+
+        All cables are looked at only once, cables added afterwards are added to the index
+        by add_cable_to_neighbor().
+
+        Parameters
+        ----------
+        interface_id: int
+            NetBox ID of the interface to find the cable for
+
+        Returns
+        -------
+        (NBCable, None): the cable terminated on this interface, None if there is none
+        """
+
+        if self.cable_index is None:
+            self.cable_index = dict()
+            for cable in self.inventory.get_all_items(NBCable):
+                for cable_interface_id in self.get_cable_interface_ids(cable):
+                    self.cable_index.setdefault(cable_interface_id, cable)
+
+        return self.cable_index.get(interface_id)
+
+    def get_device_by_neighbor_name(self, name):
+        """
+        find the NetBox device a CDP/LLDP neighbor reported as its system name
+
+        An exact match always wins. A neighbor can report a FQDN while the device is named
+        with its short name in NetBox (or the other way around), that's why short names are
+        compared as well. A short name match is only accepted if it is unambiguous and if it
+        does not compare two different domains with each other.
+
+        Parameters
+        ----------
+        name: str
+            system name the neighbor reported
+
+        Returns
+        -------
+        (NBDevice, None): the matching device, None if there was no or no unique match
+        """
+
+        name = get_string_or_none(name)
+        if name is None:
+            return None
+
+        name = name.lower()
+        short_name = name.split(".")[0]
+
+        short_name_matches = list()
+        for device in self.inventory.get_all_items(NBDevice):
+
+            device_name = get_string_or_none(grab(device, "data.name"))
+            if device_name is None:
+                continue
+
+            device_name = device_name.lower()
+            if device_name == name:
+                return device
+
+            # "sw01.dc1.example.com" and "sw01.dc2.example.com" are not the same device
+            if "." in name and "." in device_name:
+                continue
+
+            if device_name.split(".")[0] == short_name:
+                short_name_matches.append(device)
+
+        if len(short_name_matches) == 1:
+            return short_name_matches[0]
+
+        if len(short_name_matches) > 1:
+            log.debug(f"Neighbor '{name}' matches more than one {NBDevice.name} in NetBox: "
+                      f"{[grab(x, 'data.name') for x in short_name_matches]}")
+
+        return None
+
+    def get_interface_by_neighbor_port(self, device, port_names):
+        """
+        find the interface of a device which matches one of the port names a neighbor reported
+
+        Parameters
+        ----------
+        device: NBDevice
+            the device to look for the interface on
+        port_names: list
+            port names reported by the neighbor, in the order they should be tried
+
+        Returns
+        -------
+        (NBInterface, None): the matching interface, None if none of the names matched
+        """
+
+        if device is None:
+            return None
+
+        wanted_names = list()
+        for port_name in port_names:
+            wanted_names.extend([x.lower() for x in self.get_interface_name_variants(port_name)])
+
+        if len(wanted_names) == 0:
+            return None
+
+        device_interfaces = dict()
+        for interface in self.inventory.get_all_interfaces(device):
+            interface_name = get_string_or_none(grab(interface, "data.name"))
+            if interface_name is not None:
+                device_interfaces.setdefault(interface_name.lower(), interface)
+
+        for wanted_name in dict.fromkeys(wanted_names):
+            if device_interfaces.get(wanted_name) is not None:
+                return device_interfaces.get(wanted_name)
+
+        return None
+
+    def add_cable_to_neighbor(self, host_interface, neighbor, host_name, pnic_name):
+        """
+        add a cable between a physical host interface and the switch port its CDP/LLDP neighbor reported
+
+        A cable is only added if the reported switch and switch port were both found in NetBox and
+        if neither of the two interfaces is connected with a cable already. Cables which were created
+        by this source before are claimed again so they don't end up being marked as orphaned.
+
+        Parameters
+        ----------
+        host_interface: NBInterface
+            interface object of the physical host interface
+        neighbor: dict
+            neighbor data as returned by get_pnic_neighbor()
+        host_name: str
+            name of the host this interface belongs to, used for logging
+        pnic_name: str
+            name of the physical interface, used for logging
+        """
+
+        if host_interface is None or neighbor is None:
             return
 
-        sys_name = neighbor.get("system_name")
-        port_id = neighbor.get("port_id")
-        port_desc = neighbor.get("port_description")
+        log_name = f"Neighbor of interface '{pnic_name}' on host '{host_name}'"
 
-        switch, switch_iface = self._find_switch_interface(sys_name, port_id, port_desc)
-        if switch is None:
-            log.debug2(f"[{host_name}/{pnic_name}] Switch '{sys_name}' not in inventory, skip cable")
-            return
-        if switch_iface is None:
-            log.debug2(
-                f"[{host_name}/{pnic_name}] Port '{port_id or port_desc}' "
-                f"not found on '{sys_name}', skip cable"
-            )
+        switch_object = self.get_device_by_neighbor_name(neighbor.get("system_name"))
+        if switch_object is None:
+            log.debug2(f"{log_name}: {NBDevice.name} '{neighbor.get('system_name')}' not found in NetBox. "
+                       f"Not adding a cable.")
             return
 
-        srv_id = getattr(server_iface, "nb_id", 0) or 0
-        sw_id = getattr(switch_iface, "nb_id", 0) or 0
-        if srv_id == 0 or sw_id == 0:
-            log.debug2(
-                f"[{host_name}/{pnic_name}] Interface(s) not yet in NetBox "
-                f"(server_id={srv_id}, switch_id={sw_id}), cable on next sync"
-            )
+        port_names = [neighbor.get("port_id"), neighbor.get("port_description")]
+        switch_interface = self.get_interface_by_neighbor_port(switch_object, port_names)
+        if switch_interface is None:
+            log.debug2(f"{log_name}: no interface matching {[x for x in port_names if x is not None]} found on "
+                       f"{NBDevice.name} '{grab(switch_object, 'data.name')}'. Not adding a cable.")
             return
 
-        if self._find_existing_cable(server_iface, switch_iface) is not None:
-            log.debug2(f"[{host_name}/{pnic_name}] Cable already exists, skip")
+        host_interface_id = getattr(host_interface, "nb_id", 0)
+        switch_interface_id = getattr(switch_interface, "nb_id", 0)
+
+        # a cable can only reference interfaces which exist in NetBox.
+        # an interface which was just discovered gets its cable during the next run
+        if host_interface_id == 0 or switch_interface_id == 0:
+            log.debug2(f"{log_name}: {NBInterface.name} '{host_interface.get_display_name()}' or "
+                       f"'{switch_interface.get_display_name()}' does not exist in NetBox yet. "
+                       f"A cable can be added during the next run.")
             return
 
-        cable_type = self._cable_type_for_port(port_id or port_desc or "")
-        desc = port_desc or ""
+        existing_cable = self.get_cable_for_interface_id(host_interface_id) or \
+            self.get_cable_for_interface_id(switch_interface_id)
 
-        label = f"{srv_id}:{sw_id}"  # ex: "20538:1869"
+        if existing_cable is not None:
 
-        cable_data = {
-            "label": label,
-            "a_terminations": [
-                {"object_type": "dcim.interface", "object_id": srv_id}
-            ],
-            "b_terminations": [
-                {"object_type": "dcim.interface", "object_id": sw_id}
-            ],
-            "status": "connected",
-            "type": cable_type,
-            "description": (desc[:200] if desc else None),
-            "tags": [{"name": self.source_tag}] if getattr(self, "source_tag", None) else None,
-        }
-        cable_data = {k: v for k, v in cable_data.items() if v is not None}
+            existing_interface_ids = self.get_cable_interface_ids(existing_cable)
 
-        self.inventory.add_object(NBCable, data=cable_data, source=self)
-        log.info(
-            f"Cable queued: [{host_name}:{pnic_name}] ↔ "
-            f"[{grab(switch, 'data.name')}:{grab(switch_iface, 'data.name')}] "
-            f"type={cable_type} label={label}"
-        )
+            if host_interface_id in existing_interface_ids and switch_interface_id in existing_interface_ids:
+                log.debug2(f"{log_name}: cable '{existing_cable.get_display_name()}' already exists")
+
+                # a cable this source added before is still valid and must not be marked as orphaned.
+                # a cable which somebody else created stays untouched and unmanaged
+                if self.source_tag in existing_cable.get_tags():
+                    existing_cable.set_source(self)
+            else:
+                log.debug(f"{log_name}: {NBInterface.name} '{host_interface.get_display_name()}' or "
+                          f"'{switch_interface.get_display_name()}' is already connected with cable "
+                          f"'{existing_cable.get_display_name()}'. Not adding a cable.")
+
+            return
+
+        log.debug2(f"{log_name}: reported via {neighbor.get('protocol')} as "
+                   f"'{neighbor.get('system_name')}' port '{neighbor.get('port_id')}'")
+
+        cable_object = self.inventory.add_object(NBCable, source=self, data={
+            # a label is not mandatory in NetBox and stays empty, the terminations name this cable
+            "label": "",
+            "a_terminations": [{"object_type": NBInterface.object_type, "object_id": host_interface_id}],
+            "b_terminations": [{"object_type": NBInterface.object_type, "object_id": switch_interface_id}],
+            "status": "connected"
+        })
+
+        for interface_id in [host_interface_id, switch_interface_id]:
+            self.cable_index[interface_id] = cable_object
 
     def create_sdk_session(self):
         """
@@ -1445,6 +1542,10 @@ class VMWareHandler(SourceBase):
         disk_data: list
             data of discs which belong to a VM
 
+        Returns
+        -------
+        tuple: the added/updated (NBDevice, NBVM) object and a dict of all interface objects
+               which were added/updated for it, discovered interface name as key
         """
 
         if object_type not in [NBDevice, NBVM]:
@@ -1671,6 +1772,8 @@ class VMWareHandler(SourceBase):
             except ValueError:
                 log.error(f"Primary IPv6 ({p_ipv6}) does not appear to be a valid IP address (needs included suffix).")
 
+        interface_objects = dict()
+
         for int_name, int_data in nic_data.items():
 
             if nic_object_dict.get(int_name) is not None:
@@ -1683,6 +1786,8 @@ class VMWareHandler(SourceBase):
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
                                                                        int_data, nic_ips.get(int_name, list()),
                                                                        vmware_object=vmware_object)
+
+            interface_objects[int_name] = nic_object
 
             # add all interface IPs
             for ip_object in ip_address_objects:
@@ -1732,7 +1837,7 @@ class VMWareHandler(SourceBase):
                               f"'{device_vm_object.get_display_name()}'")
                     device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
 
-        return
+        return device_vm_object, interface_objects
 
     def get_parent_object_by_class(self, obj, object_class_to_find):
 
@@ -2287,6 +2392,14 @@ class VMWareHandler(SourceBase):
 
         # now iterate over all physical interfaces and collect data
         pnic_data_dict = dict()
+        pnic_neighbors = dict()
+        pnic_hints = dict()
+        # noinspection PyBroadException
+        try:
+            for hint in obj.configManager.networkSystem.QueryNetworkHint(""):
+                pnic_hints[hint.device] = hint
+        except Exception:
+            pass
 
         pnic_list = grab(obj, "config.network.pnic", fallback=list())
         if self.settings.skip_host_nics is True:
@@ -2322,25 +2435,30 @@ class VMWareHandler(SourceBase):
             pnic_description = f"{pnic_description} pNIC"
 
             pnic_mtu = None
+
             pnic_mode = None
 
             # check virtual switches for interface data
             for vs_name, vs_data in self.network_data["vswitch"][name].items():
+
                 if pnic_key in vs_data.get("pnics", list()):
                     pnic_description = f"{pnic_description} ({vs_name})"
                     pnic_mtu = vs_data.get("mtu")
 
             # check proxy switches for interface data
             for ps_uuid, ps_data in self.network_data["pswitch"][name].items():
+
                 if pnic_key in ps_data.get("pnics", list()):
                     ps_name = ps_data.get("name")
                     pnic_description = f"{pnic_description} ({ps_name})"
                     pnic_mtu = ps_data.get("mtu")
+
                     pnic_mode = "tagged-all"
 
             # check vlans on this pnic
             pnic_vlans = list()
             for pg_name, pg_data in self.network_data["host_pgroup"][name].items():
+
                 if pnic_name in pg_data.get("nics", list()):
                     pnic_vlans.append({
                         "name": pg_name,
@@ -2349,21 +2467,31 @@ class VMWareHandler(SourceBase):
 
             pnic_mac_address = normalize_mac_address(grab(pnic, "mac"))
 
-            # --- CDP / LLDP: structured neighbor + description ---
-            neighbor = self._get_pnic_neighbor_info(obj, pnic_name, name)
-            if neighbor:
-                sys_name = neighbor.get("system_name")
-                port_show = neighbor.get("port_id") or neighbor.get("port_description")
-                if sys_name:
-                    if port_show:
-                        pnic_description += f" (conn: {sys_name} - {port_show})"
-                    else:
-                        pnic_description += f" (conn: {sys_name})"
+            if pnic_hints.get(pnic_name) is not None:
+                pnic_switch_port = grab(pnic_hints.get(pnic_name), 'connectedSwitchPort')
+                if pnic_switch_port is not None:
+                    pnic_sp_sys_name = grab(pnic_switch_port, 'systemName')
+                    if pnic_sp_sys_name is None:
+                        pnic_sp_sys_name = grab(pnic_switch_port, 'devId')
+                    if pnic_sp_sys_name is not None:
+                        pnic_description += f" (conn: {pnic_sp_sys_name} - {grab(pnic_switch_port, 'portId')})"
 
             if self.settings.host_nic_exclude_by_mac_list is not None and \
                     pnic_mac_address in self.settings.host_nic_exclude_by_mac_list:
                 log.debug2(f"Host NIC with MAC '{pnic_mac_address}' excluded from sync. Skipping")
                 continue
+
+            # collect the reported neighbor to add a cable for this interface later on
+            if self.settings.sync_host_cables is True:
+                pnic_neighbor = self.get_pnic_neighbor(pnic_hints.get(pnic_name))
+
+                if pnic_neighbor is not None:
+                    pnic_neighbors[pnic_name] = pnic_neighbor
+
+                    # a CDP neighbor is already part of the description
+                    if pnic_neighbor.get("protocol") == "LLDP":
+                        neighbor_port = pnic_neighbor.get("port_id") or pnic_neighbor.get("port_description")
+                        pnic_description += f" (conn: {pnic_neighbor.get('system_name')} - {neighbor_port})"
 
             pnic_data = {
                 "name": unquote(pnic_name),
@@ -2418,7 +2546,6 @@ class VMWareHandler(SourceBase):
                 if len(tagged_vlan_list) > 0:
                     pnic_data["tagged_vlans"] = tagged_vlan_list
 
-            pnic_data["_neighbor"] = neighbor
             pnic_data_dict[pnic_name] = pnic_data
 
         host_primary_ip4 = None
@@ -2566,64 +2693,17 @@ class VMWareHandler(SourceBase):
                         host_primary_ip6 = int_v6
 
         # add host to inventory
-        pending_cables = {}
-        for pnic_name, pnic_data in list(pnic_data_dict.items()):
-            neighbor = pnic_data.pop("_neighbor", None)
-            if neighbor:
-                pending_cables[pnic_name] = neighbor
+        device_object, interface_objects = \
+            self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
+                                            vnic_data=vnic_data_dict, nic_ips=vnic_ips,
+                                            p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
 
-        log.info(f"[{name}] pending_cables={len(pending_cables)} keys={list(pending_cables.keys())}")
+        # add cables to the switch ports which were reported via CDP/LLDP
+        if device_object is not None:
+            for pnic_name, pnic_neighbor in pnic_neighbors.items():
+                self.add_cable_to_neighbor(interface_objects.get(pnic_name), pnic_neighbor, name, pnic_name)
 
-        self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
-                                        vnic_data=vnic_data_dict, nic_ips=vnic_ips,
-                                        p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
-
-        device_object = self.inventory.get_by_data(
-            NBDevice, data={"name": name, "site": {"name": site_name}}
-        )
-
-        if device_object is None:
-            device_object = self.inventory.get_by_data(NBDevice, data={"name": name})
-
-        log.info(
-            f"[{name}] device_object="
-            f"{None if device_object is None else (device_object.nb_id, grab(device_object, 'data.name'))}"
-        )
-
-        if device_object is None:
-            log.warning(f"[{name}] device not found in inventory after add — skip cables")
-            return
-
-        if not pending_cables:
-            log.info(f"[{name}] no neighbors on pNICs — skip cables")
-            return
-
-        for pnic_name, neighbor in pending_cables.items():
-            log.info(
-                f"[{name}/{pnic_name}] neighbor="
-                f"{neighbor.get('system_name')} / "
-                f"port_id={neighbor.get('port_id')} / "
-                f"port_desc={neighbor.get('port_description')} / "
-                f"proto={neighbor.get('protocol')}"
-            )
-
-            server_iface = self.inventory.get_by_data(
-                NBInterface,
-                data={"name": unquote(pnic_name), "device": device_object}
-            )
-            if server_iface is None:
-                for iface in self.inventory.get_all_items(NBInterface):
-                    if grab(iface, "data.device") is device_object and \
-                       grab(iface, "data.name") == unquote(pnic_name):
-                        server_iface = iface
-                        break
-
-            log.info(
-                f"[{name}/{pnic_name}] server_iface="
-                f"{None if server_iface is None else (server_iface.nb_id, grab(server_iface, 'data.name'))}"
-            )
-
-            self._create_cable_if_possible(server_iface, neighbor, name, pnic_name)
+        return
 
     def add_virtual_machine(self, obj):
         """
