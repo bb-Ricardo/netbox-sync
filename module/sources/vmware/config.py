@@ -560,6 +560,16 @@ class VMWareConfig(ConfigBase):
                          will maintain all physical nics in netbox. This option will skip this part.""" ,
                          default_value=False
                          ),
+            ConfigOption("sync_host_cables",
+                         bool,
+                         description="""Create cables in NetBox between the physical interfaces (pNICs) of an
+                         ESXi host and the switch ports which are reported as CDP/LLDP neighbors by this host.
+                         A cable is only created if the reported switch and the reported switch port both
+                         already exist in NetBox and if neither of the two interfaces is cabled yet. Cables
+                         are visible objects which are usually maintained by hand, that's why this is
+                         disabled by default.""",
+                         default_value=False
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
