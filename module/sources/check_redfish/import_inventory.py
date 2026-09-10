@@ -88,6 +88,13 @@ class CheckRedfish(SourceBase):
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
+        # modules have to be read from NetBox before they can be matched, otherwise every run
+        # tries to create them again. Only requested when the option is on, so nobody else pays
+        # for three extra queries
+        if grab(self.settings, "model_components_as_modules", fallback=False) is True:
+            self.dependent_netbox_objects = self.dependent_netbox_objects + \
+                [NBModuleBay, NBModuleType, NBModule]
+
         self.init_successful = True
 
         self.interface_adapter_type_dict = dict()
@@ -679,6 +686,7 @@ class CheckRedfish(SourceBase):
             items.append({
                 "description": description,
                 "manufacturer": get_string_or_none(grab(pd, "manufacturer")),
+                "model": model,
                 "bay_name": drive_bay or "None",
                 "full_name": name or "None",
                 "serial": serial,
@@ -725,6 +733,7 @@ class CheckRedfish(SourceBase):
             items.append({
                 "description": description,
                 "manufacturer": get_string_or_none(grab(sc, "manufacturer")),
+                "model": model,
                 "full_name": name or "None",
                 "serial": get_string_or_none(grab(sc, "serial")),
                 "firmware": get_string_or_none(grab(sc, "firmware")),
@@ -759,6 +768,7 @@ class CheckRedfish(SourceBase):
 
             items.append({
                 "manufacturer": get_string_or_none(grab(se, "manufacturer")),
+                "model": model,
                 "full_name": name or "None",
                 "serial": get_string_or_none(grab(se, "serial")),
                 "firmware": get_string_or_none(grab(se, "firmware")),
@@ -1065,6 +1075,7 @@ class CheckRedfish(SourceBase):
             items.append({
                 "description": description,
                 "full_name": name,
+                "model": model,
                 "manufacturer": grab(self.device_object, "data.device_type.data.manufacturer.data.name"),
                 "firmware": get_string_or_none(grab(manager, "firmware")),
                 "health": get_string_or_none(grab(manager, "health_status"))
@@ -1367,7 +1378,11 @@ class CheckRedfish(SourceBase):
         part_number = item_data.get("part_number")
 
         # the module type model is the catalog identifier of the part (e.g. the exact CPU model)
-        model = item_data.get("model") or part_number or item_data.get("full_name")
+        # a type is a catalog entry shared by identical parts. Without a model or part number
+        # the component class is the closest thing to one; the instance name would create a new
+        # type for every fan and drive in the fleet
+        model = item_data.get("model") or part_number or item_data.get("inventory_type") or \
+            item_data.get("full_name")
         module_type_data = {"model": model}
         if part_number is not None:
             module_type_data["part_number"] = part_number
