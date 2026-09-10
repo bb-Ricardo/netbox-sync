@@ -446,23 +446,16 @@ class CheckRedfish(SourceBase):
             health_status = get_string_or_none(grab(fan, "health_status"))
             physical_context = get_string_or_none(grab(fan, "physical_context"))
             fan_id = get_string_or_none(grab(fan, "id"))
-            reading = get_string_or_none(grab(fan, "reading"))
-            reading_unit = get_string_or_none(grab(fan, "reading_unit"))
-
             description = list()
-            speed = None
             if physical_context is not None:
                 description.append(f"Context: {physical_context}")
 
-            if reading is not None and reading_unit is not None:
-                reading_unit = "%" if reading_unit.lower() == "percent" else reading_unit
-                speed = f"{reading}{reading_unit}"
-
+            # a fan's reading is a live measurement, not something the inventory describes.
+            # Writing it would update this object in NetBox on every single run
             items.append({
                 "description": description,
                 "full_name": f"{fan_name} (ID: {fan_id})",
-                "health": health_status,
-                "speed": speed
+                "health": health_status
             })
 
         self.update_all_items(items, "Fan")
