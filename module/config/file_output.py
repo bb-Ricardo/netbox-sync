@@ -16,6 +16,7 @@ from module.common.config import CommonConfig
 from module.netbox.config import NetBoxConfig
 from module.sources.vmware.config import VMWareConfig
 from module.sources.check_redfish.config import CheckRedfishConfig
+from module.sources.hetzner.config import HetznerConfig
 from module.common.logging import get_logger
 from module.config import default_config_file_path, source_config_section_name
 from module.config.files import ConfigFile, ConfigFileINI, ConfigFileYAML
@@ -33,7 +34,8 @@ class ConfigFileOutput(DescriptionFormatterMixin):
 
     source_config_list = [
         VMWareConfig,
-        CheckRedfishConfig
+        CheckRedfishConfig,
+        HetznerConfig
     ]
 
     header = f"Welcome to the {__description__} configuration file."

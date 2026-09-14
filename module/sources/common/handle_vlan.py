@@ -122,6 +122,8 @@ class FilterVLANByID(VLANFilter):
 
     def matches(self, vlan_id, site=None):
 
+        # FIXME:
+        # * site_name is not defined
         if self.site_matches(site) is False:
             log.debug2(f"VLAN {self.filter_type} site name '{site_name}' matches '{self.site}'")
             return False

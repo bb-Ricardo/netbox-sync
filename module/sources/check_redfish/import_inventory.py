@@ -424,7 +424,7 @@ class CheckRedfish(SourceBase):
                 self.inventory.add_object(NBPowerPort, data=ps_data, source=self)
             else:
                 if self.settings.overwrite_power_supply_name is False:
-                    del(ps_data["name"])
+                    del (ps_data["name"])
 
                 data_to_update = self.patch_data(ps_object, ps_data, self.settings.overwrite_power_supply_attributes)
                 ps_object.update(data=data_to_update, source=self)
@@ -904,7 +904,7 @@ class CheckRedfish(SourceBase):
             # unset "illegal" attributes
             for attribute in ["inventory_type", "health"]:
                 if attribute in port_data:
-                    del(port_data[attribute])
+                    del (port_data[attribute])
 
             # del empty mac address attribute
             if port_data.get("mac_address") is None:
@@ -917,7 +917,7 @@ class CheckRedfish(SourceBase):
             # create or update interface with data
             if nic_object is not None:
                 if self.settings.overwrite_interface_name is False and port_data.get("name") is not None:
-                    del(port_data["name"])
+                    del (port_data["name"])
 
                 this_link_type = port_data.get("type")
                 mgmt_only = port_data.get("mgmt_only")

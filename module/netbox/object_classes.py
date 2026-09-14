@@ -693,9 +693,9 @@ class NetBoxObject:
                 def reduce_object_custom_fields_to_ids(custom_field_data: dict) -> dict:
 
                     reduced_data = dict(custom_field_data)
-                    for field_name, field_value in custom_field_data.items():
+                    for f_name, f_value in custom_field_data.items():
                         # Check for custom field type
-                        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": field_name})
+                        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": f_name})
                         if custom_field is None:
                             continue
 
@@ -707,19 +707,19 @@ class NetBoxObject:
                             field_type = field_type.get("value")
 
                         # Handle object type custom fields - need only ID
-                        if field_type == "object" and isinstance(field_value, dict) and \
-                                field_value.get('id') is not None:
-                            reduced_data[field_name] = field_value.get('id')
+                        if field_type == "object" and isinstance(f_value, dict) and \
+                                f_value.get('id') is not None:
+                            reduced_data[f_name] = f_value.get('id')
 
                         # Handle multi-object type custom fields - need list of IDs
                         # NetBox reports the type of these fields as 'multiobject'
-                        elif field_type in ("multiobject", "multi-object") and isinstance(field_value, list):
+                        elif field_type in ("multiobject", "multi-object") and isinstance(f_value, list):
                             ids = []
-                            for item in field_value:
+                            for item in f_value:
                                 if isinstance(item, dict) and item.get('id') is not None:
                                     ids.append(item.get('id'))
                             if ids:
-                                reduced_data[field_name] = ids
+                                reduced_data[f_name] = ids
 
                     return reduced_data
 

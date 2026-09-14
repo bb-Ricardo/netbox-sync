@@ -35,6 +35,7 @@ class ConfigOptions:
             return getattr(self, item)
         return None
 
+
 class ConfigBase:
     """
         Base class to parse config data
