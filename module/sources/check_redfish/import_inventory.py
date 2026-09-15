@@ -60,7 +60,14 @@ class CheckRedfish(SourceBase):
         NBVLANGroup,
         NBPowerPort,
         NBInventoryItem,
-        NBCustomField
+        NBCustomField,
+        # modules are always read back so that interfaces and power ports which reference a
+        # module can resolve that relation, even on a run where the option is off (e.g. after
+        # a user turns it off again). The option only gates whether we *create* components as
+        # modules, not whether we can read existing ones.
+        NBModuleBay,
+        NBModuleType,
+        NBModule
     ]
 
     source_type = "check_redfish"
@@ -87,13 +94,6 @@ class CheckRedfish(SourceBase):
         if self.settings.enabled is False:
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
-
-        # modules have to be read from NetBox before they can be matched, otherwise every run
-        # tries to create them again. Only requested when the option is on, so nobody else pays
-        # for three extra queries
-        if grab(self.settings, "model_components_as_modules", fallback=False) is True:
-            self.dependent_netbox_objects = self.dependent_netbox_objects + \
-                [NBModuleBay, NBModuleType, NBModule]
 
         self.init_successful = True
 

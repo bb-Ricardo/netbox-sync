@@ -2,6 +2,10 @@
 Modelling components as modules has to read the existing modules back from NetBox,
 otherwise every run tries to create them again, and a module type has to be the
 hardware model so the catalog is shared instead of holding one entry per component.
+
+Modules are read back on every run regardless of the option, so interfaces and power
+ports that reference a module can always resolve that relation - even on a run where the
+option is off again.
 """
 from types import SimpleNamespace
 
@@ -21,15 +25,14 @@ def _source(inventory, use_modules):
     return source
 
 
-@pytest.mark.parametrize("use_modules", [True, False])
-def test_module_objects_are_only_requested_when_enabled(inventory, use_modules):
-    dependencies = list(CheckRedfish.dependent_netbox_objects)
-    if use_modules:
-        dependencies += [NBModuleBay, NBModuleType, NBModule]
-
+def test_module_objects_are_always_requested_so_relations_resolve():
+    # Modules must be read back on every run, even with the option off. Interfaces and power
+    # ports created by an earlier modules-on run reference a module, and that relation only
+    # resolves when the module objects were loaded. Against a live NetBox an option-off run
+    # otherwise logs "Problems resolving relation 'module'" for every such object.
     for module_class in (NBModuleBay, NBModuleType, NBModule):
-        assert (module_class in dependencies) is use_modules, \
-            f"{module_class.name} must be read from NetBox exactly when the option is on"
+        assert module_class in CheckRedfish.dependent_netbox_objects, \
+            f"{module_class.name} must always be read from NetBox so module relations resolve"
 
 
 @pytest.mark.parametrize("item_data, expected", [
