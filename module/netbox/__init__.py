@@ -40,7 +40,10 @@ from module.netbox.object_classes import (
     NBMACAddress,
     NBFHRPGroupItem,
     NBInventoryItem,
-    NBPowerPort
+    NBPowerPort,
+    NBModuleType,
+    NBModuleBay,
+    NBModule
 )
 
 primary_tag_name = "NetBox-synced"
