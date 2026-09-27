@@ -2238,6 +2238,26 @@ class NBIPAddress(NetBoxObject):
         elif isinstance(o_interface, NBVMInterface):
             return o_interface.data.get("virtual_machine")
 
+    def get_role(self):
+        """
+        Return the role of this IP address as a plain string.
+
+        NetBox reports the role as a dict ({"value": ..., "label": ...}),
+        an object this program created itself carries the plain value.
+
+        Returns
+        -------
+        (str, None): the role of this IP address or None if unset
+        """
+
+        role = self.data.get("role")
+
+        if isinstance(role, dict):
+            return role.get("value")
+
+        return role
+
+
     def remove_interface_association(self):
         o_id = self.data.get("assigned_object_id")
         o_type = self.data.get("assigned_object_type")
