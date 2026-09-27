@@ -41,6 +41,7 @@ from module.netbox.object_classes import (
     NBFHRPGroupItem,
     NBInventoryItem,
     NBPowerPort,
+    NBCable,
     NBModuleType,
     NBModuleBay,
     NBModule

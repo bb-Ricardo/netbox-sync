@@ -149,6 +149,39 @@ Custom Fields:
   VMware Guest Hostname:     appprd01.corp.example.com
 ```
 
+### Cables to CDP/LLDP neighbors
+
+An ESXi host reports the switch and the switch port each of its physical interfaces (pNICs) is
+connected to, if CDP or LLDP is enabled on the switch. With the option `sync_host_cables` enabled
+netbox-sync uses this information to create cables in NetBox between the host interface and the
+switch port.
+
+```ini
+sync_host_cables = True
+```
+
+Cables are objects which are usually maintained by hand, that's why this option is disabled by
+default. With the option disabled no cable is read from or written to NetBox at all. NetBox 3.3 or
+newer is needed, on older versions the option is ignored.
+
+netbox-sync only connects things it can find, it never creates the other end of a cable:
+
+* the device the neighbor reports as its system name must already exist in NetBox. The name is
+  matched exactly first, a short name is only matched against a FQDN if that match is unambiguous
+* the port the neighbor reports must already exist as an interface of that device. Long and short
+  interface names are matched against each other, so a reported `FastEthernet0/16` also matches an
+  interface named `Fa0/16` in NetBox. CDP reports the port ID, LLDP additionally reports a port
+  description and both are tried
+* both interfaces must already exist in NetBox. An interface which was just discovered gets its
+  cable during the next run
+* neither of the two interfaces may be connected already. A cable which was created by hand or which
+  connects to a different port is never changed or deleted, it is reported at log level `DEBUG`
+  instead
+
+Cables created by this source are tagged like every other object and are marked as orphaned and
+pruned once the host stops reporting that neighbor (see `prune_enabled`). Disabling the option again
+leaves all previously created cables untouched in NetBox.
+
 ### Filtering VM Disk Information
 VM disks are synchronized between vCenter and NetBox. Since NetBox 3.7.0, virtual disks are tracked as separate objects 
 linked to VMs. In some scenarios, such as when temporary disks are attached to VMs during backup operations 
