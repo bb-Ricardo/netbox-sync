@@ -21,6 +21,11 @@ dependencies = [
     "wheel>=0.47.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=9.1.1",
+]
+
 [project.urls]
 Repository = "https://github.com/bb-ricardo/netbox-sync.git"
 Issues = "https://github.com/bb-ricardo/netbox-sync/issues"

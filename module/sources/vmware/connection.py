@@ -1942,6 +1942,29 @@ class VMWareHandler(SourceBase):
 
         self.add_object_to_cache(obj, self.inventory.add_update_object(NBClusterGroup, data=object_data, source=self))
 
+    def object_synced_by_other_source(self, nb_object):
+        """
+        Check if a NetBox object is maintained by a different configured source. During
+        this run that is the source which touched the object, for objects read from NetBox
+        the source tags decide.
+
+        Parameters
+        ----------
+        nb_object: NetBoxObject
+            object to check
+
+        Returns
+        -------
+        bool: True if another configured source synced this object
+        """
+
+        if nb_object.source is not None:
+            return nb_object.source is not self
+
+        other_source_tags = [x.source_tag for x in self.inventory.source_list if x is not self]
+
+        return len(set(nb_object.get_tags()).intersection(other_source_tags)) > 0
+
     def add_cluster(self, obj):
         """
         Add a vCenter cluster as a NBCluster to NetBox. Cluster name is checked against
@@ -2008,8 +2031,11 @@ class VMWareHandler(SourceBase):
                 log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
                           f"and scope id '{scope_id}'.")
             elif site_name is not None:
+                # NetBox wants the id of the scoped object, so the site has to be a real
+                # object here. A plain dict is sent as is and rejected with
+                # "scope_id: A valid integer is required."
                 data["scope_type"] = "dcim.site"
-                data["scope_id"] = {"name": site_name}
+                data["scope_id"] = self.inventory.add_update_object(NBSite, data={"name": site_name})
             else:
                 log.debug(f"Cluster '{full_cluster_name}' has no scope type or scope id.")
         else:
@@ -2034,6 +2060,15 @@ class VMWareHandler(SourceBase):
         fallback_cluster_object = None
         for cluster_candidate in self.inventory.get_all_items(NBCluster):
             if grab(cluster_candidate, "data.name") != name:
+                continue
+
+            # a cluster which a different source keeps in a different site is not this cluster.
+            # NetBox refuses to move a cluster away from the site of its hosts, so adopting it
+            # would fail on every run and attach this vCenter's hosts to the other cluster.
+            if site_name is not None and cluster_candidate.get_site_name() not in [None, site_name] and \
+                    self.object_synced_by_other_source(cluster_candidate) is True:
+                log.debug2(f"Skipping cluster '{name}' in site '{cluster_candidate.get_site_name()}' "
+                           f"as it is synced by a different source")
                 continue
 
             if site_name is not None:

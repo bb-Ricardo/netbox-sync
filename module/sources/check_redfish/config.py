@@ -54,6 +54,13 @@ class CheckRedfishConfig(ConfigBase):
                          is then stored in the 'system_serial' custom field""",
                          default_value=False),
 
+            ConfigOption("model_components_as_modules",
+                         bool,
+                         description="""model discovered hardware components (CPUs, memory, drives,
+                         controllers, NICs, ...) as NetBox modules instead of the deprecated inventory
+                         items. Requires NetBox >= 4.3, on older versions inventory items are used""",
+                         default_value=False),
+
             ConfigOption("overwrite_power_supply_name",
                          bool,
                          description="""define if the name of the power supply discovered via check_redfish
@@ -80,8 +87,9 @@ class CheckRedfishConfig(ConfigBase):
 
             ConfigOption("skip_fhrp_group_ips",
                          bool,
-                         description="""define if an IP address assigned to a FHRP group (like HSRP, VRRP, GLBP) will be skipped.
-                         If True this IP address will be skipped and not synced to NetBox to prevent incorrect syncing.""",
+                         description="""define if an IP address assigned to a FHRP group (like HSRP, VRRP, GLBP) will be
+                         skipped. If True this IP address will be skipped and not synced to NetBox to prevent incorrect
+                         syncing.""",
                          default_value=False),
 
             ConfigOption(**config_option_ip_tenant_inheritance_order_definition),

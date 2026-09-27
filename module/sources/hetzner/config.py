@@ -6,6 +6,7 @@ from module.config.option import ConfigOption
 class HetznerConfig(ConfigBase):
 
     section_name = source_config_section_name
+    source_name_example = "my-hetzner-example"
 
     def __init__(self):
         self.options = [

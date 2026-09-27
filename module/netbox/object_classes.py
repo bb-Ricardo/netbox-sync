@@ -693,9 +693,9 @@ class NetBoxObject:
                 def reduce_object_custom_fields_to_ids(custom_field_data: dict) -> dict:
 
                     reduced_data = dict(custom_field_data)
-                    for field_name, field_value in custom_field_data.items():
+                    for f_name, f_value in custom_field_data.items():
                         # Check for custom field type
-                        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": field_name})
+                        custom_field = self.inventory.get_by_data(NBCustomField, data={"name": f_name})
                         if custom_field is None:
                             continue
 
@@ -707,19 +707,19 @@ class NetBoxObject:
                             field_type = field_type.get("value")
 
                         # Handle object type custom fields - need only ID
-                        if field_type == "object" and isinstance(field_value, dict) and \
-                                field_value.get('id') is not None:
-                            reduced_data[field_name] = field_value.get('id')
+                        if field_type == "object" and isinstance(f_value, dict) and \
+                                f_value.get('id') is not None:
+                            reduced_data[f_name] = f_value.get('id')
 
                         # Handle multi-object type custom fields - need list of IDs
                         # NetBox reports the type of these fields as 'multiobject'
-                        elif field_type in ("multiobject", "multi-object") and isinstance(field_value, list):
+                        elif field_type in ("multiobject", "multi-object") and isinstance(f_value, list):
                             ids = []
-                            for item in field_value:
+                            for item in f_value:
                                 if isinstance(item, dict) and item.get('id') is not None:
                                     ids.append(item.get('id'))
                             if ids:
-                                reduced_data[field_name] = ids
+                                reduced_data[f_name] = ids
 
                     return reduced_data
 
@@ -1323,7 +1323,8 @@ class NBCustomField(NetBoxObject):
             NBPowerPort.object_type,
             NBClusterGroup.object_type,
             NBVMInterface.object_type,
-            NBVM.object_type
+            NBVM.object_type,
+            NBModule.object_type
         ]
 
         self.data_model = {
@@ -1904,7 +1905,7 @@ class NBCluster(NetBoxObject):
             "group": NBClusterGroup,
             "scope_type": self.mapping.scopes_object_types(self.scopes),
             # supports scoped clusters
-            "scope_id": NetBoxObject,
+            "scope_id": self.scopes,
             # supports pre4.2.0 clusters with site
             "site": NBSite,
             "tags": NBTagList
@@ -1917,6 +1918,9 @@ class NBCluster(NetBoxObject):
 
     def resolve_relations(self):
         log.debug2(f"Resolving relations for {self.name} '{self.get_display_name()}'")
+        # NetBox reports the scope as an id, turn it back into the object it points to,
+        # otherwise every run sees a change from the id to the object and updates the cluster
+        self.resolve_scoped_relations("scope_id", "scope_type")
         super().resolve_relations()
 
 
@@ -2073,7 +2077,9 @@ class NBInterface(NetBoxObject):
             "description": 200,
             "mark_connected": bool,
             "tags": NBTagList,
-            "parent": object
+            "parent": object,
+            # NetBox cascade-deletes module components, so the module owns its interfaces
+            "module": NBModule
         }
         super().__init__(*args, **kwargs)
 
@@ -2234,6 +2240,26 @@ class NBIPAddress(NetBoxObject):
             return o_interface.data.get("device")
         elif isinstance(o_interface, NBVMInterface):
             return o_interface.data.get("virtual_machine")
+
+    def get_role(self):
+        """
+        Return the role of this IP address as a plain string.
+
+        NetBox reports the role as a dict ({"value": ..., "label": ...}),
+        an object this program created itself carries the plain value.
+
+        Returns
+        -------
+        (str, None): the role of this IP address or None if unset
+        """
+
+        role = self.data.get("role")
+
+        if isinstance(role, dict):
+            return role.get("value")
+
+        return role
+
 
     def remove_interface_association(self):
         o_id = self.data.get("assigned_object_id")
@@ -2409,7 +2435,9 @@ class NBPowerPort(NetBoxObject):
             "allocated_draw": int,
             "mark_connected": bool,
             "tags": NBTagList,
-            "custom_fields": NBCustomField
+            "custom_fields": NBCustomField,
+            # the PSU module owns its power port, NetBox cascade-deletes it with the module
+            "module": NBModule
         }
         super().__init__(*args, **kwargs)
 
@@ -2516,5 +2544,91 @@ class NBCable(NetBoxObject):
             return None
 
         return " <> ".join(terminations)
+
+
+class NBModuleType(NetBoxObject):
+    name = "module type"
+    api_path = "dcim/module-types"
+    object_type = "dcim.moduletype"
+    # matched by model only, like NBDeviceType (server part models are effectively unique)
+    primary_key = "model"
+    prune = False
+    # modules replace the deprecated inventory items starting with NetBox 4.3
+    min_netbox_version = "4.3"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "model": 100,
+            "manufacturer": NBManufacturer,
+            "part_number": 50,
+            "description": 200,
+            "comments": str,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBModuleBay(NetBoxObject):
+    name = "module bay"
+    api_path = "dcim/module-bays"
+    object_type = "dcim.modulebay"
+    primary_key = "name"
+    secondary_key = "device"
+    prune = True
+    min_netbox_version = "4.3"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "device": NBDevice,
+            "name": 64,
+            "label": 64,
+            "position": 30,
+            "description": 200,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
+
+
+class NBModule(NetBoxObject):
+    name = "module"
+    api_path = "dcim/modules"
+    object_type = "dcim.module"
+    # a module has no name of its own, it is identified by the bay it is installed in
+    primary_key = "module_bay"
+    secondary_key = "device"
+    prune = True
+    min_netbox_version = "4.3"
+
+    def __init__(self, *args, **kwargs):
+        self.data_model = {
+            "device": NBDevice,
+            "module_bay": NBModuleBay,
+            "module_type": NBModuleType,
+            "status": ["offline", "active", "planned", "staged", "failed", "inventory", "decommissioning"],
+            "serial": 50,
+            "asset_tag": 50,
+            "description": 200,
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
+        }
+        super().__init__(*args, **kwargs)
+
+    def get_display_name(self, data=None, including_second_key=False):
+
+        # a module has no name on its own, derive its display name from the module bay it lives in
+        this_data_set = data if data is not None else self.data
+
+        if this_data_set is not None:
+            module_bay = this_data_set.get("module_bay")
+            if isinstance(module_bay, NetBoxObject):
+                return module_bay.get_display_name(including_second_key=including_second_key)
+            if isinstance(module_bay, dict):
+                bay_name = module_bay.get("name") or module_bay.get("display")
+                if bay_name is not None:
+                    return bay_name
+
+        return super().get_display_name(data=data, including_second_key=including_second_key)
 
 # EOF

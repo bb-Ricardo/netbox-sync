@@ -5,6 +5,7 @@ from module.sources.hetzner.config import HetznerConfig
 from module.sources.hetzner.network import sync_vm_network
 from module.sources.hetzner.disk import sync_vm_disks
 
+log = get_logger()
 
 
 from module.netbox.inventory import (
@@ -19,15 +20,12 @@ from module.netbox.inventory import (
 )
 
 
-
 class HetznerHandler(SourceBase):
 
     source_type = "hetzner"
     source_tag = "hetzner"
 
     settings = HetznerConfig()
-
-
 
     dependent_netbox_objects = [
         NBVM,
@@ -39,7 +37,6 @@ class HetznerHandler(SourceBase):
         NBVMInterface,
     ]
 
-
     def __init__(self, name=None):
 
         if name is None:
@@ -48,6 +45,7 @@ class HetznerHandler(SourceBase):
         self.inventory = NetBoxInventory()
         self.name = name
         self.log = get_logger()
+        self.client = None
 
         settings_handler = HetznerConfig()
         settings_handler.source_name = self.name
@@ -60,9 +58,6 @@ class HetznerHandler(SourceBase):
             return
 
         self.init_successful = True
-
-
-
 
     @classmethod
     def implements(cls, source_type):
@@ -81,8 +76,6 @@ class HetznerHandler(SourceBase):
         servers = self.client.get_servers()
 
         self.log.info(f"Connected to Hetzner, found {len(servers)} servers")
-
-
 
         # ---------------------------
         # main object
