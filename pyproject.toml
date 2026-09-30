@@ -1,6 +1,6 @@
 [project]
 name = "netbox-sync"
-version = "1.8.1"
+version = "1.9.0"
 description = "Sync objects from various sources to NetBox"
 authors = [
     { name = "Ricardo Bartels", email = "ricardo.bartels@telekom.de" }
@@ -10,15 +10,23 @@ license = "MIT"
 license-files = ["LICENSE.txt"]
 requires-python = ">=3.13"
 dependencies = [
-    "aiodns>=4.0.3",
-    "hcloud>=2.20.0",
-    "packaging>=26.2",
-    "pyvmomi==9.1.0.0",
-    "pyyaml>=6.0.3",
-    "requests>=2.34.2",
-    "setuptools==83.0.0",
-    "urllib3>=2.7.0",
-    "wheel>=0.47.0",
+    "aiodns==4.0.4",
+    "certifi==2026.7.22",
+    "cffi==2.1.1",
+    "charset-normalizer==3.5.2",
+    "hcloud==2.25.1",
+    "idna==3.20",
+    "packaging==26.3",
+    "pycares==5.0.1",
+    "pycparser==3.0",
+    "python-dateutil==2.9.0.post0",
+    "pyvmomi==9.1.1.0",
+    "pyyaml==6.0.3",
+    "requests==2.34.2",
+    "setuptools==84.0.0",
+    "six==1.17.0",
+    "urllib3==2.8.0",
+    "wheel==0.48.0",
 ]
 
 [project.optional-dependencies]
