@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
+#
+#  netbox-sync.py
+#
+#  This work is licensed under the terms of the MIT license.
+#  For a copy, see file LICENSE.txt included in this
+#  repository or visit: <https://opensource.org/licenses/MIT>.
+
 """
 An address whose NetBox role marks it as non-unique (anycast, vip, vrrp, hsrp,
 glbp, carp) lives on more than one interface by definition. Discovering it on a

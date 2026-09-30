@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
+#
+#  netbox-sync.py
+#
+#  This work is licensed under the terms of the MIT license.
+#  For a copy, see file LICENSE.txt included in this
+#  repository or visit: <https://opensource.org/licenses/MIT>.
+
 """
 A fan's reading is a live measurement. Syncing it means NetBox records a change on
 every run, for every fan of every server (reported by @marcinpsk on #473).

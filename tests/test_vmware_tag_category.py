@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
+#
+#  netbox-sync.py
+#
+#  This work is licensed under the terms of the MIT license.
+#  For a copy, see file LICENSE.txt included in this
+#  repository or visit: <https://opensource.org/licenses/MIT>.
+
 """
 vCenter tag handling: the exclude filter has to compare tag names, and putting the
 category into the tag name is opt-in and must not change anything else (PR #518).
