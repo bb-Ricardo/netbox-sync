@@ -23,11 +23,14 @@ RUN groupadd --gid 1000 netbox-sync && \
     useradd --uid 1000 --gid netbox-sync --shell /bin/sh \
     --no-create-home --system netbox-sync
 
-USER netbox-sync
-
-# Prepare the application
+# Prepare the application: the code belongs to root and is read-only for the
+# service user; only the cache directory is writable (group 0 as well, so an
+# arbitrary uid in group 0 can use it)
 WORKDIR /app
-COPY --chown=netbox-sync:netbox-sync . .
+COPY . .
+RUN mkdir -p /app/cache && chown netbox-sync:0 /app/cache && chmod 0770 /app/cache
+
+USER netbox-sync
 
 # Use virtual env packages and allow timezone setup
 ENV PATH=$VENV/bin:$PATH
