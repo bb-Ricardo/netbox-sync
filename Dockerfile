@@ -15,6 +15,11 @@ FROM python:3.14-slim AS netbox-sync
 
 ARG VENV=/opt/netbox-sync/venv
 
+# Install the security updates published since the base image was built
+RUN apt-get update && \
+    apt-get dist-upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy installed packages
 COPY --from=builder $VENV $VENV
 
