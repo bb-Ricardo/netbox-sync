@@ -363,7 +363,7 @@ class VMWareConfig(ConfigBase):
             ConfigOptionGroup(title="tag source",
                               description="""\
                               sync tags assigned to clusters, hosts and VMs in vCenter to NetBox
-                              INFO: this requires the installation of the 'vsphere-automation-sdk',
+                              INFO: this requires the installation of the 'vcf-sdk' package,
                               see docs about installation possible values:
                                 * object : the host or VM itself
                                 * parent_folder_1 : the direct folder this object is organized in (1 level up)

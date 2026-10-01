@@ -605,7 +605,9 @@ class VMWareHandler(SourceBase):
             return False
 
         if vsphere_automation_sdk_available is False:
-            log.warning(f"Unable to import Python 'vsphere-automation-sdk'. Tag syncing will be disabled.")
+            log.warning("Unable to import the Python 'vcf-sdk' package (successor of the archived "
+                        "'vsphere-automation-sdk', which no longer imports on Python 3.12+ with "
+                        "setuptools >= 82), run 'pip install --upgrade vcf-sdk'. Tag syncing will be disabled.")
             return False
 
         log.debug(f"Starting vCenter API connection to '{self.settings.host_fqdn}'")
