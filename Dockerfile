@@ -9,16 +9,19 @@ RUN python3 -m venv $VENV && \
     $VENV/bin/python3 -m pip install --upgrade pip && \
     $VENV/bin/pip install -r requirements.txt && \
     $VENV/bin/pip install vmware-vcenter==9.1.1.0 && \
+    $VENV/bin/python3 -m pip uninstall -y pip && \
     find $VENV -type d -name "__pycache__" -print0 | xargs -0 -n1 rm -rf
 
 FROM python:3.14-slim AS netbox-sync
 
 ARG VENV=/opt/netbox-sync/venv
 
-# Install the security updates published since the base image was built
+# Install the security updates published since the base image was built and
+# drop pip, which is not needed at runtime
 RUN apt-get update && \
     apt-get dist-upgrade -y && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m pip uninstall -y pip
 
 # Copy installed packages
 COPY --from=builder $VENV $VENV
