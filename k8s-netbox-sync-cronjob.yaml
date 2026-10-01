@@ -13,7 +13,7 @@ spec:
         spec:
           containers:
           - name: netbox-sync
-            image: bbricardo/netbox-sync:latest
+            image: ghcr.io/bb-ricardo/netbox-sync:latest
             imagePullPolicy: IfNotPresent
             args:
               - -c

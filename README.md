@@ -207,21 +207,25 @@ In Order to sync all items regularly you can add a cron job like this one
 
 ## Docker
 
-Run the application in a docker container. You can build it yourself or use the ones from docker hub.
+Run the application in a docker container. You can build it yourself or use the published images.
 
-Available here: [bbricardo/netbox-sync](https://hub.docker.com/r/bbricardo/netbox-sync)
+Available here: [ghcr.io/bb-ricardo/netbox-sync](https://github.com/bb-Ricardo/netbox-sync/pkgs/container/netbox-sync)
+
+Images used to be published on Docker Hub as [bbricardo/netbox-sync](https://hub.docker.com/r/bbricardo/netbox-sync).
+v1.9.0 is the last release pushed there; later releases are only published on the GitHub Container Registry,
+so switch the pull address to `ghcr.io/bb-ricardo/netbox-sync`.
 
 * The application working directory is ```/app```
 * Required to mount your ```settings.ini```
 
 To build it by yourself just run:
 ```shell
-docker build -t bbricardo/netbox-sync:latest .
+docker build -t ghcr.io/bb-ricardo/netbox-sync:latest .
 ```
 
 To start the container just use:
 ```shell
-docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini bbricardo/netbox-sync:latest
+docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini ghcr.io/bb-ricardo/netbox-sync:latest
 ```
 
 ## Kubernetes
