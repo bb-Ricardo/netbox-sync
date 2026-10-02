@@ -23,14 +23,15 @@ COPY --from=builder $VENV $VENV
 WORKDIR /app
 COPY . .
 
-# Install the security updates published since the base image was built and
-# Add netbox-sync user
-# Prepare the application: the code belongs to root and is read-only for the
-# service user; only the cache directory is writable (group 0 as well, so an
-# arbitrary uid in group 0 can use it)
+# Install the security updates published since the base image was built,
+# drop pip (not needed at runtime) and add the netbox-sync user.
+# The code belongs to root and is read-only for the service user; only the
+# cache directory is writable (group 0 as well, so an arbitrary uid in group 0
+# can use it)
 RUN apt-get update && \
     apt-get dist-upgrade -y && \
     rm -rf /var/lib/apt/lists/* && \
+    python3 -m pip uninstall -y --root-user-action=ignore pip && \
     groupadd --gid 1000 netbox-sync && \
     useradd --uid 1000 --gid netbox-sync --shell /bin/sh --no-create-home --system netbox-sync && \
     mkdir -p /app/cache && chown netbox-sync:0 /app/cache && chmod 0770 /app/cache
