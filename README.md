@@ -217,6 +217,7 @@ so switch the pull address to `ghcr.io/bb-ricardo/netbox-sync`.
 
 * The application working directory is ```/app```
 * Required to mount your ```settings.ini```
+* The NetBox cache is written to ```/app/cache```, mount a volume there to keep it between runs
 
 To build it by yourself just run:
 ```shell
@@ -225,7 +226,7 @@ docker build -t ghcr.io/bb-ricardo/netbox-sync:latest .
 
 To start the container just use:
 ```shell
-docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini ghcr.io/bb-ricardo/netbox-sync:latest
+docker run --rm -it -v $(pwd)/settings.ini:/app/settings.ini -v netbox-sync-cache:/app/cache ghcr.io/bb-ricardo/netbox-sync:latest
 ```
 
 ## Kubernetes
