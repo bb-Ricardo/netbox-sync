@@ -8,7 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 __version__ = "1.9.0"
-__version_date__ = "2026-09-30"
+__version_date__ = "2026-10-02"
 __author__ = "Ricardo Bartels <ricardo.bartels@telekom.de>"
 __description__ = "NetBox Sync"
 __license__ = "MIT"
