@@ -16,27 +16,24 @@ FROM python:3.14-slim AS netbox-sync
 
 ARG VENV=/opt/netbox-sync/venv
 
-# Install the security updates published since the base image was built and
-# drop pip, which is not needed at runtime
-RUN apt-get update && \
-    apt-get dist-upgrade -y && \
-    rm -rf /var/lib/apt/lists/* && \
-    python3 -m pip uninstall -y pip
-
 # Copy installed packages
 COPY --from=builder $VENV $VENV
 
-# Add netbox-sync user
-RUN groupadd --gid 1000 netbox-sync && \
-    useradd --uid 1000 --gid netbox-sync --shell /bin/sh \
-    --no-create-home --system netbox-sync
+# Copy application files
+WORKDIR /app
+COPY . .
 
+# Install the security updates published since the base image was built and
+# Add netbox-sync user
 # Prepare the application: the code belongs to root and is read-only for the
 # service user; only the cache directory is writable (group 0 as well, so an
 # arbitrary uid in group 0 can use it)
-WORKDIR /app
-COPY . .
-RUN mkdir -p /app/cache && chown netbox-sync:0 /app/cache && chmod 0770 /app/cache
+RUN apt-get update && \
+    apt-get dist-upgrade -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1000 netbox-sync && \
+    useradd --uid 1000 --gid netbox-sync --shell /bin/sh --no-create-home --system netbox-sync && \
+    mkdir -p /app/cache && chown netbox-sync:0 /app/cache && chmod 0770 /app/cache
 
 USER netbox-sync
 
