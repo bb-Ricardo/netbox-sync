@@ -900,7 +900,8 @@ class NetBoxObject:
 
             if resolved_data is not None:
                 self.data[key] = resolved_data
-            else:
+            # a type this run did not read from NetBox is expected to be unresolvable, keep the NetBox value
+            elif data_type in self.inventory.loaded_types:
                 log.error(f"Problems resolving relation '{key}' for object '{self.get_display_name()}' and "
                           f"value '{data_value}'")
 
