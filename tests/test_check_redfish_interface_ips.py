@@ -13,7 +13,9 @@ Drives the real add_update_interface() IP removal loop against real NBInterface 
 NBIPAddress objects.
 """
 
+from module.common.misc import grab
 from module.netbox.object_classes import NBInterface, NBIPAddress
+from module.sources.common.permitted_subnets import PermittedSubnets
 
 
 def seed_interface_with_ip(context, name="pnet0", address="172.10.10.12/24"):
@@ -71,3 +73,51 @@ def test_ip_is_still_removed_when_the_discovered_ips_are_unusable(check_redfish_
                                 keep_undiscovered_ips=True)
 
     assert "assigned_object_id" in ip.unset_items
+
+
+def run_network_interface_sync(check_redfish_source, **settings):
+    """Sync a server NIC port and a BMC port which both report IP addresses, like an HPE iLO
+    with AMS which reports the IPs of the operating system on the physical NICs."""
+
+    context = check_redfish_source(**settings)
+    source = context.source
+    context.inventory.netbox_api_version = "4.2.0"
+    source.interface_adapter_type_dict = {}
+    source.manager_name = "iLO 5"
+    source.settings.permitted_subnets = PermittedSubnets("10.0.0.0/8")
+    source.settings.ip_tenant_inheritance_order = []
+
+    source.inventory_file_content = {
+        "inventory": {
+            "network_port": [
+                {"id": "2.2", "addresses": ["8C:DC:D4:0F:D7:84"],
+                 "operation_status": "Enabled", "link_status": "Up", "manager_ids": [],
+                 "ipv4_addresses": ["10.40.232.163/22"], "ipv6_addresses": []},
+                {"id": "1:1", "name": "Manager Dedicated Network Interface",
+                 "addresses": ["08:F1:EA:93:F3:D6"], "operation_status": "Enabled",
+                 "link_status": "Up", "manager_ids": ["1"],
+                 "ipv4_addresses": ["10.44.102.102/22"], "ipv6_addresses": []},
+            ],
+        }
+    }
+
+    source.update_network_interface()
+
+    return {grab(ip, "data.assigned_object_id.data.name"): str(grab(ip, "data.address"))
+            for ip in context.inventory.get_all_items(NBIPAddress)}
+
+
+def test_os_reported_ips_are_synced_by_default(check_redfish_source):
+    """Without skip_os_reported_ips the IPs of all ports are synced, as before."""
+
+    assigned_ips = run_network_interface_sync(check_redfish_source)
+
+    assert assigned_ips == {"2.2": "10.40.232.163/22", "iLO 5 (1:1)": "10.44.102.102/22"}
+
+
+def test_os_reported_ips_are_skipped(check_redfish_source):
+    """With skip_os_reported_ips only the IPs of the BMC ports are synced."""
+
+    assigned_ips = run_network_interface_sync(check_redfish_source, skip_os_reported_ips=True)
+
+    assert assigned_ips == {"iLO 5 (1:1)": "10.44.102.102/22"}
