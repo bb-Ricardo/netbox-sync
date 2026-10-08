@@ -165,7 +165,12 @@ class SourceBase:
 
         # grab current data
         for interface in self.inventory.get_all_interfaces(device_vm_object):
-            int_mac = grab(interface, "data.mac_address")
+            # from NetBox 4.2 on 'mac_address' is a read-only leftover of the last NetBox read which sources
+            # don't update. Use the current primary MAC address object instead.
+            if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+                int_mac = grab(grab(interface, "data.primary_mac_address"), "data.mac_address")
+            else:
+                int_mac = grab(interface, "data.mac_address")
             int_name = grab(interface, "data.name")
 
             if interface_exclude_filter is not None and int_name is not None and \
