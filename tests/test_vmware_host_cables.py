@@ -10,14 +10,18 @@
 """
 Cables from the CDP/LLDP neighbors an ESXi host reports for its physical interfaces.
 
-The vcsim captures carry no CDP/LLDP data, so the parts which turn a reported neighbor
-into a cable are tested against a hand built inventory. What the vcsim run has to prove
-is that the feature stays completely out of the way while `sync_host_cables` is disabled.
+The vcsim captures report CDP neighbors whose switches are not in NetBox, so the parts
+which turn a reported neighbor into a cable are tested against a hand built inventory.
+What the vcsim run has to prove is that the feature stays completely out of the way
+while `sync_host_cables` is disabled.
 """
 from types import SimpleNamespace
 
 import pytest
 
+from pyVmomi import vim
+
+from module.common.misc import grab
 from module.netbox.object_classes import NBCable, NBDevice, NBInterface, NBTag
 from module.sources import instantiate_sources
 from module.sources.vmware.connection import VMWareHandler
@@ -477,5 +481,37 @@ def test_a_sync_with_the_option_enabled_still_works(vcsim, inventory, load_confi
     sources[0].apply()
 
     assert list(inventory.get_all_items(NBDevice)), "hosts must still be synced"
-    # none of the captured vcsim inventories reports a CDP/LLDP neighbor
+    # the neighbors the captures report are switches which are not in NetBox
     assert list(inventory.get_all_items(NBCable)) == []
+
+
+def test_network_hints_are_queried_without_a_device_name(vcsim, inventory, load_config, vmware_settings,
+                                                        monkeypatch):
+    # QueryNetworkHint() takes an optional list of device names. vCenter raises NotFound
+    # for a name it does not know, "" included, and no neighbor was ever read that way
+    # (issue #580). vcsim ignores the argument, so it is checked here.
+    query_network_hint = vim.host.NetworkSystem.QueryNetworkHint
+    queried = list()
+    rejected = list()
+
+    def like_vcenter(network_system, device=None):
+        # the caller swallows every exception, so a broken fake must show up in the lists, not raise
+        queried.append(device)
+        names = [device] if isinstance(device, str) else list(device or [])
+        known = [pnic.device for pnic in grab(network_system, "networkInfo.pnic", fallback=list())]
+        if any(name not in known for name in names):
+            rejected.append(device)
+            raise vim.fault.NotFound(msg="The object or item referred to could not be found.")
+        return query_network_hint(network_system, device)
+
+    monkeypatch.setattr(vim.host.NetworkSystem, "QueryNetworkHint", like_vcenter)
+
+    load_config(vmware_settings + "\nsync_host_cables = True\n")
+    sources = instantiate_sources()
+    assert sources and sources[0].init_successful
+
+    inventory.resolve_relations()
+    sources[0].apply()
+
+    assert len(queried) == len(list(inventory.get_all_items(NBDevice)))
+    assert rejected == [], "vCenter would have answered these queries with NotFound"
