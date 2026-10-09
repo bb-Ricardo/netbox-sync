@@ -236,8 +236,17 @@ class VMWareConfig(ConfigBase):
             ConfigOption("match_host_by_serial",
                          bool,
                          description="""Try to find existing host based on serial number. This can cause issues
-                         with blade centers if VMWare does not report the blades serial number properly.""",
+                         with blade centers if VMWare does not report the blades serial number properly.
+                         Hosts are matched by serial number and asset tag before MAC addresses.""",
                          default_value=True),
+
+            ConfigOption("disable_host_mac_matching",
+                         bool,
+                         description="""Don't fall back to matching hosts by physical NIC MAC address if no
+                         name+site, serial or asset tag match is found. Useful with MAC address pooling (e.g.
+                         Cisco UCS) where the same MAC can be used by hosts in different sites. Best combined
+                         with 'match_host_by_serial'. VM matching is controlled by 'match_vm_by_mac_address'.""",
+                         default_value=False),
 
             ConfigOption("match_vm_by_serial",
                          bool,

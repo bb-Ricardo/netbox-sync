@@ -1486,9 +1486,10 @@ class VMWareHandler(SourceBase):
 
         Try to find object first based on the object data, interface MAC addresses and primary IPs.
             1. try to find by name and cluster/site
-            2. try to find by mac addresses interfaces
-            3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
-            4. try to find by primary IP
+            2. ESXi host: try to find by serial number (1st), asset tag (2nd) or mac addresses of
+               interfaces (3rd, unless 'disable_host_mac_matching' is set)
+               VM: try to find by mac addresses of interfaces (1st) or serial number (2nd)
+            3. try to find by primary IP
 
         IP addresses for each interface are added here as well. First they will be checked and added
         if all checks pass. For each IP address a matching IP prefix will be searched for. First we
@@ -1575,27 +1576,12 @@ class VMWareHandler(SourceBase):
                        (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
 
         # keep searching if no exact match was found
-        elif object_type == NBVM and self.settings.match_vm_by_mac_address is False:
+        # hosts are matched by serial and asset tag before MAC addresses, as pooled MACs
+        # (e.g. Cisco UCS) are not unique per blade and can match a host in another site
+        elif object_type == NBDevice:
 
-            log.debug2("Matching VMs by MAC address is disabled via 'match_vm_by_mac_address'. Skipping.")
-
-        else:
-
-            log.debug2(f"No exact match found. Trying to find {object_type.name} based on MAC addresses")
-
-            # on VMs vnic data is used, on physical devices pnic data is used
-            mac_source_data = vnic_data if object_type == NBVM else pnic_data
-
-            nic_macs = [x.get("mac_address") for x in mac_source_data.values()]
-
-            device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
-
-        # look for devices with same serial or asset tag
-        if object_type == NBDevice:
-
-            if device_vm_object is None and object_data.get("serial") is not None and \
-                    self.settings.match_host_by_serial is True:
-                log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
+            if object_data.get("serial") is not None and self.settings.match_host_by_serial is True:
+                log.debug2(f"No exact match found. Trying to find {object_type.name} based on serial number")
 
                 device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
 
@@ -1604,6 +1590,30 @@ class VMWareHandler(SourceBase):
 
                 device_vm_object = self.inventory.get_by_data(object_type,
                                                               data={"asset_tag": object_data.get("asset_tag")})
+
+            if device_vm_object is None and self.settings.disable_host_mac_matching is True:
+
+                log.debug2("Matching hosts by MAC address is disabled via 'disable_host_mac_matching'. Skipping.")
+
+            elif device_vm_object is None:
+
+                log.debug2(f"No match found. Trying to find {object_type.name} based on MAC addresses")
+
+                nic_macs = [x.get("mac_address") for x in pnic_data.values()]
+
+                device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
+
+        elif self.settings.match_vm_by_mac_address is False:
+
+            log.debug2("Matching VMs by MAC address is disabled via 'match_vm_by_mac_address'. Skipping.")
+
+        else:
+
+            log.debug2(f"No exact match found. Trying to find {object_type.name} based on MAC addresses")
+
+            nic_macs = [x.get("mac_address") for x in vnic_data.values()]
+
+            device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
 
         # look for VMs with same serial
         if object_type == NBVM and device_vm_object is None and object_data.get("serial") is not None and \
