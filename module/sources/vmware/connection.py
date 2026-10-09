@@ -2433,10 +2433,10 @@ class VMWareHandler(SourceBase):
         pnic_hints = dict()
         # noinspection PyBroadException
         try:
-            for hint in obj.configManager.networkSystem.QueryNetworkHint(""):
+            for hint in obj.configManager.networkSystem.QueryNetworkHint():
                 pnic_hints[hint.device] = hint
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Unable to query network hints (CDP/LLDP) of host '{name}': {e}")
 
         pnic_list = grab(obj, "config.network.pnic", fallback=list())
         if self.settings.skip_host_nics is True:

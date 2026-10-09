@@ -40,6 +40,9 @@ class NetBoxInventory:
 
     def init(self):
 
+        # object types read from NetBox in this run
+        self.loaded_types = set()
+
         for object_type in NetBoxObject.__subclasses__():
 
             self.base_structure[object_type.name] = list()
@@ -210,6 +213,23 @@ class NetBoxInventory:
             log.info(f"Created new {new_object.name} object: {new_object.get_display_name()}")
 
         return new_object
+
+    def load_from_netbox(self, object_type, objects_data):
+        """
+        Adds all objects of $object_type read from NetBox to the inventory.
+
+        Parameters
+        ----------
+        object_type: NetBoxObject subclass
+            object type which was read from NetBox
+        objects_data: list
+            data of every object of this type NetBox returned
+        """
+
+        for object_data in objects_data:
+            self.add_object(object_type, data=object_data, read_from_netbox=True)
+
+        self.loaded_types.add(object_type)
 
     def add_update_object(self, object_type, data=None, read_from_netbox=False, source=None):
         """

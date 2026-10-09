@@ -981,6 +981,9 @@ class CheckRedfish(SourceBase):
 
             # collect ip addresses
             nic_ips[port_name] = list()
+            if self.settings.skip_os_reported_ips is True and mgmt_only is False:
+                continue
+
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
                 if self.settings.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:
                     continue

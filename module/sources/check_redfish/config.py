@@ -92,6 +92,15 @@ class CheckRedfishConfig(ConfigBase):
                          syncing.""",
                          default_value=False),
 
+            ConfigOption("skip_os_reported_ips",
+                         bool,
+                         description="""define if IP addresses which the BMC reports for the ports of the server
+                         itself are skipped. Some BMCs (i.e. HPE iLO with AMS) report the IP addresses of the
+                         operating system on the physical NICs. If the operating system is synced by another
+                         source (i.e. VMware ESXi hosts) these IPs would be moved back and forth between
+                         interfaces. If True only the IP addresses of the BMC ports are synced.""",
+                         default_value=False),
+
             ConfigOption(**config_option_ip_tenant_inheritance_order_definition),
         ]
 
