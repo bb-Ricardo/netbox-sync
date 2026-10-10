@@ -98,6 +98,10 @@ class VMWareHandler(SourceBase):
 
     source_type = "vmware"
 
+    # how many levels of resource pools or folders are walked when building an object path,
+    # vCenter itself allows far fewer
+    object_path_max_depth = 20
+
     recursion_level = 0
 
     # internal vars
@@ -166,6 +170,7 @@ class VMWareHandler(SourceBase):
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
         self.object_cache = dict()
+        self.object_path_cache = dict()
         self.parsing_vms_the_first_time = True
         self.objects_to_reevaluate = list()
         self.parsing_objects_to_reevaluate = False
@@ -1641,6 +1646,19 @@ class VMWareHandler(SourceBase):
                     object_data.get("platform") is not None:
                 del object_data["platform"]
 
+            # keep the tenant which is already set on the existing NetBox VM. When it is the
+            # resolved one anyway the reference stays, so the tenant object keeps its source.
+            existing_tenant = grab(device_vm_object, "data.tenant")
+            if isinstance(existing_tenant, dict):
+                existing_tenant_name = existing_tenant.get("name")
+            else:
+                existing_tenant_name = grab(existing_tenant, "data.name")
+
+            if object_type == NBVM and self.settings.overwrite_vm_tenant is False and \
+                    object_data.get("tenant") is not None and existing_tenant is not None and \
+                    existing_tenant_name != object_data["tenant"].get("name"):
+                del object_data["tenant"]
+
             if object_type == NBDevice and self.settings.overwrite_device_platform is False and \
                     object_data.get("platform") is not None:
                 del object_data["platform"]
@@ -1905,6 +1923,309 @@ class VMWareHandler(SourceBase):
             return
 
         return self.object_cache[vm_class_name].get(vm_object_id)
+
+    def add_object_paths_to_cache(self, vm_object, path_data):
+        """
+        Store computed vCenter inventory paths for a managed object so repeated
+        lookups don't have to walk the inventory tree again.
+
+        Parameters
+        ----------
+        vm_object: vim.ManagedEntity
+            vCenter object the paths belong to
+        path_data: dict
+            path name as key and the path itself as value
+        """
+
+        if vm_object is None or not isinstance(path_data, dict):
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = vm_object.__class__.__name__
+            # noinspection PyProtectedMember
+            vm_object_id = vm_object._GetMoId()
+        except Exception:
+            return
+
+        if self.object_path_cache.get(vm_class_name) is None:
+            self.object_path_cache[vm_class_name] = dict()
+
+        if self.object_path_cache[vm_class_name].get(vm_object_id) is None:
+            self.object_path_cache[vm_class_name][vm_object_id] = dict()
+
+        self.object_path_cache[vm_class_name][vm_object_id].update(path_data)
+
+    def get_object_path_from_cache(self, vm_object, path_name):
+        """
+        Return a cached vCenter inventory path of a managed object.
+
+        Parameters
+        ----------
+        vm_object: vim.ManagedEntity
+            vCenter object to look the path up for
+        path_name: str
+            name of the path to look up
+
+        Returns
+        -------
+        str, None: the cached path if present, otherwise None
+        """
+
+        if vm_object is None or path_name is None:
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = vm_object.__class__.__name__
+            # noinspection PyProtectedMember
+            vm_object_id = vm_object._GetMoId()
+        except Exception:
+            return
+
+        if self.object_path_cache.get(vm_class_name) is None:
+            return
+
+        object_paths = self.object_path_cache[vm_class_name].get(vm_object_id)
+
+        if object_paths is None:
+            return
+
+        return object_paths.get(path_name)
+
+    def get_resource_pool_path(self, vm):
+        """
+        Return the resource pool path of a VM as "Parent/Child".
+
+        The pool hierarchy is walked up starting at the VM's resource pool until the
+        cluster root resource pool is reached, the pool whose parent is the cluster
+        itself (vCenter names it "Resources"). The root pool itself is excluded from
+        the path. A VM placed directly in the
+        cluster root pool therefore gets an empty path.
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to get the resource pool path for
+
+        Returns
+        -------
+        str, None: resource pool path if the VM has a resource pool assigned,
+                   otherwise None (i.e. for template VMs)
+        """
+
+        if grab(vm, "resourcePool") is None:
+            return None
+
+        cached_path = self.get_object_path_from_cache(vm, "resource_pool_path")
+        if cached_path is not None:
+            return cached_path
+
+        path_parts = list()
+        pool = grab(vm, "resourcePool")
+
+        # walk up the pool hierarchy, the cluster root pool ends the walk: it is the pool whose
+        # parent is the cluster itself rather than another pool (vCenter names it "Resources",
+        # but a child pool may carry that name too)
+        while pool is not None and len(path_parts) < self.object_path_max_depth:
+            if not isinstance(grab(pool, "parent"), vim.ResourcePool):
+                break
+
+            pool_name = get_string_or_none(grab(pool, "name"))
+            if pool_name is None:
+                break
+
+            path_parts.append(pool_name)
+            pool = grab(pool, "parent")
+
+        if pool is not None and isinstance(grab(pool, "parent"), vim.ResourcePool):
+            log.warning(f"Resource pool hierarchy of VM '{get_string_or_none(grab(vm, 'name'))}' is deeper "
+                        f"than {self.object_path_max_depth} levels, the pool path is cut off at the top")
+
+        path = "/".join(reversed(path_parts))
+        log.debug2(f"VM '{get_string_or_none(grab(vm, 'name'))}' has resource pool path '{path}'")
+
+        self.add_object_paths_to_cache(vm, {"resource_pool_path": path})
+
+        return path
+
+    def get_vm_folder_path(self, vm):
+        """
+        Return the VM folder path of a VM as "Dept-A/Prod".
+
+        The folder hierarchy is walked up starting at the VM's parent folder until the
+        datacenter's VM folder is reached, which is excluded from the path. A VM placed
+        directly in the datacenter's VM folder therefore gets an empty path.
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to get the VM folder path for
+
+        Returns
+        -------
+        str, None: VM folder path if the VM is organized in a folder, otherwise None
+        """
+
+        if grab(vm, "parent") is None or not isinstance(grab(vm, "parent"), vim.Folder):
+            return None
+
+        cached_path = self.get_object_path_from_cache(vm, "vm_folder_path")
+        if cached_path is not None:
+            return cached_path
+
+        path_parts = list()
+        folder = grab(vm, "parent")
+
+        # walk up the folder hierarchy, the datacenter's VM folder ends the walk
+        while isinstance(folder, vim.Folder) and len(path_parts) < self.object_path_max_depth:
+
+            # the folder directly below the datacenter is the datacenter's VM folder
+            if isinstance(grab(folder, "parent"), vim.Datacenter):
+                break
+
+            folder_name = get_string_or_none(grab(folder, "name"))
+            if folder_name is None:
+                break
+
+            path_parts.append(folder_name)
+            folder = grab(folder, "parent")
+
+        if isinstance(folder, vim.Folder) and not isinstance(grab(folder, "parent"), vim.Datacenter):
+            log.warning(f"Folder hierarchy of VM '{get_string_or_none(grab(vm, 'name'))}' is deeper than "
+                        f"{self.object_path_max_depth} levels, the folder path is cut off at the top")
+
+        path = "/".join(reversed(path_parts))
+        log.debug2(f"VM '{get_string_or_none(grab(vm, 'name'))}' has VM folder path '{path}'")
+
+        self.add_object_paths_to_cache(vm, {"vm_folder_path": path})
+
+        return path
+
+    def get_vm_tenant_name(self, vm, vm_name, nb_cluster_object, cluster_full_name):
+        """
+        Resolve the NetBox tenant name for a VM based on the config options.
+
+        The tenant is resolved in this order and the first match wins:
+          1. 'vm_tenant_relation' matched against the VM name
+          2. 'vm_tenant_resource_pool_relation' matched against the resource pool path
+             and then against the plain resource pool name
+          3. 'vm_tenant_folder_relation' matched against the VM folder path and then
+             against the plain folder name
+          4. if 'vm_tenant_inherit_from_cluster' is enabled: the tenant resolved via
+             'cluster_tenant_relation' for this cluster, otherwise the tenant assigned
+             to the NetBox cluster object
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to resolve the tenant for
+        vm_name: str
+            name of the virtual machine
+        nb_cluster_object: NBCluster
+            NetBox cluster object this VM belongs to
+        cluster_full_name: str
+            cluster name as "Datacenter-name/Cluster-name"
+
+        Returns
+        -------
+        str, None: tenant name if one was resolved, otherwise None
+        """
+
+        tenant_name = self.get_object_relation(vm_name, "vm_tenant_relation")
+
+        # resolve tenant by resource pool path
+        if tenant_name is None:
+
+            resource_pool_path = self.get_resource_pool_path(vm)
+            if resource_pool_path:
+                tenant_name = self.get_object_relation(resource_pool_path, "vm_tenant_resource_pool_relation")
+
+            if tenant_name is None:
+                resource_pool_name = get_string_or_none(grab(vm, "resourcePool.name"))
+                if resource_pool_name is not None:
+                    tenant_name = self.get_object_relation(resource_pool_name,
+                                                           "vm_tenant_resource_pool_relation")
+
+        # resolve tenant by VM folder path
+        if tenant_name is None:
+
+            vm_folder_path = self.get_vm_folder_path(vm)
+            if vm_folder_path:
+                tenant_name = self.get_object_relation(vm_folder_path, "vm_tenant_folder_relation")
+
+            if tenant_name is None:
+                vm_folder_name = get_string_or_none(grab(vm, "parent.name"))
+                if vm_folder_name is not None:
+                    tenant_name = self.get_object_relation(vm_folder_name, "vm_tenant_folder_relation")
+
+        # inherit the tenant from the cluster if desired
+        if tenant_name is None and self.settings.vm_tenant_inherit_from_cluster is True:
+
+            tenant_name = self.get_object_relation(cluster_full_name, "cluster_tenant_relation")
+
+            if tenant_name is None:
+                cluster_tenant = grab(nb_cluster_object, "data.tenant")
+                if isinstance(cluster_tenant, dict):
+                    tenant_name = cluster_tenant.get("name")
+                else:
+                    tenant_name = grab(cluster_tenant, "data.name")
+
+        return tenant_name
+
+    def vm_passes_resource_pool_filter(self, vm):
+        """
+        Check a VM's resource pool against the 'vm_include_by_resource_pool_filter' and
+        'vm_exclude_by_resource_pool_filter' config options.
+
+        Both filters are applied to the resource pool path and to the plain resource pool
+        name of the VM. The VM passes the include filter when either of the two matches
+        it, and is skipped when either of the two matches the exclude filter. An empty
+        pool path is not filtered against, so a VM placed directly in the cluster root
+        pool is judged by its plain pool name only. A VM without a resource pool (a
+        template) passes the filters.
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to check
+
+        Returns
+        -------
+        bool: True if the VM passes both filters, otherwise False
+        """
+
+        include_filter = self.settings.vm_include_by_resource_pool_filter
+        exclude_filter = self.settings.vm_exclude_by_resource_pool_filter
+
+        if include_filter is None and exclude_filter is None:
+            return True
+
+        resource_pool_path = self.get_resource_pool_path(vm)
+        resource_pool_name = get_string_or_none(grab(vm, "resourcePool.name"))
+
+        pool_identifiers = [x for x in dict.fromkeys([resource_pool_path, resource_pool_name])
+                            if x not in [None, ""]]
+
+        if len(pool_identifiers) == 0:
+            return True
+
+        # first includes, the path or the plain name has to match
+        if include_filter is not None and \
+                not any(include_filter.match(x) for x in pool_identifiers):
+            log.debug(f"Resource pool '{pool_identifiers[0]}' did not match include filter "
+                      f"'{include_filter.pattern}'. Skipping")
+            return False
+
+        # second excludes, neither may match
+        if exclude_filter is not None:
+            for pool_identifier in pool_identifiers:
+                if exclude_filter.match(pool_identifier):
+                    log.debug(f"Resource pool '{pool_identifier}' matched exclude filter "
+                              f"'{exclude_filter.pattern}'. Skipping")
+                    return False
+
+        return True
 
     def add_datacenter(self, obj):
         """
@@ -2851,6 +3172,10 @@ class VMWareHandler(SourceBase):
         if self.passes_filter(name, self.settings.vm_include_filter, self.settings.vm_exclude_filter) is False:
             return
 
+        # filter VMs by resource pool path and resource pool name
+        if self.vm_passes_resource_pool_filter(obj) is False:
+            return
+
         #
         # Collect data
         #
@@ -2904,8 +3229,8 @@ class VMWareHandler(SourceBase):
         if self.settings.skip_vm_comments is False:
             annotation = get_string_or_none(grab(obj, "config.annotation"))
 
-        # assign vm_tenant_relation
-        tenant_name = self.get_object_relation(name, "vm_tenant_relation")
+        # resolve tenant for this VM
+        tenant_name = self.get_vm_tenant_name(obj, name, nb_cluster_object, cluster_full_name)
 
         # assign vm_tag_relation
         vm_tags = self.get_object_relation(name, "vm_tag_relation")
