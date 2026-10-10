@@ -45,6 +45,7 @@ def _make_source(inventory, status_on_create=None, status_preserve=None):
         match_vm_by_ip_address=True,
         overwrite_device_platform=False,
         overwrite_vm_platform=False,
+        overwrite_vm_tenant=True,
         host_role_relation=[],
         vm_role_relation=[],
         host_interface_exclude_filter=None,
