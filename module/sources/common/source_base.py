@@ -95,6 +95,20 @@ class SourceBase:
 
         return False
 
+    @staticmethod
+    def is_fc_interface(interface_type, wwn=None, mac_address=None):
+        """
+        Return True if the given interface is a Fibre Channel port.
+
+        A Fibre Channel port is identified by a NetBox FC interface type (all FC types
+        contain 'gfc') or by a world wide name (WWN) without a MAC address. An interface
+        with both a MAC address and a WWN (a converged network adapter port) is an
+        Ethernet interface with a WWN and is matched like any other Ethernet interface.
+        FC ports never take part in the leftover 1:1 name pairing of
+        'map_object_interfaces_to_current_interfaces'.
+        """
+        return "gfc" in str(interface_type or "") or (wwn is not None and mac_address is None)
+
     def map_object_interfaces_to_current_interfaces(self, device_vm_object, interface_data_dict=None,
                                                     append_unmatched_interfaces=False):
         """
@@ -107,6 +121,14 @@ class SourceBase:
                 MAC address of interfaces match exactly, distinguish between physical and virtual interfaces
             by MAC regardless of interface type
                 MAC address of interfaces match exactly, type of interface does not matter
+            by WWN:
+                an interface with a world wide name matches the current interface with the
+                same WWN when no interface of that name exists yet
+
+            Fibre Channel ports (FC interface type, or a WWN without a MAC address) never take
+            part in the leftover 1:1 name pairing below: an unmatched FC HBA is created as a
+            new interface, and an FC current interface is never handed to a discovered
+            Ethernet NIC. Interfaces with a MAC address are matched as before.
 
             If there are interfaces which don't match at all then the unmatched interfaces will be
             matched 1:1. Sort both lists (unmatched current interfaces, unmatched new interfaces)
@@ -161,6 +183,11 @@ class SourceBase:
 
         current_object_interface_names = list()
 
+        # current interfaces indexed by WWN for WWN matching, and the names of the Fibre
+        # Channel ports among them, which never take part in the leftover 1:1 name pairing
+        current_interfaces_by_wwn = dict()
+        current_fc_interface_names = set()
+
         return_data = dict()
 
         # grab current data
@@ -172,6 +199,8 @@ class SourceBase:
             else:
                 int_mac = grab(interface, "data.mac_address")
             int_name = grab(interface, "data.name")
+            int_wwn = grab(interface, "data.wwn")
+            int_type_string = grab(interface, "data.type", fallback="virtual")
 
             if interface_exclude_filter is not None and int_name is not None and \
                     interface_exclude_filter.match(int_name):
@@ -179,7 +208,7 @@ class SourceBase:
                            f"Excluding it from all interface matching attempts")
                 continue
             int_type = "virtual"
-            if "virtual" not in str(grab(interface, "data.type", fallback="virtual")):
+            if "virtual" not in str(int_type_string):
                 int_type = "physical"
 
             if int_mac is not None:
@@ -189,6 +218,13 @@ class SourceBase:
             if int_name is not None:
                 current_object_interfaces[int_name] = interface
                 current_object_interface_names.append(int_name)
+
+            if int_wwn is not None:
+                current_interfaces_by_wwn[str(int_wwn).upper()] = interface
+
+            # keep FC ports out of the leftover pairing
+            if self.is_fc_interface(int_type_string, int_wwn, int_mac):
+                current_fc_interface_names.add(int_name)
 
         log.debug2("Found '%d' NICs in NetBox for '%s'" %
                    (len(current_object_interface_names), device_vm_object.get_display_name()))
@@ -200,8 +236,12 @@ class SourceBase:
             return_data[int_name] = None
 
             int_mac = grab(int_data, "mac_address", fallback="XX:XX:YY:YY:ZZ:ZZ")
+            int_wwn = grab(int_data, "wwn")
+            int_type_string = grab(int_data, "type", fallback="virtual")
+            is_fc = self.is_fc_interface(int_type_string, int_wwn, grab(int_data, "mac_address"))
+
             int_type = "virtual"
-            if "virtual" not in str(grab(int_data, "type", fallback="virtual")):
+            if "virtual" not in str(int_type_string):
                 int_type = "physical"
 
             # match simply by name
@@ -210,13 +250,20 @@ class SourceBase:
                 log.debug2(f"Found 1:1 name match for NIC '{int_name}'")
                 matching_int = current_object_interfaces.get(int_name)
 
+            # match by WWN when no interface of that name exists yet
+            if matching_int is None and int_wwn is not None:
+                wwn_match = current_interfaces_by_wwn.get(str(int_wwn).upper())
+                if wwn_match is not None and wwn_match not in return_data.values():
+                    log.debug2(f"Found 1:1 WWN match for interface '{int_name}'")
+                    matching_int = wwn_match
+
             # match mac by interface type
-            elif grab(current_object_interfaces, f"{int_type}.{int_mac}") is not None:
+            if matching_int is None and grab(current_object_interfaces, f"{int_type}.{int_mac}") is not None:
                 log.debug2(f"Found 1:1 MAC address match for {int_type} NIC '{int_name}'")
                 matching_int = grab(current_object_interfaces, f"{int_type}.{int_mac}")
 
             # match mac regardless of interface type
-            elif current_object_interfaces.get(int_mac) is not None and \
+            if matching_int is None and current_object_interfaces.get(int_mac) is not None and \
                     current_object_interfaces.get(int_mac) not in return_data.values():
                 log.debug2(f"Found 1:1 MAC address match for NIC '{int_name}' (ignoring interface type)")
                 matching_int = current_object_interfaces.get(int_mac)
@@ -227,6 +274,11 @@ class SourceBase:
                 # check why sometimes names are not present anymore and remove fails
                 if grab(matching_int, "data.name") in current_object_interface_names:
                     current_object_interface_names.remove(grab(matching_int, "data.name"))
+
+            # an unmatched FC port is created as a new interface and never takes part in the
+            # leftover 1:1 name pairing
+            elif is_fc:
+                continue
 
             # no match found, we match the leftovers just by #1 -> #1, #2 -> #2, ...
             else:
@@ -240,7 +292,11 @@ class SourceBase:
             for int_name in unmatched_interface_names:
                 return_data[int_name] = None
         else:
-            matching_nics = dict(zip(unmatched_interface_names, current_object_interface_names))
+            # current FC ports are never handed to a discovered Ethernet NIC by the leftover pairing
+            leftover_current_interface_names = [name for name in current_object_interface_names
+                                                if name not in current_fc_interface_names]
+
+            matching_nics = dict(zip(unmatched_interface_names, leftover_current_interface_names))
 
             for new_int, current_int in matching_nics.items():
                 current_int_object = current_object_interfaces.get(current_int)

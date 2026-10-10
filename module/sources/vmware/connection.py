@@ -9,6 +9,7 @@
 
 import datetime
 import pprint
+import re
 import ssl
 from ipaddress import ip_address, ip_interface
 from urllib.parse import unquote
@@ -110,6 +111,18 @@ class VMWareHandler(SourceBase):
     # used for hosts where nothing better is known. None of these identify real hardware.
     unknown_hardware_identifiers = ["Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
                                     "to be filled by o.e.m.", "Unknown", "Generic Vendor", "Generic Model"]
+
+    # NetBox interface types for Fibre Channel HBAs, keyed by the adapter port speed in Gbit
+    fc_hba_interface_types = {
+        1: "1gfc-sfp",
+        2: "2gfc-sfp",
+        4: "4gfc-sfp",
+        8: "8gfc-sfpp",
+        16: "16gfc-sfpp",
+        32: "32gfc-sfp28",
+        64: "64gfc-qsfpp",
+        128: "128gfc-qsfp28"
+    }
 
     def __init__(self, name=None):
 
@@ -847,6 +860,75 @@ class VMWareHandler(SourceBase):
 
         return value.lower() in [x.lower() for x in VMWareHandler.unknown_hardware_identifiers]
 
+    @staticmethod
+    def fc_hba_interface_type(speed, model=None):
+        """
+        Determine a NetBox interface type for a Fibre Channel host bus adapter.
+
+        The adapter model string is used first: the first "<n>G"/"<n>Gb" capability in
+        the model is taken, i.e. "QLE2700/QLE2800 32/64G SP/DP Fibre Channel Adapter"
+        yields 32. This keeps the NetBox type stable even when a port loses link and
+        reports speed 0. Only when the model gives no speed the live port speed reported
+        by vCenter is used (1, 2, 4, 8, 16, 32, 64 or 128 Gbit). If no speed can be
+        determined the type "other" is returned.
+
+        Parameters
+        ----------
+        speed: int, str
+            port speed in Gbit as reported by vCenter
+        model: str
+            adapter model string used to derive the speed
+
+        Returns
+        -------
+        str: a NetBox interface type
+        """
+
+        if isinstance(model, str):
+            speed_match = re.search(r"(\d+)(?:/\d+)*Gb?", model)
+            if speed_match is not None:
+                model_speed = int(speed_match.group(1))
+                if model_speed in VMWareHandler.fc_hba_interface_types:
+                    return VMWareHandler.fc_hba_interface_types[model_speed]
+
+        try:
+            speed = int(speed)
+        except (TypeError, ValueError):
+            speed = None
+
+        if speed in VMWareHandler.fc_hba_interface_types:
+            return VMWareHandler.fc_hba_interface_types[speed]
+
+        return "other"
+
+    @staticmethod
+    def fc_hba_wwn(port_wwn):
+        """
+        Convert a port WWN from the decimal notation vCenter reports to the colon
+        separated 16 hex digit notation NetBox expects.
+
+        Parameters
+        ----------
+        port_wwn: int, str
+            port world wide name in decimal notation
+
+        Returns
+        -------
+        str, None: "xx:xx:xx:xx:xx:xx:xx:xx" or None if no WWN was provided
+        """
+
+        if port_wwn is None:
+            return None
+
+        try:
+            port_wwn = int(port_wwn)
+        except (TypeError, ValueError):
+            return None
+
+        hex_wwn = f"{port_wwn:016x}"
+
+        return ":".join(hex_wwn[i:i + 2] for i in range(0, 16, 2)).upper()
+
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
         Return a site name for a NBCluster or NBDevice depending on config options
@@ -1480,7 +1562,8 @@ class VMWareHandler(SourceBase):
             return resolved_name
 
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
-                                   nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None):
+                                   nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None,
+                                   fc_hba_data=None):
         """
         Add/update device/VM object in inventory based on gathered data.
 
@@ -1543,6 +1626,8 @@ class VMWareHandler(SourceBase):
             vmware object to pass on to 'add_update_interface' method to set up reevaluation
         disk_data: list
             data of discs which belong to a VM
+        fc_hba_data: dict
+            data of Fibre Channel host bus adapter interfaces, interface name as key
 
         Returns
         -------
@@ -1741,6 +1826,8 @@ class VMWareHandler(SourceBase):
             interface_exclude_filter = self.settings.vm_interface_exclude_filter
         else:
             nic_data = {**pnic_data, **vnic_data}
+            if fc_hba_data:
+                nic_data = {**nic_data, **fc_hba_data}
             interface_exclude_filter = self.settings.host_interface_exclude_filter
 
         # exclude discovered interfaces which match the exclude filter
@@ -2585,6 +2672,49 @@ class VMWareHandler(SourceBase):
 
             pnic_data_dict[pnic_name] = pnic_data
 
+        # collect Fibre Channel host bus adapters as interfaces if enabled
+        fc_hba_data_dict = dict()
+        if self.settings.sync_host_fc_adapters is True:
+            for hba in grab(obj, "config.storageDevice.hostBusAdapter", fallback=list()):
+
+                # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
+                if not isinstance(hba, vim.host.FibreChannelHba):
+                    continue
+
+                hba_device = get_string_or_none(grab(hba, "device"))
+                if hba_device is None:
+                    continue
+
+                # the WWN is what tells the interface apart from a NIC during matching
+                hba_wwn = self.fc_hba_wwn(grab(hba, "portWorldWideName"))
+                if hba_wwn is None:
+                    log.debug(f"FC HBA '{hba_device}' of host '{name}' reports no port WWN. Skipping")
+                    continue
+
+                hba_model = get_string_or_none(grab(hba, "model"))
+                hba_driver = get_string_or_none(grab(hba, "driver"))
+
+                if hba_model is not None and hba_driver is not None:
+                    hba_description = f"{hba_model} ({hba_driver})"
+                elif hba_model is not None:
+                    hba_description = hba_model
+                else:
+                    hba_description = hba_driver
+
+                fc_hba_data = {
+                    "name": unquote(hba_device),
+                    "device": None,     # will be set once we found the correct device
+                    "type": self.fc_hba_interface_type(grab(hba, "speed"), hba_model),
+                    "enabled": get_string_or_none(grab(hba, "status")) == "online",
+                    "mgmt_only": False,
+                    "wwn": hba_wwn
+                }
+
+                if hba_description is not None:
+                    fc_hba_data["description"] = hba_description
+
+                fc_hba_data_dict[hba_device] = fc_hba_data
+
         host_primary_ip4 = None
         host_primary_ip6 = None
 
@@ -2733,7 +2863,8 @@ class VMWareHandler(SourceBase):
         device_object, interface_objects = \
             self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
                                             vnic_data=vnic_data_dict, nic_ips=vnic_ips,
-                                            p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
+                                            p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj,
+                                            fc_hba_data=fc_hba_data_dict)
 
         # add cables to the switch ports which were reported via CDP/LLDP
         if device_object is not None:
