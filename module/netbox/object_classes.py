@@ -57,7 +57,15 @@ class NetBoxInterfaceType:
         "200gbase-x-qsfp56": 200_000,
         "200gbase-x-cfp2":   200_000,
         "400gbase-x-qsfpdd": 400_000,
-        "400gbase-x-osfp":   400_000
+        "400gbase-x-osfp":   400_000,
+        "1gfc-sfp":          1,
+        "2gfc-sfp":          2,
+        "4gfc-sfp":          4,
+        "8gfc-sfpp":         8,
+        "16gfc-sfpp":        16,
+        "32gfc-sfp28":       32,
+        "64gfc-qsfpp":       64,
+        "128gfc-qsfp28":     128
     }
 
     # assign common types for an interface speed value

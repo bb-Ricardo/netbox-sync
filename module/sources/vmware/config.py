@@ -634,6 +634,19 @@ class VMWareConfig(ConfigBase):
                          disabled by default.""",
                          default_value=False
                          ),
+            ConfigOption("sync_host_fc_adapters",
+                         bool,
+                         description="""Create NetBox interfaces for the Fibre Channel host bus adapters (HBAs)
+                         of an ESXi host. For each FC HBA an interface is created with the adapter's device
+                         name, an interface type derived from the adapter model's "<n>G"/"<n>Gb" capability
+                         (the first number when several are given) and only falling back to the port speed
+                         when the model gives none, the port WWN and the adapter model and driver as
+                         description. Other host bus adapter types (block, PCIe) are ignored, as is an FC
+                         adapter that reports no port WWN. 'host_interface_exclude_filter' applies to the
+                         adapter names as well. The option is independent of 'skip_host_nics'. Disabled
+                         by default.""",
+                         default_value=False
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
