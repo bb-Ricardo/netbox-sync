@@ -417,6 +417,19 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="strip domain part from VM name before syncing VM to NetBox",
                          default_value=False),
+            ConfigOption("vm_name_regex",
+                         str,
+                         description="""a regex expression applied to the vCenter VM name before any other
+                         name handling ('strip_vm_domain_name' runs after it). It must contain a named
+                         group 'name'; the match of that group becomes the NetBox VM name. An optional
+                         named group 'description' sets the VM description field (NetBox 3.4 and later)
+                         when it matches something; a description already set in NetBox is kept
+                         otherwise, like comments are. If the regex does not match, or the 'name' group
+                         matches nothing, the name is used unchanged. The resulting name is the one all
+                         other VM options see ('vm_include_filter', 'vm_exclude_filter', the
+                         'vm_*_relation' options, 'vm_exclude_disk_sync') and the one NetBox VMs are
+                         matched by, so it has to stay unique per cluster.""",
+                         config_example="^(?P<name>[^ (]+)(?: \\((?P<description>.*)\\))?$"),
             ConfigOptionGroup(title="tag source",
                               description="""\
                               sync tags assigned to clusters, hosts and VMs in vCenter to NetBox
@@ -714,6 +727,23 @@ class VMWareConfig(ConfigBase):
                     re_compiled = re.compile(option.value)
                 except Exception as e:
                     log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                option.set_value(re_compiled)
+
+                continue
+
+            if option.key == "vm_name_regex":
+
+                re_compiled = None
+                try:
+                    re_compiled = re.compile(option.value)
+                except Exception as e:
+                    log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                if re_compiled is not None and "name" not in re_compiled.groupindex:
+                    log.error(f"Config option '{option.key}' must contain a named group 'name'.")
                     self.set_validation_failed()
 
                 option.set_value(re_compiled)

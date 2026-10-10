@@ -2000,6 +2000,7 @@ class NBVM(NetBoxObject):
             "memory": int,
             "disk": int,
             "comments": str,
+            "description": 200,
             "primary_ip4": NBIPAddress,
             "primary_ip6": NBIPAddress,
             "site": NBSite,

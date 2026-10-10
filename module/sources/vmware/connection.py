@@ -103,6 +103,11 @@ class VMWareHandler(SourceBase):
     # vCenter itself allows far fewer
     object_path_max_depth = 20
 
+    # field lengths of the NetBox VM model (see NBVM.data_model), used to warn about
+    # names and descriptions vm_name_regex derives that NetBox would cut
+    vm_name_max_length = 64
+    vm_description_max_length = 200
+
     recursion_level = 0
 
     # internal vars
@@ -3194,6 +3199,61 @@ class VMWareHandler(SourceBase):
 
         return
 
+    def get_vm_name_and_description(self, name):
+        """
+        Apply the configured VM name handling to a vCenter VM name and return the
+        resulting NetBox name and an optional description.
+
+        'vm_name_regex' is applied before any other name handling. Its named group
+        'name' becomes the NetBox VM name and an optional named group 'description'
+        sets the VM description. If the regex does not match, or its 'name' group
+        takes no part in the match or matches only whitespace, the name is used
+        unchanged. 'strip_vm_domain_name' runs afterwards.
+
+        Parameters
+        ----------
+        name: str
+            VM name as reported by vCenter
+
+        Returns
+        -------
+        tuple: (name, description)
+        """
+
+        vm_description = None
+
+        # apply vm_name_regex before any other name handling
+        if name is not None and self.settings.vm_name_regex is not None:
+            regex_match = self.settings.vm_name_regex.match(name)
+            if regex_match is None:
+                log.debug2(f"VM name '{name}' does not match vm_name_regex. Using the name unchanged.")
+            else:
+                regex_name = regex_match.group("name")
+                vm_description = regex_match.groupdict().get("description")
+
+                # an optional group takes no part in the match and returns None
+                if regex_name is None or regex_name.strip() == "":
+                    log.warning(f"The 'name' group of vm_name_regex matched nothing in VM name '{name}'. "
+                                f"Using the name unchanged.")
+                else:
+                    name = regex_name
+
+                if vm_description is not None and vm_description.strip() == "":
+                    vm_description = None
+
+                if len(name) > self.vm_name_max_length:
+                    log.warning(f"VM name '{name}' derived by vm_name_regex is longer than "
+                                f"{self.vm_name_max_length} characters and will be cut")
+
+                if vm_description is not None and len(vm_description) > self.vm_description_max_length:
+                    log.warning(f"VM description '{vm_description}' derived by vm_name_regex is longer than "
+                                f"{self.vm_description_max_length} characters and will be cut")
+
+        if name is not None and self.settings.strip_vm_domain_name is True:
+            name = name.split(".")[0]
+
+        return name, vm_description
+
     def add_virtual_machine(self, obj):
         """
         Parse a vCenter VM  add to NetBox once all data is gathered.
@@ -3223,8 +3283,7 @@ class VMWareHandler(SourceBase):
 
         name = get_string_or_none(grab(obj, "name"))
 
-        if name is not None and self.settings.strip_vm_domain_name is True:
-            name = name.split(".")[0]
+        name, vm_description = self.get_vm_name_and_description(name)
 
         #
         # Filtering
@@ -3289,8 +3348,12 @@ class VMWareHandler(SourceBase):
         cluster_full_name = f"{group.name}/{cluster_name}"
 
         if name in self.processed_vm_names.get(cluster_full_name, list()) and obj not in self.objects_to_reevaluate:
-            log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
-                        "Make sure to use unique VM names. Skipping")
+            if self.settings.vm_name_regex is not None:
+                log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
+                            "'vm_name_regex' must leave the VM names unique per cluster. Skipping")
+            else:
+                log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
+                            "Make sure to use unique VM names. Skipping")
             return
 
         # add vm to processed list
@@ -3415,6 +3478,10 @@ class VMWareHandler(SourceBase):
             vm_data["platform"] = {"name": platform}
         if annotation is not None:
             vm_data["comments"] = annotation
+        # NetBox got the VM description field with 3.4.0
+        if vm_description is not None and \
+                version.parse(self.inventory.netbox_api_version) >= version.parse("3.4.0"):
+            vm_data["description"] = vm_description
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
         if len(vm_tags) > 0:
