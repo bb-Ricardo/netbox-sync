@@ -2444,10 +2444,12 @@ class VMWareHandler(SourceBase):
             if scope_type is not None:
                 # the configured scope id is a NetBox id, the cluster needs the object it points to
                 scope_object = None
+                scope_classes = [NBSite, NBSiteGroup, NBLocation, NBRegion]
                 scope_class = NetBoxMappings().get(scope_type)
-                if scope_class is None:
-                    log.error(f"Unsupported scope type '{scope_type}' for cluster '{full_cluster_name}'")
-                elif scope_id is None or not str(scope_id).strip().isdigit():
+                if scope_class not in scope_classes:
+                    log.error(f"Unsupported scope type '{scope_type}' for cluster '{full_cluster_name}', must be "
+                              f"one of: {', '.join(NetBoxMappings().scopes_object_types(scope_classes))}")
+                elif scope_id is None or not str(scope_id).strip().isdecimal():
                     log.error(f"Invalid scope id '{scope_id}' for cluster '{full_cluster_name}', "
                               f"must be the NetBox id of a {scope_class.name}")
                 else:

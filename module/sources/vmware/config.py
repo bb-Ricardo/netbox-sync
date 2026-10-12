@@ -178,6 +178,8 @@ class VMWareConfig(ConfigBase):
                                              This is done with a comma separated key = value list.
                                              Can be set to "<NONE>" to not assign a scope type.
                                              Note: this does not remove scope types from existing clusters in NetBox.
+                                             Note: cluster scopes require NetBox 4.2 or newer, the option is ignored
+                                             with older versions.
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope type name (use quotes if name contains commas)
                                              """,
@@ -188,6 +190,8 @@ class VMWareConfig(ConfigBase):
                                              The scope id is the NetBox ID of the scope type.
                                              This is done with a comma separated key = value list.
                                              To be used in combination with the 'cluster_scope_type_relation'.
+                                             Note: cluster scopes require NetBox 4.2 or newer, the option is ignored
+                                             with older versions.
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope id (use quotes if name contains commas)
                                              """,
