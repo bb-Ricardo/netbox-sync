@@ -19,6 +19,7 @@ to the colon separated upper case hex notation NetBox expects.
 from types import SimpleNamespace
 
 import pytest
+from pyVmomi import vim
 
 from module.netbox.object_classes import NBDevice, NBInterface, NBIPAddress, NBMACAddress
 from module.sources import instantiate_sources
@@ -87,6 +88,84 @@ def test_fc_hba_wwn_none_stays_none():
     assert VMWareHandler.fc_hba_wwn(None) is None
 
 
+def test_fc_hba_wwn_zero_is_no_wwn():
+    # what pyVmomi returns for an unset WWN
+    assert VMWareHandler.fc_hba_wwn(0) is None
+
+
+def _fc_hba(device, wwn=None, storage_protocol=None, pci=None):
+    hba = vim.host.FibreChannelHba(device=device, storageProtocol=storage_protocol, pci=pci)
+    if wwn is not None:
+        hba.portWorldWideName = wwn
+    return hba
+
+
+def test_fc_hba_ports_keeps_the_scsi_adapter_of_an_fc_nvme_port():
+    adapters = [
+        _fc_hba("vmhba3", 2378169741649783014, "scsi", "0000:37:00.0"),
+        _fc_hba("vmhba4", 2378169741649783015, "scsi", "0000:37:00.1"),
+        _fc_hba("vmhba64", 2378169741649783014, "nvme", "0000:37:00.0"),
+        _fc_hba("vmhba65", 2378169741649783015, "nvme", "0000:37:00.1"),
+    ]
+
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters)] == ["vmhba3", "vmhba4"]
+
+
+def test_fc_hba_ports_prefers_scsi_when_nvme_is_listed_first(caplog):
+    adapters = [
+        _fc_hba("vmhba64", 2378169741649783014, "nvme", "0000:37:00.0"),
+        _fc_hba("vmhba3", 2378169741649783014, "scsi", "0000:37:00.0"),
+    ]
+
+    caplog.set_level(1, logger="NetBox-Sync")
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters, "esxi01")] == ["vmhba3"]
+    assert any("'vmhba64' of host 'esxi01' lists the same port as 'vmhba3'" in record.getMessage()
+               for record in caplog.records), caplog.records
+
+
+def test_fc_hba_ports_keeps_adapters_sharing_a_wwn_on_different_pci_addresses():
+    # not an FC-NVMe pair, both are synced as before
+    adapters = [
+        _fc_hba("vmhba3", 2378169741649783014, "scsi", "0000:37:00.0"),
+        _fc_hba("vmhba7", 2378169741649783014, "scsi", "0000:38:00.0"),
+    ]
+
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters)] == ["vmhba3", "vmhba7"]
+
+
+def test_fc_hba_ports_keeps_an_nvme_adapter_without_scsi_counterpart():
+    adapters = [_fc_hba("vmhba64", 2378169741649783014, "nvme", "0000:37:00.0")]
+
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters)] == ["vmhba64"]
+
+
+def test_fc_hba_ports_without_storage_protocol():
+    # vCenter before 7.0 doesn't report storageProtocol
+    adapters = [
+        _fc_hba("vmhba2", 1152921507993664860),
+        _fc_hba("vmhba3", 1152921507993693731),
+    ]
+
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters)] == ["vmhba2", "vmhba3"]
+
+
+def test_fc_hba_ports_passes_on_adapters_without_wwn():
+    # pyVmomi reads an unset WWN as 0, the caller skips those adapters
+    adapters = [_fc_hba("vmhba3", storage_protocol="scsi"), _fc_hba("vmhba4", storage_protocol="scsi")]
+
+    assert [hba.portWorldWideName for hba in adapters] == [0, 0]
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters)] == ["vmhba3", "vmhba4"]
+
+
+def test_fc_hba_ports_ignores_other_adapters():
+    adapters = [
+        vim.host.BlockHba(device="vmhba0"),
+        _fc_hba("vmhba3", 2378169741649783014, "scsi"),
+    ]
+
+    assert [hba.device for hba in VMWareHandler.fc_hba_ports(adapters)] == ["vmhba3"]
+
+
 def _matching_source(inventory):
     """A VMware handler with nothing but the state interface matching needs."""
     source = object.__new__(VMWareHandler)
@@ -152,7 +231,8 @@ def test_fc_hba_matches_existing_fc_interface_by_wwn(inventory):
 
 
 def test_fc_hbas_sharing_a_wwn_are_not_merged(inventory):
-    # two ports of one adapter report the same WWN; each still gets its own interface
+    # if two discovered interfaces report the same WWN, only one of them takes over the
+    # existing interface
     source = _matching_source(inventory)
     device = inventory.add_object(NBDevice, data={"name": "esxi01"}, source=source)
 
@@ -288,14 +368,15 @@ def test_fc_adapters_synced_for_vc001(vcsim, inventory, load_config, vmware_sett
     host = _find_device(inventory, "172.29.50.68")
     fc_interfaces = _fc_interfaces(inventory, host)
 
-    assert len(fc_interfaces) == 8
+    assert len(fc_interfaces) == 4
 
     # the host also has a PCIe NVMe controller and two SATA controllers (vmhba0-2); only the
-    # Fibre Channel adapters become interfaces
+    # Fibre Channel adapters become interfaces. FC-NVMe is enabled, so ESXi lists each port
+    # a second time as vmhba64-67, those must not become interfaces of their own.
     hba_interface_names = {interface.data.get("name") for interface in inventory.get_all_interfaces(host)
                            if str(interface.data.get("name", "")).startswith("vmhba")}
-    assert hba_interface_names == {"vmhba3", "vmhba4", "vmhba5", "vmhba6",
-                                   "vmhba64", "vmhba65", "vmhba66", "vmhba67"}
+    assert hba_interface_names == {"vmhba3", "vmhba4", "vmhba5", "vmhba6"}
+    assert len({interface.data.get("wwn") for interface in fc_interfaces}) == 4
 
     # every port is a QLE2700/QLE2800, whose "32/64G" capability wins over the
     # negotiated link speed (16) and over the offline ports' speed 0
