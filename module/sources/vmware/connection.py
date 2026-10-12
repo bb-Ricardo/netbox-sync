@@ -34,6 +34,7 @@ from module.common.misc import grab, dump, get_string_or_none, plural, quoted_sp
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
+from module.netbox.object_classes import NetBoxMappings
 
 vsphere_automation_sdk_available = True
 try:
@@ -2441,10 +2442,25 @@ class VMWareHandler(SourceBase):
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
             # set the scope type and id if they are defined
             if scope_type is not None:
-                data["scope_type"] = scope_type
-                data["scope_id"] = scope_id
-                log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
-                          f"and scope id '{scope_id}'.")
+                # the configured scope id is a NetBox id, the cluster needs the object it points to
+                scope_object = None
+                scope_class = NetBoxMappings().get(scope_type)
+                if scope_class is None:
+                    log.error(f"Unsupported scope type '{scope_type}' for cluster '{full_cluster_name}'")
+                elif scope_id is None or not str(scope_id).strip().isdigit():
+                    log.error(f"Invalid scope id '{scope_id}' for cluster '{full_cluster_name}', "
+                              f"must be the NetBox id of a {scope_class.name}")
+                else:
+                    scope_object = self.inventory.get_by_id(scope_class, nb_id=int(scope_id))
+                    if scope_object is None:
+                        log.error(f"Unable to find {scope_class.name} with id '{scope_id}' in NetBox "
+                                  f"for cluster '{full_cluster_name}'")
+
+                if scope_object is not None:
+                    data["scope_type"] = scope_type
+                    data["scope_id"] = scope_object
+                    log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
+                              f"and scope id '{scope_id}'.")
             elif site_name is not None:
                 # NetBox wants the id of the scoped object, so the site has to be a real
                 # object here. A plain dict is sent as is and rejected with
