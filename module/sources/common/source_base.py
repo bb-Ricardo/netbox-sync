@@ -188,6 +188,9 @@ class SourceBase:
         current_interfaces_by_wwn = dict()
         current_fc_interface_names = set()
 
+        # NetBox stores names cut to the data model length, compare discovered names the same way
+        max_name_length = None
+
         return_data = dict()
 
         # grab current data
@@ -201,6 +204,9 @@ class SourceBase:
             int_name = grab(interface, "data.name")
             int_wwn = grab(interface, "data.wwn")
             int_type_string = grab(interface, "data.type", fallback="virtual")
+
+            if max_name_length is None and isinstance(interface.data_model.get("name"), int):
+                max_name_length = interface.data_model.get("name")
 
             if interface_exclude_filter is not None and int_name is not None and \
                     interface_exclude_filter.match(int_name):
@@ -244,11 +250,15 @@ class SourceBase:
             if "virtual" not in str(int_type_string):
                 int_type = "physical"
 
+            stored_int_name = int_name
+            if max_name_length is not None and isinstance(int_name, str):
+                stored_int_name = int_name[0:max_name_length]
+
             # match simply by name
             matching_int = None
-            if int_name in current_object_interface_names:
+            if stored_int_name in current_object_interface_names:
                 log.debug2(f"Found 1:1 name match for NIC '{int_name}'")
-                matching_int = current_object_interfaces.get(int_name)
+                matching_int = current_object_interfaces.get(stored_int_name)
 
             # match by WWN when no interface of that name exists yet
             if matching_int is None and int_wwn is not None:
