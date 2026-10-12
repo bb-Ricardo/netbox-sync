@@ -1894,19 +1894,14 @@ class VMWareHandler(SourceBase):
                 if object_type == NBVM and self.settings.overwrite_vm_interface_name is False:
                     del int_data["name"]
 
-                # the pNIC type is only derived from the current link speed. Keep a physical type
-                # which supports this speed (i.e. an SFP+ port set by redfish running at 1G or
-                # without link), otherwise both sources overwrite each other on every run.
-                if object_type == NBDevice:
-                    valid_types = NetBoxInterfaceType.valid_types
+                # vCenter derives the pNIC type from the current link speed only. Keep a physical type
+                # set by a source which knows the hardware (i.e. check_redfish) if configured.
+                if object_type == NBDevice and self.settings.overwrite_host_interface_type is False:
                     current_type = grab(nic_object_dict.get(int_name), "data.type")
                     # NetBox returns choice fields as {"value": ..., "label": ...}
                     if isinstance(current_type, dict):
                         current_type = current_type.get("value")
-                    current_speed = valid_types.get(current_type)
-                    new_speed = valid_types.get(int_data.get("type"))
-                    if isinstance(current_speed, int) and isinstance(new_speed, int) and \
-                            current_speed >= new_speed:
+                    if current_type not in [None, "virtual", "bridge", "lag", "other"]:
                         int_data.pop("type", None)
 
             # add/update interface with retrieved data

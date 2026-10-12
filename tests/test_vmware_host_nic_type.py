@@ -9,24 +9,26 @@
 
 """
 vCenter only knows the current link speed of a host pNIC, so the interface type it derives
-is a guess. A physical type already in NetBox which supports that speed (i.e. an SFP+ port
-set by the check_redfish source, running at 1G or without link) must be kept. Otherwise both
-sources overwrite each other's type on every run.
+is a guess. With 'overwrite_host_interface_type = False' a physical type already in NetBox
+(i.e. an SFP+ port set by the check_redfish source, running at 1G or without link) is kept.
+Otherwise both sources overwrite each other's type. By default vCenter still sets the type.
 """
 import pytest
 
-from module.netbox.object_classes import NBDevice, NBInterface, NetBoxInterfaceType
+from module.netbox.object_classes import NBDevice, NBInterface
 from module.sources import instantiate_sources
 
+KEEP_TYPE = "\noverwrite_host_interface_type = False\n"
 
-def first_sync(vcsim, inventory, load_config, vmware_settings):
-    load_config(vmware_settings)
+
+def first_sync(vcsim, inventory, load_config, settings):
+    load_config(settings)
     first_run = instantiate_sources()[0]
     inventory.resolve_relations()
     first_run.apply()
 
     interfaces = [i for i in inventory.get_all_items(NBInterface)
-                  if isinstance(NetBoxInterfaceType.valid_types.get(i.data.get("type")), int)]
+                  if i.data.get("type") not in [None, "virtual", "other"]]
     if not interfaces:
         pytest.skip(f"vcsim dump '{vcsim.name}' has no physical host interfaces")
 
@@ -38,12 +40,17 @@ def first_sync(vcsim, inventory, load_config, vmware_settings):
         this_object.updated_items = list()
         this_object.unset_items = list()
 
-    return interfaces
+    return {interface: interface.data.get("type") for interface in interfaces}
 
 
-def second_sync(inventory, load_config, vmware_settings):
+def second_sync(inventory, load_config, settings, nic_type):
+    for interface in inventory.get_all_items(NBInterface):
+        if interface.data.get("type") not in [None, "virtual"]:
+            # the shape NetBox hands back for a choice field
+            interface.data["type"] = {"value": nic_type, "label": nic_type}
+
     inventory.source_list = []
-    load_config(vmware_settings)
+    load_config(settings)
     second_run = instantiate_sources()[0]
     inventory.resolve_relations()
     second_run.apply()
@@ -54,29 +61,34 @@ def type_value(interface):
     return nic_type.get("value") if isinstance(nic_type, dict) else nic_type
 
 
-def test_faster_physical_type_is_kept(vcsim, inventory, load_config, vmware_settings):
-    interfaces = first_sync(vcsim, inventory, load_config, vmware_settings)
-    for interface in interfaces:
-        # the shape NetBox hands back for a choice field
-        interface.data["type"] = {"value": "400gbase-x-qsfpdd", "label": "QSFP-DD (400GE)"}
+def test_physical_type_is_kept(vcsim, inventory, load_config, vmware_settings):
+    discovered = first_sync(vcsim, inventory, load_config, vmware_settings + KEEP_TYPE)
 
-    second_sync(inventory, load_config, vmware_settings)
+    second_sync(inventory, load_config, vmware_settings + KEEP_TYPE, "10gbase-x-sfpp")
 
-    for interface in interfaces:
-        assert type_value(interface) == "400gbase-x-qsfpdd", \
+    for interface in discovered:
+        assert type_value(interface) == "10gbase-x-sfpp", \
             f"type of '{interface.get_display_name()}' was overwritten from the link speed"
 
 
-def test_slower_physical_type_is_updated(vcsim, inventory, load_config, vmware_settings):
-    interfaces = first_sync(vcsim, inventory, load_config, vmware_settings)
-    discovered = {interface: interface.data.get("type") for interface in interfaces}
-    for interface in interfaces:
-        interface.data["type"] = {"value": "100base-tx", "label": "100BASE-TX (10/100ME)"}
+def test_type_other_is_still_updated(vcsim, inventory, load_config, vmware_settings):
+    discovered = first_sync(vcsim, inventory, load_config, vmware_settings + KEEP_TYPE)
 
-    second_sync(inventory, load_config, vmware_settings)
+    second_sync(inventory, load_config, vmware_settings + KEEP_TYPE, "other")
 
     for interface, discovered_type in discovered.items():
-        if discovered_type == "100base-tx":
+        assert type_value(interface) == discovered_type, \
+            f"type 'other' of '{interface.get_display_name()}' was not updated"
+
+
+def test_type_is_overwritten_by_default(vcsim, inventory, load_config, vmware_settings):
+    """vCenter-only setups still get a wrong type corrected"""
+    discovered = first_sync(vcsim, inventory, load_config, vmware_settings)
+
+    second_sync(inventory, load_config, vmware_settings, "400gbase-x-qsfpdd")
+
+    for interface, discovered_type in discovered.items():
+        if discovered_type == "400gbase-x-qsfpdd":
             continue
         assert type_value(interface) == discovered_type, \
-            f"type of '{interface.get_display_name()}' was not updated to the link speed"
+            f"type of '{interface.get_display_name()}' was not set from the link speed"
