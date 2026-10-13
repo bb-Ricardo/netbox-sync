@@ -409,20 +409,34 @@ class VMmanagerHandler(SourceBase):
             self.log.warning("Node '%s' refers to cluster '%s' that was not imported; cluster relation left empty",
                              name, source_cluster_name)
 
+        # Match an already-managed physical server by its stable NetBox identity
+        # (name + site) before building the update payload. Existing device type,
+        # serial, asset tag, platform and description are administrator-owned data:
+        # VMmanager's node ID is not a hardware serial and its generic hypervisor
+        # type must never replace the real manufacturer/model in NetBox.
+        lookup = {"name": name[:64], "site": site}
+        existing_device = self.inventory.get_by_data(NBDevice, data=lookup)
         data = {
-            "name": name[:64], "serial": node_id[:50], "site": site,
-            "device_type": device_type, "device_role": device_role,
+            "name": name[:64], "site": site,
             "status": _status(_pick(node, "state", "status")),
         }
+        if existing_device is None:
+            # New/unmatched nodes still need a valid Device Type and Role. Do not
+            # put the VMmanager node ID in NetBox's hardware serial field.
+            data["device_type"] = device_type
+            data["device_role"] = device_role
         if cluster is not None:
             data["cluster"] = cluster
 
-        os_version = _pick(node, "os_version", "operating_system", "os")
-        if os_version:
-            platform_name = str(_scalar(os_version)).strip()[:100]
-            if platform_name:
-                data["platform"] = self.inventory.add_update_object(
-                    NBPlatform, data={"name": platform_name, "slug": _slug(platform_name)}, source=self)
+        # Only populate platform/description on newly created devices. On existing
+        # physical servers those fields may contain curated inventory information.
+        if existing_device is None:
+            os_version = _pick(node, "os_version", "operating_system", "os")
+            if os_version:
+                platform_name = str(_scalar(os_version)).strip()[:100]
+                if platform_name:
+                    data["platform"] = self.inventory.add_update_object(
+                        NBPlatform, data={"name": platform_name, "slug": _slug(platform_name)}, source=self)
 
         cpu = _as_int(_pick(node.get("cpu") if isinstance(node.get("cpu"), dict) else {},
                              "number", "total", "count") or _pick(node, "cpu_number", "cpu_count", "cores"))
@@ -437,18 +451,24 @@ class VMmanagerHandler(SourceBase):
         if custom_values:
             data["custom_fields"] = custom_values
 
-        # Include useful source facts in the device description without requiring custom fields.
-        description_parts = [f"VMmanager node ID: {node_id}"]
-        if cpu is not None:
-            description_parts.append(f"CPU: {cpu}")
-        if ram is not None:
-            description_parts.append(f"RAM: {ram} MiB")
-        if node.get("kernel_version"):
-            description_parts.append(f"Kernel: {str(node['kernel_version']).strip()}")
-        # Description is a standard NetBox device field. Extend the model below only if supported.
-        data["description"] = "; ".join(description_parts)[:200]
+        if existing_device is None:
+            # Include useful source facts for newly created devices only. Do not
+            # replace a manually maintained description on an existing server.
+            description_parts = [f"VMmanager node ID: {node_id}"]
+            if cpu is not None:
+                description_parts.append(f"CPU: {cpu}")
+            if ram is not None:
+                description_parts.append(f"RAM: {ram} MiB")
+            if node.get("kernel_version"):
+                description_parts.append(f"Kernel: {str(node['kernel_version']).strip()}")
+            data["description"] = "; ".join(description_parts)[:200]
 
         device = self.inventory.add_update_object(NBDevice, data=data, source=self)
+        if existing_device is not None:
+            self.log.info(
+                "Matched existing NetBox device '%s' to VMmanager node id %s; preserving device type, serial, asset tag, platform and description",
+                name, node_id,
+            )
         raw_ip = _pick(node, "ip", "management_ip", "mgmt_ip", "address")
         if not raw_ip:
             self.log.warning("Node '%s' has no management IP in VMmanager response", name)
