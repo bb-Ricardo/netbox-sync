@@ -835,12 +835,24 @@ class NetBoxObject:
                 read_from_netbox = True if secondary_key_value.get("id", 0) != 0 else False
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
 
-            if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False:
+            # NetBox permits global clusters without a scope. For these objects,
+            # scope_id=None is valid and should not trigger the generic missing-key
+            # warning or become part of the display/matching name. A scoped cluster
+            # with a scope_type but no scope_id remains suspicious and is warned about.
+            is_unscoped_cluster = (
+                self.name == "cluster"
+                and secondary_key == "scope_id"
+                and secondary_key_value is None
+                and this_data_set.get("scope_type") is None
+            )
+
+            if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False and not is_unscoped_cluster:
                 log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
                             f"got: {org_secondary_key_value}")
                 log.warning("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
-            my_name = f"{my_name} ({secondary_key_value})"
+            if not is_unscoped_cluster:
+                my_name = f"{my_name} ({secondary_key_value})"
 
         return my_name
 
@@ -1950,6 +1962,7 @@ class NBDevice(NetBoxObject):
             "platform": NBPlatform,
             "serial": 50,
             "site": NBSite,
+            "description": 200,
             "status": ["offline", "active", "planned", "staged", "failed", "inventory", "decommissioning"],
             "cluster": NBCluster,
             "asset_tag": 50,

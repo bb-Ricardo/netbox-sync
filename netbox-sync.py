@@ -112,10 +112,30 @@ def main():
     # initialize basic data needed for syncing
     nb_handler.initialize_basic_data()
 
-    # loop over sources and patch netbox data
+    # Load every source successfully before making any changes in NetBox.
+    # A failed source can represent a temporary outage or an incomplete snapshot;
+    # continuing could incorrectly orphan/prune objects or apply partial data.
     for source in sources:
         log.debug(f"Retrieving data from source '{source.name}'")
-        source.apply()
+        try:
+            source.apply()
+        except Exception as exc:
+            log.error(
+                "Source '%s' failed: %s. Aborting synchronization before writing "
+                "changes to NetBox; pruning and updates were not run.",
+                source.name, exc,
+            )
+            # Best-effort cleanup; don't hide the original source error.
+            for active_source in sources:
+                try:
+                    active_source.finish()
+                except Exception as cleanup_exc:
+                    log.warning("Failed to close source '%s' cleanly: %s", active_source.name, cleanup_exc)
+            try:
+                nb_handler.finish()
+            except Exception as cleanup_exc:
+                log.warning("Failed to close NetBox connection cleanly: %s", cleanup_exc)
+            exit(1)
 
     # add/remove tags to/from all inventory items
     inventory.tag_all_the_things(nb_handler)

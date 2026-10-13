@@ -580,6 +580,11 @@ class NetBoxHandler:
 
         log.debug("Checking/Adding NetBox Sync dependencies")
 
+        # The primary and orphaned tags may already exist in NetBox from a previous
+        # run. Load existing tags first so add_update_object updates/reuses them
+        # instead of trying to POST duplicates (which causes 400 conflicts).
+        self.query_current_data([NBTag])
+
         prune_text = f"Pruning is enabled and Objects will be automatically " \
                      f"removed after {self.settings.prune_delay_in_days} days"
 

@@ -290,6 +290,7 @@ Program will exit if all retries failed!
 ## Supported sources
 Check out the documentations for the different sources
 * [vmware](https://github.com/bb-Ricardo/netbox-sync/blob/main/docs/source_vmware.md)
+* [vmmanager](docs/source_vmmanager.md)
 * [check_redfish](https://github.com/bb-Ricardo/netbox-sync/blob/main/docs/source_check_redfish.md)
 
 ### Filtering

@@ -341,8 +341,14 @@ class SourceBase:
         interface_mac_address = None
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0") and \
                 interface_data.get("mac_address") is not None:
-            interface_mac_address = interface_data.get("mac_address")
+            raw_mac_address = interface_data.get("mac_address")
+            # Some inventory sources return an empty string for an unknown MAC.
+            # Treat whitespace-only values as missing and never create an invalid
+            # dcim/mac-addresses object from them.
+            interface_mac_address = str(raw_mac_address).strip() if raw_mac_address is not None else None
             del(interface_data["mac_address"])
+            if not interface_mac_address:
+                interface_mac_address = None
 
         ip_tenant_inheritance_order = self.settings.ip_tenant_inheritance_order
 
