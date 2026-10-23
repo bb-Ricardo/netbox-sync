@@ -2032,6 +2032,7 @@ class NBVMInterface(NetBoxObject):
             "untagged_vlan": NBVLAN,
             "tagged_vlans": NBVLANList,
             "description": 200,
+            "custom_fields": NBCustomField,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
