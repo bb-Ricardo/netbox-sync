@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [ "main", "development" ]
+    branches: [ "main", "development", "AWS" ]
   pull_request:
     branches: [ "main", "development" ]
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-aws.txt
           pip install pytest
 
       - name: Install vcsim
