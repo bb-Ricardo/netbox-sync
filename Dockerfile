@@ -1,13 +1,16 @@
 FROM python:3.14-slim AS builder
 
 COPY requirements.txt .
+COPY requirements-aws.txt .
 
 ARG VENV=/opt/netbox-sync/venv
+ARG INSTALL_AWS=false
 
 # Install dependencies
 RUN python3 -m venv $VENV && \
     $VENV/bin/python3 -m pip install --upgrade pip && \
     $VENV/bin/pip install -r requirements.txt && \
+    if [ "$INSTALL_AWS" = "true" ]; then $VENV/bin/pip install -r requirements-aws.txt; fi && \
     $VENV/bin/pip install vmware-vcenter==9.1.1.0 && \
     $VENV/bin/python3 -m pip uninstall -y pip && \
     find $VENV -type d -name "__pycache__" -print0 | xargs -0 -n1 rm -rf
