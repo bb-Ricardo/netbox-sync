@@ -1944,29 +1944,6 @@ class VMWareHandler(SourceBase):
 
         self.add_object_to_cache(obj, self.inventory.add_update_object(NBClusterGroup, data=object_data, source=self))
 
-    def object_synced_by_other_source(self, nb_object):
-        """
-        Check if a NetBox object is maintained by a different configured source. During
-        this run that is the source which touched the object, for objects read from NetBox
-        the source tags decide.
-
-        Parameters
-        ----------
-        nb_object: NetBoxObject
-            object to check
-
-        Returns
-        -------
-        bool: True if another configured source synced this object
-        """
-
-        if nb_object.source is not None:
-            return nb_object.source is not self
-
-        other_source_tags = [x.source_tag for x in self.inventory.source_list if x is not self]
-
-        return len(set(nb_object.get_tags()).intersection(other_source_tags)) > 0
-
     def add_cluster(self, obj):
         """
         Add a vCenter cluster as a NBCluster to NetBox. Cluster name is checked against
