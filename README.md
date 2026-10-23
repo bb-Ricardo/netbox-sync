@@ -5,7 +5,7 @@ This is a tool to sync data from different sources to a NetBox instance.
 Available source types:
 * VMware vCenter Server
 * AWS EC2, EBS, and network interfaces (see [AWS source](docs/source_aws.md))
-* * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
+* [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 
 **IMPORTANT: READ INSTRUCTIONS CAREFULLY BEFORE RUNNING THIS PROGRAM**
 
