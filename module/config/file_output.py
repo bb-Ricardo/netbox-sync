@@ -36,7 +36,8 @@ class ConfigFileOutput(DescriptionFormatterMixin):
     source_config_list = [
         VMWareConfig,
         CheckRedfishConfig,
-        HetznerConfig
+        HetznerConfig,
+        AWSConfig
     ]
 
     header = f"Welcome to the {__description__} configuration file."
