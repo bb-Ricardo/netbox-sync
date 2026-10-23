@@ -1,0 +1,2 @@
+-r requirements.txt
+ovirt-engine-sdk-python>=4.6,<5
