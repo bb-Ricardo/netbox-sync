@@ -1,3 +1,5 @@
+import re
+
 from module.common.logging import get_logger
 from module.common.misc import quoted_split
 from module.config import source_config_section_name
@@ -22,17 +24,34 @@ class AWSConfig(ConfigBase):
         self.options = [
             ConfigOption(**config_option_enabled_definition),
             ConfigOption(**{**config_option_type_definition, "config_example": "aws"}),
-            ConfigOption("regions", str, mandatory=True, config_example="us-east-1, us-west-2",
-                         description="Explicit AWS regions to import (comma-separated or a YAML list)."),
+            ConfigOption("regions", str, default_value="auto",
+                         description="""Use 'auto' to discover all account-enabled regions, or specify
+                         regions to import (comma-separated or a YAML list). Do not mix auto with region names."""),
+            ConfigOption("discovery_region", str,
+                         description="""Bootstrap region for automatic region discovery. Defaults to the
+                         AWS profile/environment region. This selects the API endpoint, not resource placement."""),
             ConfigOption("profile", str,
                          description="AWS SDK profile. Otherwise use the standard credential chain."),
             ConfigOption("account_id", str,
-                         description="Optional expected 12-digit account ID; fail if credentials use another account."),
+                         description="""Optional expected 12-digit credential account ID.
+                         In organization mode this guards the collector account, not member accounts."""),
+            ConfigOption("organization", bool, default_value=False,
+                         description="Discover active AWS Organizations accounts and assume an inventory role in each."),
+            ConfigOption("organization_role_name", str, default_value="NetBoxInventoryReadOnly",
+                         description="Inventory role name (including any path) deployed in each selected account."),
+            ConfigOption("organization_external_id", str, sensitive=True,
+                         description="Optional external ID required by the member inventory roles' trust policies."),
+            ConfigOption("organization_include_management", bool, default_value=False,
+                         description="Also scan the organization management account using its inventory role."),
+            ConfigOption("organization_account_ids", str,
+                         description="""Optional account allowlist (comma-separated or YAML list).
+                         Unset selects all active member accounts. Management inclusion is controlled separately."""),
             ConfigOption(**config_option_permitted_subnets_definition),
             ConfigOption("sync_private_ips", bool, default_value=True,
                          description="Import private IPv4 and IPv6 into pre-existing VPC-specific VRFs."),
             ConfigOption("vpc_vrf_relation", str,
                          description="""Comma-separated region/vpc-id = NetBox VRF name mappings.
+                         Use account-id/region/vpc-id keys for account-specific mappings in organization mode.
                          Unmapped VPCs require a VRF named AWS <account-id>/<region>/<vpc-id>.
                          Each VPC must have a distinct VRF; global address space is never used.""",
                          config_example="us-east-1/vpc-0123456789abcdef0 = Production VPC"),
@@ -45,13 +64,24 @@ class AWSConfig(ConfigBase):
         super().__init__()
 
     def validate_options(self):
-        for key in ("profile", "tenant"):
+        for key in ("profile", "tenant", "discovery_region",
+                    "organization_role_name", "organization_external_id"):
             value = self.get_option_by_name(key).value
             if value is not None and not isinstance(value, str):
                 log.error(f"AWS '{self.source_name}' option '{key}' must be a string.")
                 self.set_validation_failed()
 
-        for key in ("regions", "tag_keys"):
+        role = self.get_option_by_name("organization_role_name").value
+        if isinstance(role, str) and (
+                len(role) > 512 or not re.fullmatch(r"(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}", role)):
+            log.error(f"AWS '{self.source_name}' organization_role_name must be a role name with an optional path.")
+            self.set_validation_failed()
+        external_id = self.get_option_by_name("organization_external_id").value
+        if isinstance(external_id, str) and not re.fullmatch(r"[A-Za-z0-9_+=,.@:/-]{2,1224}", external_id):
+            log.error(f"AWS '{self.source_name}' organization_external_id has an invalid format.")
+            self.set_validation_failed()
+
+        for key in ("regions", "tag_keys", "organization_account_ids"):
             option = self.get_option_by_name(key)
             value = option.value
             if value is not None and not isinstance(value, (str, list)):
@@ -65,9 +95,26 @@ class AWSConfig(ConfigBase):
                 continue
             entries = list(dict.fromkeys(entry.strip() for entry in entries))
             if key == "regions" and not entries:
-                log.error(f"AWS '{self.source_name}' requires at least one explicit region.")
+                log.error(f"AWS '{self.source_name}' requires 'auto' or at least one explicit region.")
+                self.set_validation_failed()
+            if key == "regions" and "auto" in entries and entries != ["auto"]:
+                log.error(f"AWS '{self.source_name}' cannot mix 'auto' with explicit regions.")
+                self.set_validation_failed()
+            if key == "organization_account_ids" and any(
+                    not re.fullmatch(r"[0-9]{12}", entry) for entry in entries):
+                log.error(f"AWS '{self.source_name}' organization_account_ids must contain 12-digit strings.")
+                self.set_validation_failed()
+            if key == "organization_account_ids" and value is not None and not entries:
+                log.error(f"AWS '{self.source_name}' organization_account_ids must be unset or nonempty.")
                 self.set_validation_failed()
             option.set_value(entries)
+
+        if not self.get_option_by_name("organization").value and (
+                self.get_option_by_name("organization_account_ids").value or
+                self.get_option_by_name("organization_external_id").value or
+                self.get_option_by_name("organization_include_management").value):
+            log.error(f"AWS '{self.source_name}' organization options require organization = True.")
+            self.set_validation_failed()
 
         account = self.get_option_by_name("account_id").value
         if account is not None and (not isinstance(account, str) or len(account) != 12 or not account.isdigit()):
@@ -85,7 +132,8 @@ class AWSConfig(ConfigBase):
             key, separator, value = entry.partition("=")
             key, value = key.strip(' "\''), value.strip(' "\'')
             parts = key.split("/")
-            if not separator or len(parts) != 2 or not all(parts) or not value or key in mappings:
+            if not separator or len(parts) not in (2, 3) or not all(parts) or not value or key in mappings or (
+                    len(parts) == 3 and not re.fullmatch(r"[0-9]{12}", parts[0])):
                 log.error(f"Malformed or duplicate AWS VPC/VRF mapping '{entry}'.")
                 self.set_validation_failed()
                 continue
