@@ -50,15 +50,30 @@ class AWSHandler(SourceBase):
 
     def apply(self):
         try:
-            account, snapshot = self.client.discover(self.settings.regions, self.settings.account_id)
-            self.validate_snapshot(account, snapshot)
-            self.sync_snapshot(account, snapshot)
+            if self.settings.organization:
+                snapshots = self.client.discover_organization(
+                    self.settings.regions, self.settings.organization_role_name,
+                    expected_account=self.settings.account_id,
+                    discovery_region=self.settings.discovery_region,
+                    include_management=self.settings.organization_include_management,
+                    external_id=self.settings.organization_external_id,
+                    account_ids=self.settings.organization_account_ids)
+            else:
+                account, snapshot = self.client.discover(
+                    self.settings.regions, self.settings.account_id, self.settings.discovery_region)
+                snapshots = {account: snapshot}
+            vrfs = {}
+            for account, snapshot in snapshots.items():
+                self.validate_snapshot(account, snapshot, vrfs)
+            for account, snapshot in snapshots.items():
+                self.sync_snapshot(account, snapshot)
         except (AWSDiscoveryError, ValueError, KeyError) as exc:
             self.abort(exc)
 
     def vrf_name(self, account, region, vpc):
         return self.settings.vpc_vrf_relation.get(
-            f"{region}/{vpc}", f"AWS {account}/{region}/{vpc}")
+            f"{account}/{region}/{vpc}", self.settings.vpc_vrf_relation.get(
+                f"{region}/{vpc}", f"AWS {account}/{region}/{vpc}"))
 
     def get_vrf(self, account, region, vpc):
         name = self.vrf_name(account, region, vpc)
@@ -94,8 +109,9 @@ class AWSHandler(SourceBase):
                 result.append((value, primary))
         return result
 
-    def validate_snapshot(self, account, snapshot):
-        vrfs = {}
+    def validate_snapshot(self, account, snapshot, vrfs=None):
+        if vrfs is None:
+            vrfs = {}
         for region, data in snapshot.items():
             for instance in data["instances"]:
                 spec = data["InstanceTypes"].get(instance["InstanceType"])
@@ -208,14 +224,24 @@ class AWSHandler(SourceBase):
                 vm.remove_tags(tag)
         if api_version >= Version("3.7"):
             for volume in disks:
-                self.inventory.add_update_object(NBVirtualDisk, data={
+                self.add_update_vm_child(NBVirtualDisk, vm, {
                     "name": volume["VolumeId"], "virtual_machine": vm,
                     "size": volume["Size"] * (1024 if api_version >= Version("4.1") else 1),
                     "description": f"AWS EBS {volume['VolumeType']}",
-                }, source=self)
+                })
         for reference in instance.get("NetworkInterfaces", []):
             eni = data["NetworkInterfaces"][reference["NetworkInterfaceId"]]
             self.sync_interface(account, region, vm, eni, data, api_version)
+
+    def add_update_vm_child(self, object_type, vm, data):
+        # Display-name matching loses the VM's account/cluster when names repeat.
+        existing = next((item for item in self.inventory.get_all_items(object_type)
+                         if item.data.get("virtual_machine") is vm and
+                         item.data.get("name") == data["name"]), None)
+        if existing is None:
+            return self.inventory.add_object(object_type, data=data, source=self)
+        existing.update(data=data, source=self)
+        return existing
 
     def sync_interface(self, account, region, vm, eni, data, api_version):
         interface_data = {
@@ -234,7 +260,7 @@ class AWSHandler(SourceBase):
         mac = normalize_mac_address(eni.get("MacAddress"))
         if api_version < Version("4.2"):
             interface_data["mac_address"] = mac
-        interface = self.inventory.add_update_object(NBVMInterface, data=interface_data, source=self)
+        interface = self.add_update_vm_child(NBVMInterface, vm, interface_data)
         if api_version >= Version("4.2") and mac is not None:
             mac_object = next((item for item in self.inventory.get_all_items(NBMACAddress)
                                if item.data.get("mac_address") == mac and
