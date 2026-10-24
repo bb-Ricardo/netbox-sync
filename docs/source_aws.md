@@ -29,8 +29,10 @@ Use the standard boto3 credential chain:
 * `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`; temporary credentials also need
   `AWS_SESSION_TOKEN`. Prefer roles over stored access keys.
 
-Each configured source handles one AWS account and an explicit region list.
-Configure another named source/profile for another account. The optional
+By default each configured source handles one AWS account. Regions are discovered
+automatically by default (`regions = auto`); an explicit list is also supported.
+For multiple accounts, use organization mode below or configure separate named
+sources/profiles. The optional
 `account_id` guard verifies the account returned by STS before importing anything.
 Profile-based assume-role credential refresh is handled by boto3. Credentials
 must allow access to every configured region.
@@ -53,6 +55,7 @@ Example IAM policy (attach to a dedicated role or non-root identity):
         "ec2:DescribeVolumes",
         "ec2:DescribeSubnets",
         "ec2:DescribeVpcs",
+        "ec2:DescribeRegions",
         "sts:GetCallerIdentity"
       ],
       "Resource": "*"
@@ -63,14 +66,15 @@ Example IAM policy (attach to a dedicated role or non-root identity):
 
 An assume-role profile additionally needs `sts:AssumeRole` permission on the
 target role and a matching target-account trust policy (and external ID where
-required). No Organizations permissions are used.
+required). Single-account mode does not use Organizations permissions.
 
 ## Configuration
 
 ```ini
 [source/production-aws]
 type = aws
-regions = us-east-1, us-west-2
+regions = auto
+discovery_region = us-east-1
 profile = inventory
 account_id = 123456789012
 permitted_subnets = 10.0.0.0/8, 2001:db8::/32
@@ -84,6 +88,183 @@ environment variables. `regions` and `tag_keys` accept YAML lists as well as
 comma-separated strings. Quote the account ID in YAML so it remains a string.
 `python netbox-sync.py -g` generates the full configuration.
 
+### Automatic or explicit regions
+
+`regions = auto` (also the default when omitted) calls EC2 `DescribeRegions` and
+queries regions whose opt-in status is `opt-in-not-required` or `opted-in`.
+Disabled regions (`not-opted-in`) are excluded. Each resource is mapped to the
+region that returned it, never to the bootstrap region.
+
+Auto discovery requires a bootstrap endpoint: set `discovery_region`, or provide
+a region through the AWS profile or `AWS_DEFAULT_REGION`. There is no hardcoded
+commercial-region fallback; choose an endpoint in the appropriate AWS partition
+(for example GovCloud or China when applicable). The account's enabled regions
+in that partition are discovered. A missing bootstrap region fails explicitly.
+
+To restrict scope, use `regions = us-east-1, us-west-2` or a YAML list. Explicit
+mode does not call `DescribeRegions`, does not need that permission, and ignores
+`discovery_region`. Do not combine `auto` and named regions in the same list.
+
+Auto mode requires `ec2:DescribeRegions` in addition to the inventory permissions.
+Failure to discover regions, an empty enabled-region result, or failure to query
+any enabled region aborts synchronization before NetBox writes or pruning.
+There is no silent fallback to a partial region list. Use explicit mode when
+credentials are intentionally restricted to a subset of enabled regions.
+Switching between modes changes discovery scope; inspect a dry run before
+allowing writes, particularly if narrowing to an explicit list.
+
+### Organization / multi-account discovery
+
+For an organization with many member accounts, enable organization mode:
+
+```ini
+[source/aws-organization]
+type = aws
+profile = inventory-collector
+organization = True
+organization_role_name = NetBoxInventoryReadOnly
+discovery_region = us-east-1
+regions = auto
+sync_private_ips = False
+; Optional safety check: the account hosting the collector credentials
+account_id = 665801164956
+; Start with one or two member accounts before enabling the full organization:
+;organization_account_ids = 111122223333, 444455556666
+;organization_external_id = your-administrator-provided-external-id
+;organization_include_management = False
+```
+
+The collector enumerates all account pages (including empty pages with a
+continuation token), selects accounts with `State = ACTIVE`, and excludes the
+organization's management account by default. It assumes the named role in each
+selected account, verifies the resulting account identity, then discovers that
+account's regions and resources. No EC2 permissions are needed on the collector
+identity when management-account scanning is disabled.
+
+`organization_account_ids` is an optional allowlist, not an account-ID guard.
+Quote IDs in YAML lists. An explicitly empty list is invalid; omit the option to
+select all active members. Unknown, inactive, or excluded IDs in that list cause
+an error rather than silently reducing scope. To scan the management account, set
+`organization_include_management = True` and deploy the same inventory role
+there. A role path such as `service-accounts/NetBoxInventoryReadOnly` is supported.
+Role ARNs use the collector's AWS partition; cross-partition discovery is not
+supported.
+
+All selected accounts are collected and validated before reconciliation. An
+Organizations API error, role-assumption failure, account mismatch, or regional
+discovery failure aborts the entire run before NetBox writes or pruning. No
+inaccessible account is treated as empty. A selection with no eligible accounts
+also fails. Account discovery and scanning are sequential. Fresh one-hour STS
+credentials are obtained immediately before each account scan, so time spent
+scanning earlier accounts does not consume later accounts' credential lifetime.
+These member credentials are held only in memory and are not automatically
+renewed within an individual account scan; expiration fails the run safely.
+Collector profile credential refresh remains managed by boto3.
+
+#### AWS profile
+
+The profile supplies **collector credentials**, not a separate profile for every
+member. No custom organization settings are needed in the AWS profile; the
+organization options belong in the application's source section.
+
+For an existing named credentials entry `inventory-collector`, the AWS shared
+config can contain:
+
+```ini
+[profile inventory-collector]
+region = us-east-1
+```
+
+Store its credentials in the standard AWS shared credentials file under
+`[inventory-collector]`, or use an existing assume-role/SSO profile supported by
+boto3. On Windows the standard files are `%USERPROFILE%\.aws\config` and
+`%USERPROFILE%\.aws\credentials`; on Linux they are `~/.aws/config` and
+`~/.aws/credentials`. Authenticate SSO profiles before an interactive test.
+For unattended jobs prefer a workload IAM role or an automatically refreshable
+credential provider, not an expiring interactive SSO login.
+
+For example, if the collector itself uses an assume-role profile:
+
+```ini
+[profile inventory-collector]
+role_arn = arn:aws:iam::665801164956:role/NetBoxOrganizationCollector
+source_profile = existing-base-profile
+region = us-east-1
+```
+
+The base profile must be authorized to assume that collector role, and the role
+must trust it. The collector role then needs the permissions below. If the
+collector runs with an attached IAM role or environment credentials, omit the
+application `profile` setting entirely. Never store access keys in the source
+configuration or commit credential files.
+
+#### Collector permissions
+
+Run from the management account or an appropriately delegated administrator
+allowed to list organization accounts. Attach this policy to the collector user
+or role, adjusting the role path and partition if needed:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "organizations:DescribeOrganization",
+        "organizations:ListAccounts"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::*:role/NetBoxInventoryReadOnly"
+    }
+  ]
+}
+```
+
+Restrict the role ARN account list to your member accounts where feasible.
+AWS-managed `ReadOnlyAccess` covers the EC2 inventory permissions but does not
+replace the required cross-account `sts:AssumeRole` grant.
+
+#### Member-account inventory role
+
+Deploy `NetBoxInventoryReadOnly` in every selected member account, for example
+with CloudFormation StackSets. Attach the EC2 read policy above or AWS-managed
+`ReadOnlyAccess`. Set its trust policy to allow the **exact collector principal**.
+For the IAM user from the reported test, that policy is:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::665801164956:user/service-accounts/netbox-reports-client"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+If using the collector-role profile above, replace the principal with
+`arn:aws:iam::665801164956:role/NetBoxOrganizationCollector`.
+If your administrator requires an external ID, add a
+`Condition: {"StringEquals": {"sts:ExternalId": "<external-id>"}}` to the trust
+statement and set the same `organization_external_id` in the application.
+MFA-protected member-role assumption is not interactive; use an administrator-
+approved unattended trust policy. SCPs and permissions boundaries must also
+allow the calls. No roles or IAM policies are created by the importer.
+
+Adding an allowlist, excluding management, or removing/inactivating an account
+changes the source's authoritative scope and can orphan previously imported
+objects under the existing pruning rules. Review a dry run before changing
+scope. Avoid overlapping single-account and organization source definitions.
+
 ### VPC address-space isolation
 
 The current NetBox integration reads VRFs and prefixes but does not create them.
@@ -96,8 +277,16 @@ AWS <account-id>/<region>/<vpc-id>
 
 For example: `AWS 123456789012/us-east-1/vpc-0123456789abcdef0`.
 Use `vpc_vrf_relation` to select an existing differently named VRF. A mapping
-must not share a VRF between discovered VPCs. VRFs must remain distinct across
-separately configured sources too.
+key may be `account-id/region/vpc-id` in organization mode; this takes precedence
+over a legacy `region/vpc-id` mapping. For example:
+
+```ini
+vpc_vrf_relation = 111122223333/us-east-1/vpc-0123456789abcdef0 = Production VPC
+```
+
+A mapping must not share a VRF between discovered VPCs. VRFs must remain distinct across
+accounts and separately configured sources too. Organization mode validates
+VRF isolation across all selected accounts before reconciliation.
 
 Missing VRFs for permitted addresses abort the run before inventory updates.
 There is no fallback to global address space. Subnet mask lengths come from AWS
