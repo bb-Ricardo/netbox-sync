@@ -4,7 +4,7 @@ This is a tool to sync data from different sources to a NetBox instance.
 
 Available source types:
 * VMware vCenter Server
-* OpenStack (optional `openstacksdk` dependency)
+* OpenStack (optional `openstacksdk` dependency; see [OpenStack source](docs/source_openstack.md))
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 
 **IMPORTANT: READ INSTRUCTIONS CAREFULLY BEFORE RUNNING THIS PROGRAM**
@@ -41,6 +41,7 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * check_redfish >= 1.2.0
 #### Source: OpenStack (if used)
 * Identity v3, Nova and Cinder APIs; `openstacksdk>=4.0,<5`
+* See [OpenStack installation and configuration](docs/source_openstack.md) for credentials, permissions, and inventory mapping
 
 # Installing
 * here we assume we install in ```/opt```
