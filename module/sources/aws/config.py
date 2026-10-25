@@ -35,6 +35,8 @@ class AWSConfig(ConfigBase):
             ConfigOption("account_id", str,
                          description="""Optional expected 12-digit credential account ID.
                          In organization mode this guards the collector account, not member accounts."""),
+            ConfigOption("account_name", str,
+                         description="Optional friendly account name for NetBox cluster labels in single-account mode."),
             ConfigOption("organization", bool, default_value=False,
                          description="Discover active AWS Organizations accounts and assume an inventory role in each."),
             ConfigOption("organization_role_name", str, default_value="NetBoxInventoryReadOnly",
@@ -64,7 +66,7 @@ class AWSConfig(ConfigBase):
         super().__init__()
 
     def validate_options(self):
-        for key in ("profile", "tenant", "discovery_region",
+        for key in ("profile", "tenant", "discovery_region", "account_name",
                     "organization_role_name", "organization_external_id"):
             value = self.get_option_by_name(key).value
             if value is not None and not isinstance(value, str):
