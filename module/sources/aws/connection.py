@@ -89,10 +89,16 @@ class AWSHandler(SourceBase):
                 f"{region}/{vpc}", f"AWS {account}/{region}/{vpc}"))
 
     def get_vrf(self, account, region, vpc):
+        account_region_vpc = f"{account}/{region}/{vpc}"
+        region_vpc = f"{region}/{vpc}"
+        has_mapping = account_region_vpc in self.settings.vpc_vrf_relation or \
+            region_vpc in self.settings.vpc_vrf_relation
         name = self.vrf_name(account, region, vpc)
         vrf = self.inventory.get_by_data(NBVRF, data={"name": name})
         if vrf is None:
-            raise ValueError(f"Create NetBox VRF '{name}' for VPC '{vpc}' before importing its IPs")
+            if has_mapping:
+                raise ValueError(f"Create mapped NetBox VRF '{name}' for VPC '{vpc}' before importing its IPs")
+            vrf = self.inventory.add_object(NBVRF, data={"name": name}, source=self)
         return vrf
 
     def addresses(self, eni, subnet):
