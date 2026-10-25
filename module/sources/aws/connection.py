@@ -58,15 +58,28 @@ class AWSHandler(SourceBase):
                     include_management=self.settings.organization_include_management,
                     external_id=self.settings.organization_external_id,
                     account_ids=self.settings.organization_account_ids)
+                account_names = getattr(self.client, "account_names", {})
             else:
                 account, snapshot = self.client.discover(
                     self.settings.regions, self.settings.account_id, self.settings.discovery_region)
                 snapshots = {account: snapshot}
+                account_names = {}
             vrfs = {}
             for account, snapshot in snapshots.items():
                 self.validate_snapshot(account, snapshot, vrfs)
+            account_labels = {
+                account: account_names.get(account) or self.settings.account_name or account
+                for account in snapshots
+            }
+            label_counts = {}
+            for label in account_labels.values():
+                key = label.casefold()
+                label_counts[key] = label_counts.get(key, 0) + 1
+            for account, label in account_labels.items():
+                if label_counts[label.casefold()] > 1:
+                    account_labels[account] = f"{label} ({account})"
             for account, snapshot in snapshots.items():
-                self.sync_snapshot(account, snapshot)
+                self.sync_snapshot(account, snapshot, account_name=account_labels[account])
         except (AWSDiscoveryError, ValueError, KeyError) as exc:
             self.abort(exc)
 
@@ -165,16 +178,17 @@ class AWSHandler(SourceBase):
                 "description": f"Reported by AWS ({self.name})",
             })
 
-    def sync_snapshot(self, account, snapshot):
+    def sync_snapshot(self, account, snapshot, account_name=None):
         self.custom_fields()
+        account_name = account_name or account
         group = self.inventory.add_update_object(
-            NBClusterGroup, data={"name": f"AWS {account}"}, source=self)
+            NBClusterGroup, data={"name": f"AWS {account_name}"}, source=self)
         api_version = Version(self.inventory.netbox_api_version)
         for region, data in snapshot.items():
             site = self.inventory.add_update_object(
                 NBSite, data={"name": f"AWS {region}"}, source=self)
             cluster_data = {
-                "name": f"AWS {account}/{region}", "group": group,
+                "name": f"AWS {account_name}/{region}", "group": group,
                 "type": {"name": "AWS EC2"},
             }
             if api_version >= Version("4.2"):
@@ -182,15 +196,26 @@ class AWSHandler(SourceBase):
             else:
                 cluster_data["site"] = site
             cluster = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
+            name_counts = {}
             for instance in data["instances"]:
-                self.sync_instance(account, region, instance, data, site, cluster, api_version)
+                name = next((tag["Value"].strip() for tag in instance.get("Tags", [])
+                             if tag["Key"] == "Name" and tag["Value"].strip()), instance["InstanceId"])
+                key = name.casefold()
+                name_counts[key] = name_counts.get(key, 0) + 1
+            for instance in data["instances"]:
+                tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
+                vm_name = tags.get("Name", "").strip() or instance["InstanceId"]
+                if name_counts[vm_name.casefold()] > 1:
+                    vm_name = f"{vm_name} ({instance['InstanceId']})"
+                self.sync_instance(
+                    account, region, instance, data, site, cluster, api_version, vm_name=vm_name)
 
-    def sync_instance(self, account, region, instance, data, site, cluster, api_version):
+    def sync_instance(self, account, region, instance, data, site, cluster, api_version, vm_name=None):
         instance_id = instance["InstanceId"]
         tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
         spec = data["InstanceTypes"][instance["InstanceType"]]
         vm_data = {
-            "name": instance_id, "cluster": cluster,
+            "name": vm_name or tags.get("Name", "").strip() or instance_id, "cluster": cluster,
             "status": "active" if instance["State"]["Name"] == "running" else "offline",
             "vcpus": spec["VCpuInfo"]["DefaultVCpus"],
             "memory": spec["MemoryInfo"]["SizeInMiB"],
@@ -218,7 +243,13 @@ class AWSHandler(SourceBase):
         ]
         if api_version < Version("3.7"):
             vm_data["disk"] = sum(volume["Size"] for volume in disks)
-        vm = self.inventory.add_update_object(NBVM, data=vm_data, source=self)
+        vm = next((item for item in self.inventory.get_all_items(NBVM)
+                   if (item.data.get("custom_fields") or {}).get("aws_account_id") == account and
+                   (item.data.get("custom_fields") or {}).get("aws_instance_id") == instance_id), None)
+        if vm is None:
+            vm = self.inventory.add_update_object(NBVM, data=vm_data, source=self)
+        else:
+            vm.update(data=vm_data, source=self)
         for tag in vm.get_tags():
             if any(tag.startswith(f"AWS:{key}=") for key in self.settings.tag_keys) and tag not in vm_data["tags"]:
                 vm.remove_tags(tag)
