@@ -177,13 +177,21 @@ def test_overlapping_vpcs_have_distinct_ips(make_source, inventory, vpc_vrf):
     assert len(inventory.get_all_items(NBIPAddress)) == 6
 
 
-def test_missing_vrf_aborts_before_inventory_changes(make_source, inventory, caplog):
+def test_missing_default_vrf_is_created_for_vpc(make_source, inventory):
     source = make_source()
+    source.apply()
+    vrf, = inventory.get_all_items(NBVRF)
+    assert vrf.data["name"] == f"AWS {ACCOUNT}/{REGION}/{VPC}"
+    assert inventory.get_all_items(NBVM)
+    assert len(inventory.get_all_items(NBIPAddress)) == 3
+
+
+def test_missing_mapped_vrf_aborts_before_vm_import(make_source, inventory):
+    source = make_source(f"vpc_vrf_relation = {REGION}/{VPC} = Production")
     with pytest.raises(SystemExit):
         source.apply()
     assert inventory.get_all_items(NBVM) == []
     assert inventory.get_all_items(NBCluster) == []
-    assert "Create NetBox VRF" in caplog.text
 
 
 def test_missing_volume_aborts_before_inventory_changes(make_source, inventory, vpc_vrf):
