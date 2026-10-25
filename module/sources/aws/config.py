@@ -50,11 +50,12 @@ class AWSConfig(ConfigBase):
                          Unset selects all active member accounts. Management inclusion is controlled separately."""),
             ConfigOption(**config_option_permitted_subnets_definition),
             ConfigOption("sync_private_ips", bool, default_value=True,
-                         description="Import private IPv4 and IPv6 into pre-existing VPC-specific VRFs."),
+                         description="Import private IPv4 and IPv6 into VPC-specific VRFs, creating default VRFs as needed."),
             ConfigOption("vpc_vrf_relation", str,
                          description="""Comma-separated region/vpc-id = NetBox VRF name mappings.
                          Use account-id/region/vpc-id keys for account-specific mappings in organization mode.
-                         Unmapped VPCs require a VRF named AWS <account-id>/<region>/<vpc-id>.
+                         Unmapped VPCs automatically create a VRF named AWS <account-id>/<region>/<vpc-id>.
+                         Mapped VRF names must already exist in NetBox.
                          Each VPC must have a distinct VRF; global address space is never used.""",
                          config_example="us-east-1/vpc-0123456789abcdef0 = Production VPC"),
             ConfigOption("tag_keys", str,
