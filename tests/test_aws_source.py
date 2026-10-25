@@ -116,11 +116,12 @@ def test_ec2_ebs_eni_import(make_source, inventory, vpc_vrf, api_version):
     vm, = inventory.get_all_items(NBVM)
     cluster, = inventory.get_all_items(NBCluster)
     interface, = inventory.get_all_items(NBVMInterface)
-    assert vm.data["name"] == INSTANCE
     assert vm.data["status"] == "active"
+    assert vm.data["name"] == "web"
     assert vm.data["vcpus"] == 2
     assert vm.data["memory"] == 2048
     assert vm.data["custom_fields"]["aws_name"] == "web"
+    assert vm.data["custom_fields"]["aws_instance_id"] == INSTANCE
     assert vm.data["tenant"].data["name"] == "Operations"
     assert "AWS:Environment=test" in vm.get_tags()
     assert interface.data["name"] == ENI
@@ -213,8 +214,51 @@ def test_name_tag_rename_does_not_duplicate_vm(make_source, inventory, vpc_vrf):
     data["instances"][0]["Tags"][0]["Value"] = "renamed"
     source.apply()
     vm, = inventory.get_all_items(NBVM)
-    assert vm.data["name"] == INSTANCE
+    assert vm.data["name"] == "renamed"
     assert vm.data["custom_fields"]["aws_name"] == "renamed"
+
+
+def test_missing_name_tag_uses_instance_id(make_source, inventory, vpc_vrf):
+    data = inventory_data()
+    data["instances"][0]["Tags"] = [{"Key": "Environment", "Value": "test"}]
+    make_source(data=data).apply()
+    vm, = inventory.get_all_items(NBVM)
+    assert vm.data["name"] == INSTANCE
+    assert vm.data["custom_fields"]["aws_instance_id"] == INSTANCE
+
+
+def test_duplicate_name_tags_include_instance_ids(make_source, inventory, vpc_vrf):
+    data = inventory_data()
+    duplicate = copy.deepcopy(data["instances"][0])
+    duplicate_id = "i-11111111111111111"
+    duplicate["InstanceId"] = duplicate_id
+    duplicate["NetworkInterfaces"] = []
+    duplicate["BlockDeviceMappings"] = []
+    data["instances"].append(duplicate)
+    make_source(data=data).apply()
+    assert {vm.data["name"] for vm in inventory.get_all_items(NBVM)} == {
+        f"web ({INSTANCE})", f"web ({duplicate_id})",
+    }
+
+
+def test_account_name_is_used_for_cluster_labels(make_source, inventory, vpc_vrf):
+    make_source("account_name = Production", data=inventory_data()).apply()
+    cluster, = inventory.get_all_items(NBCluster)
+    assert cluster.data["name"] == f"AWS Production/{REGION}"
+
+
+def test_duplicate_organization_account_names_remain_distinct(make_source, inventory):
+    snapshot = {REGION: inventory_data()}
+    source = make_source("organization = True\nsync_private_ips = False")
+    source.client.account_names = {ACCOUNT: "Shared", SECOND_ACCOUNT: "Shared"}
+    source.client.discover_organization = Mock(return_value={
+        ACCOUNT: snapshot, SECOND_ACCOUNT: snapshot,
+    })
+    source.apply()
+    assert {cluster.data["name"] for cluster in inventory.get_all_items(NBCluster)} == {
+        f"AWS Shared ({ACCOUNT})/{REGION}", f"AWS Shared ({SECOND_ACCOUNT})/{REGION}",
+    }
+    assert len(inventory.get_all_items(NBVM)) == 2
 
 
 def test_removed_aws_tag_is_reconciled_but_user_tag_is_kept(make_source, inventory, vpc_vrf):
@@ -707,10 +751,10 @@ def organization_accounts(sdk, accounts=None, partition="aws"):
     }, {})
     sdk.central.organizations.add_response("list_accounts", {
         "Accounts": accounts if accounts is not None else [
-            {"Id": MANAGEMENT, "State": "ACTIVE"},
-            {"Id": ACCOUNT, "State": "ACTIVE"},
-            {"Id": SECOND_ACCOUNT, "State": "ACTIVE"},
-            {"Id": "345678901234", "State": "SUSPENDED"},
+            {"Id": MANAGEMENT, "Name": "Management", "State": "ACTIVE"},
+            {"Id": ACCOUNT, "Name": "Production", "State": "ACTIVE"},
+            {"Id": SECOND_ACCOUNT, "Name": "Development", "State": "ACTIVE"},
+            {"Id": "345678901234", "Name": "Suspended", "State": "SUSPENDED"},
         ],
     }, {"NextToken": "next-page"})
 
@@ -754,7 +798,7 @@ def test_organization_scans_members_not_management(org_sdk, inventory, load_conf
     assert len(vms) == 2
     assert {vm.data["custom_fields"]["aws_account_id"] for vm in vms} == {ACCOUNT, SECOND_ACCOUNT}
     assert {vm.data["cluster"].data["name"] for vm in vms} == {
-        f"AWS {ACCOUNT}/{REGION}", f"AWS {SECOND_ACCOUNT}/{REGION}",
+        f"AWS Production/{REGION}", f"AWS Development/{REGION}",
     }
     assert len(inventory.get_all_items(NBVMInterface)) == 2
     assert len(inventory.get_all_items(NBVirtualDisk)) == 2
