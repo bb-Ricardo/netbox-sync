@@ -24,6 +24,7 @@ class AWSClient:
             self.session = session if session is not None else boto3.Session(profile_name=profile)
         except BotoCoreError as exc:
             raise AWSDiscoveryError(f"Unable to initialize AWS credentials: {exc}") from exc
+        self.account_names = {}
 
     def discover_organization(self, regions, role_name, expected_account=None, discovery_region=None,
                               include_management=False, external_id=None, account_ids=None):
@@ -49,6 +50,7 @@ class AWSClient:
             clients.append(organizations)
             management_account = organizations.describe_organization()["Organization"]["MasterAccountId"]
             accounts = set()
+            account_names = {}
             for page in organizations.get_paginator("list_accounts").paginate():
                 for account in page["Accounts"]:
                     account_id = account["Id"]
@@ -58,6 +60,7 @@ class AWSClient:
                     if account_id == management_account and not include_management:
                         continue
                     accounts.add(account_id)
+                    account_names[account_id] = account.get("Name") or account_id
             if account_ids:
                 missing = set(account_ids) - accounts
                 if missing:
@@ -80,6 +83,7 @@ class AWSClient:
                     aws_session_token=credentials["SessionToken"], region_name=bootstrap))
                 _, snapshot = member.discover(regions, current_account, discovery_region)
                 snapshots[current_account] = snapshot
+            self.account_names = account_names
             return snapshots
         except (BotoCoreError, ClientError, KeyError, AWSDiscoveryError) as exc:
             context = f" for account '{current_account}'" if current_account else ""
