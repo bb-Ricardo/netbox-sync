@@ -380,18 +380,19 @@ scope. Avoid overlapping single-account and organization source definitions.
 
 ### VPC address-space isolation
 
-The current NetBox integration reads VRFs and prefixes but does not create them.
-Before enabling IP import, create a **distinct VRF for every VPC** in NetBox.
-The default VRF name is:
+Each VPC uses a **distinct VRF**. When IP import encounters a VPC without an
+explicit `vpc_vrf_relation`, the importer creates a VRF in NetBox using this
+default name:
 
 ```text
 AWS <account-id>/<region>/<vpc-id>
 ```
 
 For example: `AWS 123456789012/us-east-1/vpc-0123456789abcdef0`.
-Use `vpc_vrf_relation` to select an existing differently named VRF. A mapping
-key may be `account-id/region/vpc-id` in organization mode; this takes precedence
-over a legacy `region/vpc-id` mapping. For example:
+Use `vpc_vrf_relation` to select an existing differently named VRF; mapped
+VRFs must already exist, and a missing mapped VRF aborts the run rather than
+creating one. A mapping key may be `account-id/region/vpc-id` in organization
+mode; this takes precedence over a legacy `region/vpc-id` mapping. For example:
 
 ```ini
 vpc_vrf_relation = 111122223333/us-east-1/vpc-0123456789abcdef0 = Production VPC
@@ -401,16 +402,16 @@ A mapping must not share a VRF between discovered VPCs. VRFs must remain distinc
 accounts and separately configured sources too. Organization mode validates
 VRF isolation across all selected accounts before reconciliation.
 
-Missing VRFs for permitted addresses abort the run before inventory updates.
 There is no fallback to global address space. Subnet mask lengths come from AWS
 subnet CIDRs; NetBox prefixes are neither required nor created. Identical IPs in
 different VPCs remain separate NetBox IPs.
 
 `permitted_subnets` is required to populate IP addresses; leaving it undefined
 imports no IPs, matching other source behavior. `sync_private_ips = False`
-imports VMs, disks, and interfaces without requiring VRFs; previously managed
-IPs on discovered interfaces are retained. DNS lookup defaults to false because
-private AWS DNS is often inaccessible from the sync host.
+imports VMs, disks, and interfaces without creating or requiring VRFs;
+previously managed IPs on discovered interfaces are retained. DNS lookup
+defaults to false because private AWS DNS is often inaccessible from the sync
+host.
 
 ## Object mapping and lifecycle
 
