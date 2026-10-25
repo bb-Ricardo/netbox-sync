@@ -81,6 +81,7 @@ permitted_subnets = 10.0.0.0/8, 2001:db8::/32
 vpc_vrf_relation = us-east-1/vpc-0123456789abcdef0 = Production VPC
 tag_keys = Environment, Owner
 tenant = Operations
+account_name = Production
 ```
 
 All options also support the application's usual `NBS_SOURCE_<index>_*`
@@ -415,23 +416,34 @@ private AWS DNS is often inaccessible from the sync host.
 
 | AWS | NetBox |
 | --- | --- |
-| Account ID | Cluster group `AWS <account-id>` |
-| Account and region | Cluster `AWS <account-id>/<region>`, type `AWS EC2` |
+| Account name | Cluster group `AWS <account-name>` |
+| Account name and region | Cluster `AWS <account-name>/<region>`, type `AWS EC2` |
 | Region | Logical site `AWS <region>` |
-| Instance ID | VM name; serial on NetBox 4.1+ |
+| EC2 Name tag | VM name and `aws_name` custom field; falls back to instance ID when missing |
+| Instance ID | `aws_instance_id` custom field; serial on NetBox 4.1+ |
 | Instance type | CPU and memory, plus custom field |
-| Name tag / Availability Zone | Custom fields, not identity or physical sites |
+| AWS account ID | `aws_account_id` custom field |
+| Availability Zone | Custom field, not a physical site |
 | ENI ID | VM interface name and custom field |
 | ENI MAC | MAC object on NetBox 4.2+; legacy interface field on older versions |
 | Private IPv4 / IPv6 | IP in the VPC's existing VRF, assigned to the ENI |
 | EBS volume | Virtual disk named by volume ID |
 
-Region sites and clusters are logical containers, not claims about physical
-AWS facilities or hypervisor placement. Instance IDs within account/region
-clusters avoid duplicate or changing Name tags merging unrelated VMs. Memory
-uses the instance type's MiB capacity; CPU uses instance CPU options when
-reported, otherwise the type's default vCPU count. This is provisioned capacity,
-not utilization.
+In single-account mode, set `account_name` to use a friendly label in the
+cluster group and cluster names; it defaults to the account ID. Organization
+mode uses the account name returned by AWS Organizations, falling back to the
+account ID when unavailable. The account ID remains available on each VM as
+`aws_account_id`. Region sites and clusters are logical containers, not claims
+about physical AWS facilities or hypervisor placement.
+
+VM names come from the EC2 `Name` tag, falling back to the instance ID if the
+tag is missing or empty. If multiple instances in the same account and region
+have the same Name tag, the instance ID is appended to each VM name to keep the
+names distinct. Reconciliation uses the account ID and instance ID custom
+fields, so a changed Name tag updates the existing VM rather than creating a
+second one. Memory uses the instance type's MiB capacity; CPU uses instance CPU
+options when reported, otherwise the type's default vCPU count. This is
+provisioned capacity, not utilization.
 
 Running instances are `active`; stopped, pending, stopping, and shutting-down
 instances are `offline`. Terminated instances are excluded and subsequently
