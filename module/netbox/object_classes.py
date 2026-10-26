@@ -1522,7 +1522,6 @@ class NBVRF(NetBoxObject):
     object_type = "ipam.vrf"
     primary_key = "name"
     prune = False
-    read_only = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
