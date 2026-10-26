@@ -64,6 +64,8 @@ class AWSHandler(SourceBase):
                     self.settings.regions, self.settings.account_id, self.settings.discovery_region)
                 snapshots = {account: snapshot}
                 account_names = {}
+            if self.settings.organization and self.settings.sync_private_ips:
+                self.resolve_shared_networks(snapshots)
             vrfs = {}
             for account, snapshot in snapshots.items():
                 self.validate_snapshot(account, snapshot, vrfs)
@@ -83,6 +85,63 @@ class AWSHandler(SourceBase):
         except (AWSDiscoveryError, ValueError, KeyError) as exc:
             self.abort(exc)
 
+    def resolve_shared_networks(self, snapshots):
+        networks = {}
+        for account, snapshot in snapshots.items():
+            for region, data in snapshot.items():
+                for kind in ("Vpcs", "Subnets"):
+                    for resource_id, resource in data[kind].items():
+                        owner = resource.get("OwnerId", account)
+                        key = (kind, region, resource_id)
+                        owners = networks.setdefault(key, {})
+                        if resource.get("OwnerId") and any(
+                                item.get("OwnerId") and previous_owner != owner
+                                for previous_owner, item in owners.items()):
+                            raise ValueError(
+                                f"Conflicting AWS {kind} ownership for '{resource_id}' "
+                                f"(region '{region}'): {', '.join(sorted(set(owners) | {owner}))}")
+                        if owner in owners:
+                            previous = owners[owner]
+                            fields = ("VpcId", "CidrBlock")
+                            if any(previous.get(field) != resource.get(field) for field in fields) or \
+                                    set(self.ipv6_networks(previous)) != set(self.ipv6_networks(resource)):
+                                raise ValueError(
+                                    f"Conflicting AWS {kind} discovery for '{resource_id}' "
+                                    f"(owner '{owner}', region '{region}')")
+                        owners[owner] = resource
+        for account, snapshot in snapshots.items():
+            for region, data in snapshot.items():
+                data["VpcOwners"] = {}
+                for instance in data["instances"]:
+                    for reference in instance.get("NetworkInterfaces", []):
+                        eni = data["NetworkInterfaces"].get(reference["NetworkInterfaceId"])
+                        if eni is None:
+                            continue
+                        vpc_id, subnet_id = eni["VpcId"], eni["SubnetId"]
+                        vpcs = networks.get(("Vpcs", region, vpc_id), {})
+                        local_vpc = data["Vpcs"].get(vpc_id)
+                        owner = local_vpc.get("OwnerId", account) if local_vpc is not None else None
+                        if owner is None and len(vpcs) == 1:
+                            owner = next(iter(vpcs))
+                        if owner is None and vpcs:
+                            raise ValueError(
+                                f"Ambiguous AWS VPC ownership for '{vpc_id}' "
+                                f"(account '{account}', region '{region}', "
+                                f"ENI '{eni['NetworkInterfaceId']}'): {', '.join(sorted(vpcs))}")
+                        if owner is None:
+                            continue
+                        data["VpcOwners"][vpc_id] = owner
+                        data["Vpcs"][vpc_id] = dict(vpcs[owner], OwnerId=owner)
+                        subnets = networks.get(("Subnets", region, subnet_id), {})
+                        if subnets and owner not in subnets:
+                            raise ValueError(
+                                f"Conflicting AWS subnet ownership for '{subnet_id}' "
+                                f"(account '{account}', region '{region}', "
+                                f"ENI '{eni['NetworkInterfaceId']}', VPC owner '{owner}'): "
+                                f"{', '.join(sorted(subnets))}")
+                        if owner in subnets:
+                            data["Subnets"][subnet_id] = dict(subnets[owner], OwnerId=owner)
+
     def vrf_name(self, account, region, vpc):
         return self.settings.vpc_vrf_relation.get(
             f"{account}/{region}/{vpc}", self.settings.vpc_vrf_relation.get(
@@ -101,13 +160,15 @@ class AWSHandler(SourceBase):
             vrf = self.inventory.add_object(NBVRF, data={"name": name}, source=self)
         return vrf
 
-    def addresses(self, eni, subnet):
-        networks = [ip_network(subnet["CidrBlock"])]
-        networks.extend(
+    def ipv6_networks(self, resource):
+        return [
             ip_network(entry["Ipv6CidrBlock"])
-            for entry in subnet.get("Ipv6CidrBlockAssociationSet", [])
+            for entry in resource.get("Ipv6CidrBlockAssociationSet", [])
             if entry.get("Ipv6CidrBlockState", {}).get("State") == "associated"
-        )
+        ]
+
+    def addresses(self, eni, subnet):
+        networks = [ip_network(subnet["CidrBlock"]), *self.ipv6_networks(subnet)]
         addresses = [
             (entry["PrivateIpAddress"], entry.get("Primary", False))
             for entry in eni.get("PrivateIpAddresses", [])
@@ -156,11 +217,25 @@ class AWSHandler(SourceBase):
                     if not self.settings.sync_private_ips:
                         continue
                     vpc, subnet = eni["VpcId"], data["Subnets"].get(eni["SubnetId"])
-                    if vpc not in data["Vpcs"] or subnet is None or subnet["VpcId"] != vpc:
-                        raise ValueError(f"Incomplete VPC/subnet discovery for ENI '{eni['NetworkInterfaceId']}'")
+                    network_errors = []
+                    if vpc not in data["Vpcs"]:
+                        network_errors.append(f"VPC '{vpc}' was not returned by DescribeVpcs")
+                    if subnet is None:
+                        network_errors.append(
+                            f"subnet '{eni['SubnetId']}' was not returned by DescribeSubnets")
+                    elif subnet["VpcId"] != vpc:
+                        network_errors.append(
+                            f"subnet '{eni['SubnetId']}' belongs to VPC '{subnet['VpcId']}', "
+                            f"not ENI VPC '{vpc}'")
+                    if network_errors:
+                        raise ValueError(
+                            f"Incomplete VPC/subnet discovery for ENI '{eni['NetworkInterfaceId']}' "
+                            f"(account '{account}', region '{region}', instance '{instance['InstanceId']}', "
+                            f"VPC '{vpc}', subnet '{eni['SubnetId']}'): {'; '.join(network_errors)}")
                     if self.addresses(eni, subnet):
-                        vrf = self.get_vrf(account, region, vpc)
-                        identity = (account, region, vpc)
+                        owner = data.get("VpcOwners", {}).get(vpc, account)
+                        vrf = self.get_vrf(owner, region, vpc)
+                        identity = (owner, region, vpc)
                         if vrf in vrfs and vrfs[vrf] != identity:
                             raise ValueError(f"VRF '{vrf.data['name']}' is mapped to more than one AWS VPC")
                         vrfs[vrf] = identity
@@ -321,7 +396,8 @@ class AWSHandler(SourceBase):
         addresses = self.addresses(eni, subnet)
         discovered = []
         for address, primary in addresses:
-            vrf = self.get_vrf(account, region, eni["VpcId"])
+            owner = data.get("VpcOwners", {}).get(eni["VpcId"], account)
+            vrf = self.get_vrf(owner, region, eni["VpcId"])
             parsed = ip_interface(address)
             candidates = [
                 item for item in self.inventory.get_all_items(NBIPAddress)
