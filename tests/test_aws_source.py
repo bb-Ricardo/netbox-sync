@@ -203,6 +203,39 @@ def test_missing_volume_aborts_before_inventory_changes(make_source, inventory, 
     assert inventory.get_all_items(NBVM) == []
 
 
+@pytest.mark.parametrize("failure", ["vpc", "subnet", "both", "mismatch"])
+def test_incomplete_network_discovery_reports_context_and_aborts(
+        make_source, inventory, caplog, failure):
+    data = inventory_data()
+    other_vpc = "vpc-11111111111111111"
+    reasons = []
+    if failure in ("vpc", "both"):
+        data["Vpcs"].clear()
+        reasons.append(f"VPC '{VPC}' was not returned by DescribeVpcs")
+    if failure in ("subnet", "both"):
+        data["Subnets"].clear()
+        reasons.append(f"subnet '{SUBNET}' was not returned by DescribeSubnets")
+    if failure == "mismatch":
+        data["Subnets"][SUBNET]["VpcId"] = other_vpc
+        reasons.append(f"subnet '{SUBNET}' belongs to VPC '{other_vpc}', not ENI VPC '{VPC}'")
+    source = make_source(data=data)
+    source.sync_snapshot = Mock()
+
+    with pytest.raises(SystemExit):
+        source.apply()
+
+    assert (
+        f"Incomplete VPC/subnet discovery for ENI '{ENI}' "
+        f"(account '{ACCOUNT}', region '{REGION}', instance '{INSTANCE}', "
+        f"VPC '{VPC}', subnet '{SUBNET}'): {'; '.join(reasons)}"
+    ) in caplog.text
+    assert "No NetBox writes or pruning will be performed." in caplog.text
+    source.sync_snapshot.assert_not_called()
+    assert inventory.get_all_items(NBVM) == []
+    assert inventory.get_all_items(NBCluster) == []
+    assert inventory.get_all_items(NBIPAddress) == []
+
+
 def test_stopped_instance_without_public_ip_is_retained(make_source, inventory, vpc_vrf):
     data = inventory_data()
     data["instances"][0]["State"]["Name"] = "stopped"
@@ -960,6 +993,154 @@ vpc_vrf_relation = {SECOND_ACCOUNT}/{REGION}/{VPC} = Second VPC
     assert {address.data["vrf"] for address in inventory.get_all_items(NBIPAddress)} == {
         vpc_vrf, second_vrf,
     }
+
+
+def shared_network_snapshots():
+    owner = inventory_data()
+    owner["Vpcs"][VPC]["OwnerId"] = ACCOUNT
+    owner["Subnets"][SUBNET]["OwnerId"] = ACCOUNT
+    participant = copy.deepcopy(owner)
+    instance = participant["instances"][0]
+    instance["InstanceId"] = "i-11111111111111111"
+    instance["NetworkInterfaces"] = [{"NetworkInterfaceId": "eni-11111111111111111"}]
+    eni = participant["NetworkInterfaces"].pop(ENI)
+    eni["NetworkInterfaceId"] = "eni-11111111111111111"
+    eni["Attachment"]["InstanceId"] = instance["InstanceId"]
+    eni["MacAddress"] = "02:aa:bb:cc:dd:ff"
+    eni["PrivateIpAddresses"] = [{"PrivateIpAddress": "10.0.0.20", "Primary": True}]
+    eni["Ipv6Addresses"] = [{"Ipv6Address": "2001:db8::20", "IsPrimaryIpv6": True}]
+    participant["NetworkInterfaces"][eni["NetworkInterfaceId"]] = eni
+    return {ACCOUNT: {REGION: owner}, SECOND_ACCOUNT: {REGION: participant}}
+
+
+@pytest.mark.parametrize("missing", ["both", "vpc", "subnet", "neither"])
+@pytest.mark.parametrize("participant_first", [False, True])
+def test_organization_shared_network_uses_owner_vrf(
+        make_source, inventory, monkeypatch, missing, participant_first):
+    snapshots = shared_network_snapshots()
+    participant = snapshots[SECOND_ACCOUNT][REGION]
+    if missing in ("both", "vpc"):
+        participant["Vpcs"].clear()
+    if missing in ("both", "subnet"):
+        participant["Subnets"].clear()
+    if participant_first:
+        snapshots = dict(reversed(list(snapshots.items())))
+    source = make_source("organization = True")
+    monkeypatch.setattr(AWSClient, "discover_organization", Mock(return_value=snapshots))
+
+    source.apply()
+    source.apply()
+
+    vrf, = inventory.get_all_items(NBVRF)
+    assert vrf.data["name"] == f"AWS {ACCOUNT}/{REGION}/{VPC}"
+    assert len(inventory.get_all_items(NBIPAddress)) == 5
+    assert all(ip.data["vrf"] is vrf for ip in inventory.get_all_items(NBIPAddress))
+    assert {vm.data["custom_fields"]["aws_account_id"] for vm in inventory.get_all_items(NBVM)} == {
+        ACCOUNT, SECOND_ACCOUNT,
+    }
+
+
+def test_organization_shared_network_uses_owner_mapping(make_source, inventory, monkeypatch):
+    snapshots = shared_network_snapshots()
+    source = make_source(f"""
+organization = True
+vpc_vrf_relation = {ACCOUNT}/{REGION}/{VPC} = Shared Network
+""")
+    vrf = inventory.add_object(NBVRF, data={"id": 1, "name": "Shared Network"}, read_from_netbox=True)
+    monkeypatch.setattr(AWSClient, "discover_organization", Mock(return_value=snapshots))
+    source.apply()
+    assert {ip.data["vrf"] for ip in inventory.get_all_items(NBIPAddress)} == {vrf}
+
+
+@pytest.mark.parametrize("failure, message", [
+    ("missing-subnet", "was not returned by DescribeSubnets"),
+    ("missing-vpc", "was not returned by DescribeVpcs"),
+    ("wrong-region", "was not returned by DescribeVpcs"),
+    ("subnet-owner", "Conflicting AWS subnet ownership"),
+    ("subnet-vpc", "belongs to VPC"),
+    ("ipv4-conflict", "Conflicting AWS Subnets discovery"),
+    ("ipv6-conflict", "Conflicting AWS Subnets discovery"),
+    ("vpc-conflict", "Conflicting AWS Vpcs discovery"),
+    ("vpc-owner", "Conflicting AWS Vpcs ownership"),
+    ("ambiguous-owner", "Ambiguous AWS VPC ownership"),
+])
+def test_organization_shared_network_failure_aborts_before_sync(
+        make_source, inventory, monkeypatch, caplog, failure, message):
+    snapshots = shared_network_snapshots()
+    owner, participant = snapshots[ACCOUNT][REGION], snapshots[SECOND_ACCOUNT][REGION]
+    if failure in ("missing-subnet", "missing-vpc", "wrong-region", "ambiguous-owner"):
+        participant["Vpcs"].clear()
+        participant["Subnets"].clear()
+    if failure == "missing-subnet":
+        owner["Subnets"].clear()
+    elif failure == "missing-vpc":
+        owner["Vpcs"].clear()
+    elif failure == "wrong-region":
+        snapshots[ACCOUNT] = {"us-west-2": owner}
+    elif failure == "subnet-owner":
+        owner["Subnets"][SUBNET]["OwnerId"] = SECOND_ACCOUNT
+        participant["Subnets"][SUBNET]["OwnerId"] = SECOND_ACCOUNT
+    elif failure == "subnet-vpc":
+        for data in (owner, participant):
+            data["Subnets"][SUBNET]["VpcId"] = "vpc-11111111111111111"
+    elif failure == "ipv4-conflict":
+        participant["Subnets"][SUBNET]["CidrBlock"] = "10.0.0.0/25"
+    elif failure == "ipv6-conflict":
+        participant["Subnets"][SUBNET]["Ipv6CidrBlockAssociationSet"].clear()
+    elif failure == "vpc-conflict":
+        participant["Vpcs"][VPC]["CidrBlock"] = "10.0.0.0/16"
+    elif failure == "vpc-owner":
+        participant["Vpcs"][VPC]["OwnerId"] = SECOND_ACCOUNT
+    elif failure == "ambiguous-owner":
+        owner["Vpcs"][VPC].pop("OwnerId")
+        third = copy.deepcopy(owner)
+        third["instances"] = []
+        snapshots[MANAGEMENT] = {REGION: third}
+    source = make_source("organization = True")
+    monkeypatch.setattr(AWSClient, "discover_organization", Mock(return_value=snapshots))
+    source.sync_snapshot = Mock()
+
+    with pytest.raises(SystemExit):
+        source.apply()
+
+    assert message in caplog.text
+    source.sync_snapshot.assert_not_called()
+    assert inventory.get_all_items(NBVM) == []
+    assert inventory.get_all_items(NBIPAddress) == []
+
+
+def test_shared_network_sdk_to_inventory(org_sdk, inventory, load_config):
+    snapshots = shared_network_snapshots()
+    owner, participant = snapshots[ACCOUNT][REGION], snapshots[SECOND_ACCOUNT][REGION]
+    owner["instances"] = []
+    participant["Vpcs"].clear()
+    participant["Subnets"].clear()
+    organization_accounts(org_sdk)
+    for account, data in ((ACCOUNT, owner), (SECOND_ACCOUNT, participant)):
+        member = assume_member(org_sdk, account)
+        identity(member.sts, account)
+        region_response(member.ec2, [(REGION, "opt-in-not-required")])
+        stub_region(member.ec2, data)
+    load_config(f"""
+[source/test-aws]
+type = aws
+organization = True
+regions = auto
+account_id = {MANAGEMENT}
+sync_private_ips = True
+permitted_subnets = 10.0.0.0/8, 2001:db8::/32
+""")
+    source, = instantiate_sources()
+    source.apply()
+
+    vm, = inventory.get_all_items(NBVM)
+    assert vm.data["custom_fields"]["aws_account_id"] == SECOND_ACCOUNT
+    vrf, = inventory.get_all_items(NBVRF)
+    assert vrf.data["name"] == f"AWS {ACCOUNT}/{REGION}/{VPC}"
+    assert {ip.data["address"] for ip in inventory.get_all_items(NBIPAddress)} == {
+        "10.0.0.20/24", "2001:db8::20/64",
+    }
+    assert vm.data["primary_ip4"].data["vrf"] is vrf
 
 
 @pytest.mark.parametrize("extra", [
