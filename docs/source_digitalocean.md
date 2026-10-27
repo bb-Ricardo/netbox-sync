@@ -94,6 +94,16 @@ and virtual disks are matched to their resolved parent VM, not just its name.
 If an earlier run moved child objects between same-named VMs, inspect the next
 dry run for interface, disk, and primary-IP changes before enabling writes.
 
+IP assignments can be repaired automatically when the existing IP belongs to
+the current source, either through this run's ownership or its persisted
+`Source: <source name>` tag. Conflicting source ownership or uncertain ownership
+stops the run before the normal NetBox write/prune phase instead of silently
+skipping a discovered IP. Two interfaces claiming the same IP in one source run
+also cause an explicit error. Source section names must remain stable for
+persisted ownership tags to match. If an earlier run already removed an IP's
+source tag or marked it orphaned, verify its owner and restore the correct tag
+or repair its assignment manually before retrying.
+
 ## Validation
 
 Start with a dry run:
