@@ -342,6 +342,66 @@ def test_digitalocean_discovery_maps_droplets_volumes_and_database_clusters(digi
     assert len(inventory.get_all_items(NBTag)) == 2
 
 
+def test_same_named_droplets_in_different_clusters_keep_their_children(digitalocean):
+    inventory, client = digitalocean
+    droplets = [
+        {
+            "id": index,
+            "name": "prod-netops-FE-2",
+            "status": status,
+            "region": {"slug": slug, "name": region_name},
+            "disk": 25,
+            "networks": {"v4": [
+                {"ip_address": address, "cidr": 24, "type": "public"},
+            ]},
+        }
+        for index, slug, region_name, address, status in [
+            (1, "nyc3", "New York 3", "203.0.113.1", "off"),
+            (2, "nyc1", "New York 1", "203.0.113.2", "active"),
+        ]
+    ]
+    client.get_collection.side_effect = lambda path, key: droplets if path == "droplets" else []
+    source = DigitalOceanHandler("cloud")
+
+    for _ in range(2):
+        source.apply()
+        vms = inventory.get_all_items(NBVM)
+        assert len(vms) == 2
+        assert len(inventory.get_all_items(NBVMInterface)) == 2
+        assert len(inventory.get_all_items(NBVirtualDisk)) == 2
+        for vm in vms:
+            ip = vm.data["primary_ip4"]
+            interface = ip.data["assigned_object_id"]
+            assert interface.data["virtual_machine"] is vm
+            assert len(vm.get_virtual_disks()) == 1
+            assert vm.get_virtual_disks()[0].data["virtual_machine"] is vm
+
+
+@pytest.mark.parametrize("object_type", [NBVMInterface, NBVirtualDisk])
+def test_vm_children_match_resolved_parent_not_duplicate_name(inventory, object_type):
+    clusters = [
+        inventory.add_object(NBCluster, data={"name": name}, read_from_netbox=True)
+        for name in ("New York 3", "New York 1")
+    ]
+    vms = [
+        inventory.add_object(NBVM, data={"name": "same-name", "cluster": cluster}, read_from_netbox=True)
+        for cluster in clusters
+    ]
+    children = [
+        inventory.add_object(
+            object_type, data={"name": "public", "virtual_machine": vm}, read_from_netbox=True,
+        )
+        for vm in vms
+    ]
+
+    for vm, child in zip(vms, children):
+        assert inventory.add_update_object(
+            object_type, data={"name": "PUBLIC", "virtual_machine": vm},
+        ) is child
+        assert child.data["virtual_machine"] is vm
+        assert "virtual_machine" not in child.updated_items
+
+
 def test_api_failure_closes_session_before_inventory_changes(digitalocean):
     inventory, client = digitalocean
     client.get_collection.side_effect = RuntimeError("API request failed")
