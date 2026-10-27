@@ -10,6 +10,7 @@
 # define all available sources here
 from module.sources.vmware.connection import VMWareHandler
 from module.sources.hetzner.connection import HetznerHandler
+from module.sources.digitalocean.connection import DigitalOceanHandler
 from module.sources.check_redfish.import_inventory import CheckRedfish
 
 from module.common.logging import get_logger
