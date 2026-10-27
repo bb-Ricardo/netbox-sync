@@ -386,6 +386,38 @@ def test_digitalocean_client_paginates_and_uses_bearer_auth():
     assert second_call.kwargs["params"] is None
 
 
+@pytest.mark.parametrize("databases", [None, []])
+def test_digitalocean_client_accepts_empty_databases(databases):
+    response = Mock()
+    response.json.return_value = {"databases": databases}
+    session = Mock()
+    session.get.return_value = response
+    client = DigitalOceanClient("test-token", session=session)
+
+    assert client.get_collection("databases", "databases") == []
+    response.raise_for_status.assert_called_once()
+    session.get.assert_called_once()
+
+
+@pytest.mark.parametrize("path, payload", [
+    ("databases", {}),
+    ("databases", {"databases": {}}),
+    ("databases", {"databases": ""}),
+    ("databases", {"databases": False}),
+    ("droplets", {"droplets": None}),
+    ("volumes", {"volumes": None}),
+])
+def test_digitalocean_client_rejects_invalid_collections(path, payload):
+    response = Mock()
+    response.json.return_value = payload
+    session = Mock()
+    session.get.return_value = response
+    client = DigitalOceanClient("test-token", session=session)
+
+    with pytest.raises(ValueError, match=f"has no '{path}' list"):
+        client.get_collection(path, path)
+
+
 def test_digitalocean_client_rejects_external_pagination_link():
     response = Mock()
     response.json.return_value = {
