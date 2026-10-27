@@ -5,6 +5,7 @@ This is a tool to sync data from different sources to a NetBox instance.
 Available source types:
 * VMware vCenter Server
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
+* [DigitalOcean](docs/source_digitalocean.md)
 
 **IMPORTANT: READ INSTRUCTIONS CAREFULLY BEFORE RUNNING THIS PROGRAM**
 
