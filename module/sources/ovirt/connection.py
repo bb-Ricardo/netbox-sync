@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import pprint
+import socket
 from ipaddress import ip_address, ip_interface
 
 from packaging import version
@@ -122,8 +123,9 @@ class OVirtHandler(SourceBase):
 
         log.debug(f"Starting oVirt connection to '{self.settings.url}'")
 
+        session = None
         try:
-            self.session = sdk.Connection(
+            session = sdk.Connection(
                 url=self.settings.url,
                 username=self.settings.username,
                 password=self.settings.password,
@@ -132,10 +134,17 @@ class OVirtHandler(SourceBase):
                 debug=False,
                 log=log,
             )
+            session.test(raise_exception=True)
         except Exception as e:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception as close_error:
+                    log.warning(f"Unable to close failed oVirt session: {close_error}")
             log.error(f"Unable to connect to oVirt instance '{self.settings.url}'. {e}")
             return False
 
+        self.session = session
         log.info(f"Successfully connected to oVirt '{self.settings.url}'")
 
         return True
@@ -621,8 +630,24 @@ class OVirtHandler(SourceBase):
         # compile all nic data into one dictionary
         if object_type == NBVM:
             nic_data = vnic_data
+            interface_exclude_filter = self.settings.vm_interface_exclude_filter
         else:
             nic_data = {**pnic_data, **vnic_data}
+            interface_exclude_filter = self.settings.host_interface_exclude_filter
+
+        if interface_exclude_filter is not None:
+            for interface in self.inventory.get_all_interfaces(device_vm_object):
+                interface_name = grab(interface, "data.name")
+                if interface_name is not None and interface_exclude_filter.match(interface_name) and \
+                        self.source_tag in interface.get_tags():
+                    interface.set_source(self)
+
+            for interface_name in list(nic_data):
+                if interface_exclude_filter.match(interface_name):
+                    log.debug(f"Discovered interface '{interface_name}' matches interface_exclude_filter. "
+                              "Excluding it from sync")
+                    del nic_data[interface_name]
+                    nic_ips.pop(interface_name, None)
 
         # map interfaces of existing object with discovered interfaces
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
@@ -1015,6 +1040,19 @@ class OVirtHandler(SourceBase):
 
         host_primary_ip4 = None
         host_primary_ip6 = None
+        host_address = get_string_or_none(grab(obj, "address"))
+        host_addresses = set()
+        if host_address is not None:
+            try:
+                host_addresses.add(ip_address(host_address))
+            except ValueError:
+                try:
+                    host_addresses.update(
+                        ip_address(result[4][0])
+                        for result in socket.getaddrinfo(host_address, None, type=socket.SOCK_STREAM)
+                    )
+                except (OSError, ValueError) as e:
+                    log.warning(f"Unable to resolve oVirt host address '{host_address}': {e}")
 
         for nic in obj.nics or []:
             nic_type = "other"
@@ -1074,7 +1112,7 @@ class OVirtHandler(SourceBase):
                 if self.settings.permitted_subnets.permitted(int_v4, interface_name=vnic_name) is True:
                     vnic_ips[vnic_name].append(int_v4)
 
-                    if host_primary_ip4 is None and nic.ip.address == obj.address:
+                    if host_primary_ip4 is None and ip_address(nic.ip.address) in host_addresses:
                         host_primary_ip4 = int_v4
 
             if nic.ipv6 is not None and nic.ipv6.address is not None and nic.ipv6.netmask is not None:
@@ -1085,7 +1123,7 @@ class OVirtHandler(SourceBase):
 
                 if self.settings.permitted_subnets.permitted(int_v6, interface_name=vnic_name) is True:
                     vnic_ips[vnic_name].append(int_v6)
-                    if host_primary_ip6 is None and nic.ipv6.address == obj.address:
+                    if host_primary_ip6 is None and ip_address(nic.ipv6.address) in host_addresses:
                         host_primary_ip6 = int_v6
 
         # add host to inventory
@@ -1145,11 +1183,13 @@ class OVirtHandler(SourceBase):
             vm_data["site"] = {"name": site_name}
         if api_version >= version.parse("4.1.0"):
             vm_data["serial"] = vm_uuid
+        host_object = self.get_object_from_cache(obj.host)
+        if host_object is not None:
+            vm_data["device"] = host_object
         if self.settings.skip_vm_platform is False:
             platform = " ".join(str(value) for value in (
                 grab(obj, "guest_operating_system.distribution"),
-                grab(obj, "guest_operating_system.version.full_version")) if value is not None)
-            platform = platform or grab(obj, "os.type")
+                grab(obj, "guest_operating_system.version.full_version")) if value).strip() or None
             if platform is not None:
                 platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
                 vm_data["platform"] = {"name": platform}
