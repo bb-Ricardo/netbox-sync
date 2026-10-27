@@ -1,3 +1,4 @@
+from ipaddress import ip_interface
 from unittest.mock import Mock
 
 import pytest
@@ -400,6 +401,92 @@ def test_vm_children_match_resolved_parent_not_duplicate_name(inventory, object_
         ) is child
         assert child.data["virtual_machine"] is vm
         assert "virtual_machine" not in child.updated_items
+
+
+@pytest.mark.parametrize("ownership", ["same-tag", "same-run", "other-tag", "unknown", "mixed-tags", "other-source"])
+def test_ip_conflict_repairs_only_confirmed_same_source(digitalocean, ownership):
+    inventory, _ = digitalocean
+    source = DigitalOceanHandler("cloud")
+    vms = [
+        inventory.add_object(NBVM, data={"name": name}, read_from_netbox=True)
+        for name in ("old-vm", "new-vm")
+    ]
+    interfaces = [
+        inventory.add_object(
+            NBVMInterface, data={"name": "public", "virtual_machine": vm}, read_from_netbox=True,
+        )
+        for vm in vms
+    ]
+    ip = inventory.add_object(NBIPAddress, data={
+        "id": 19223, "address": "203.0.113.1/24",
+        "assigned_object_type": NBVMInterface.object_type, "assigned_object_id": interfaces[0],
+    }, read_from_netbox=True)
+    if ownership in ("same-tag", "mixed-tags", "other-source"):
+        ip.add_tags(source.source_tag)
+    if ownership in ("other-tag", "mixed-tags"):
+        ip.add_tags("Source: another-account")
+    if ownership == "same-run":
+        ip.source = source
+    if ownership == "other-source":
+        ip.source = Mock()
+    vms[0].data["primary_ip4"] = ip
+
+    if ownership in ("same-tag", "same-run"):
+        assert source._sync_ip(ip_interface("203.0.113.1/24"), interfaces[1]) is ip
+        assert ip.data["assigned_object_id"] is interfaces[1]
+        assert ip.source is source
+        assert "primary_ip4" in vms[0].unset_items
+    else:
+        with pytest.raises(ValueError, match="ownership"):
+            source._sync_ip(ip_interface("203.0.113.1/24"), interfaces[1])
+        assert ip.data["assigned_object_id"] is interfaces[0]
+
+
+def test_repaired_ip_is_not_orphaned(digitalocean):
+    inventory, _ = digitalocean
+    source = DigitalOceanHandler("cloud")
+    source.apply()
+    ip = inventory.get_by_data(NBIPAddress, data={"address": "203.0.113.10/24"})
+    target_interface = ip.data["assigned_object_id"]
+    wrong_vm = inventory.add_object(NBVM, data={"name": "wrong-vm"}, read_from_netbox=True)
+    wrong_interface = inventory.add_object(
+        NBVMInterface, data={"name": "public", "virtual_machine": wrong_vm}, read_from_netbox=True,
+    )
+    ip.data["assigned_object_id"] = wrong_interface
+    ip.source = None
+    ip.add_tags(["NetBox-synced", source.source_tag, "NetBox-synced: Orphaned"])
+    inventory.source_list = [source]
+
+    source.apply()
+    handler = Mock(
+        primary_tag="NetBox-synced", orphaned_tag="NetBox-synced: Orphaned",
+    )
+    inventory.tag_all_the_things(handler)
+
+    assert ip.data["assigned_object_id"] is target_interface
+    assert ip.source is source
+    assert source.source_tag in ip.get_tags()
+    assert "NetBox-synced: Orphaned" not in ip.get_tags()
+    assert target_interface.data["virtual_machine"].data["primary_ip4"] is ip
+
+
+@pytest.mark.parametrize("second_prefix", [24, 32])
+def test_conflicting_droplet_ip_claims_abort_before_writes(digitalocean, second_prefix):
+    inventory, client = digitalocean
+    droplets = [
+        {"id": index, "name": name, "region": "nyc1", "networks": {
+            "v4": [{"ip_address": "203.0.113.1", "cidr": prefix, "type": "public"}],
+        }}
+        for index, name, prefix in [(1, "first", 24), (2, "second", second_prefix)]
+    ]
+    client.get_collection.side_effect = lambda path, key: droplets if path == "droplets" else []
+    source = DigitalOceanHandler("cloud")
+
+    with pytest.raises(ValueError, match="multiple interfaces"):
+        source.apply()
+
+    ip = inventory.get_all_items(NBIPAddress)[0]
+    assert ip.data["assigned_object_id"].data["virtual_machine"].data["name"] == "first"
 
 
 def test_api_failure_closes_session_before_inventory_changes(digitalocean):
