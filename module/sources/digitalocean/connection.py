@@ -38,6 +38,7 @@ class DigitalOceanHandler(SourceBase):
         self.inventory = NetBoxInventory()
         self.name = name
         self.log = get_logger()
+        self._ip_claims = {}
         self.set_source_tag()
 
         settings_handler = DigitalOceanConfig()
@@ -51,6 +52,7 @@ class DigitalOceanHandler(SourceBase):
         self.init_successful = True
 
     def apply(self):
+        self._ip_claims = {}
         client = DigitalOceanClient(self.settings.api_token)
 
         # Fetch everything before touching inventory so API failures cannot produce
@@ -271,6 +273,13 @@ class DigitalOceanHandler(SourceBase):
         return ip_interface(f"{ip_value}/{prefix}")
 
     def _sync_ip(self, ip_obj, interface):
+        claim_key = str(ip_obj.ip)
+        previous_claim = self._ip_claims.get(claim_key)
+        if previous_claim is not None and previous_claim is not interface:
+            message = f"DigitalOcean source '{self.name}' reports IP '{ip_obj}' on multiple interfaces."
+            log.error(message)
+            raise ValueError(message)
+
         ip_data = {
             "address": str(ip_obj),
             "assigned_object_type": "virtualization.vminterface",
@@ -279,13 +288,25 @@ class DigitalOceanHandler(SourceBase):
         existing = self.inventory.get_by_data(NBIPAddress, data={"address": str(ip_obj)})
         if existing is not None:
             assigned_object = existing.data.get("assigned_object_id")
-            if assigned_object is not None and assigned_object is not interface and existing.source is not self:
-                log.warning(
-                    f"DigitalOcean IP '{ip_obj}' is already assigned to an object managed by another source; "
-                    "leaving it unchanged."
+            if assigned_object is not None and assigned_object is not interface:
+                source_tags = {tag for tag in existing.get_tags() if tag.startswith("Source: ")}
+                same_source = existing.source is self or self.source_tag in source_tags
+                other_source = (
+                    (existing.source is not None and existing.source is not self) or
+                    bool(source_tags - {self.source_tag})
                 )
-                return None
-        return self.inventory.add_update_object(NBIPAddress, data=ip_data, source=self)
+                if not same_source or other_source:
+                    message = (
+                        f"DigitalOcean IP '{ip_obj}' has conflicting or uncertain source ownership; "
+                        f"cannot reassign it for source '{self.name}'. Resolve the assignment before syncing."
+                    )
+                    log.error(message)
+                    raise ValueError(message)
+                log.info(f"Repairing DigitalOcean IP '{ip_obj}' assignment for source '{self.name}' "
+                         f"to interface '{interface.get_display_name()}'.")
+        result = self.inventory.add_update_object(NBIPAddress, data=ip_data, source=self)
+        self._ip_claims[claim_key] = interface
+        return result
 
     def _sync_droplet_disks(self, vm, droplet, volumes_by_id):
         if vm is None:
