@@ -323,7 +323,7 @@ requires-dist = [
     { name = "charset-normalizer", specifier = "==3.5.2" },
     { name = "hcloud", specifier = "==2.25.1" },
     { name = "idna", specifier = "==3.20" },
-    { name = "ovirt-engine-sdk-python", marker = "extra == 'ovirt'", specifier = ">=4.6,<5" },
+    { name = "ovirt-engine-sdk-python", marker = "extra == 'ovirt'", specifier = "==4.6.3" },
     { name = "packaging", specifier = "==26.3" },
     { name = "pycares", specifier = "==5.0.1" },
     { name = "pycparser", specifier = "==3.0" },
