@@ -119,15 +119,40 @@ class DigitalOceanHandler(SourceBase):
             "group": cluster_group,
         }
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+            mapped_name = self.settings.region_mapping.get(key)
+            target_name = mapped_name or region_name
+            target_slug = NetBoxObject.format_slug(mapped_name) if mapped_name else key
+            regions = self.inventory.get_all_items(NBRegion)
             netbox_region = next((
-                item for item in self.inventory.get_all_items(NBRegion)
-                if item.data.get("slug") == key or item.data.get("name") in (key, region_name)
+                item for item in regions if item.data.get("name") == target_name
             ), None)
-            if netbox_region is not None:
-                cluster_data["scope_type"] = NBRegion.object_type
-                cluster_data["scope_id"] = netbox_region
+            if netbox_region is None:
+                netbox_region = next((
+                    item for item in regions
+                    if item.data.get("slug") == target_slug or
+                    (mapped_name is None and item.data.get("name") == key)
+                ), None)
+            if netbox_region is None:
+                netbox_region = self.inventory.add_object(
+                    NBRegion, data={"name": target_name, "slug": target_slug}, source=self,
+                )
+            cluster_data["scope_type"] = NBRegion.object_type
+            cluster_data["scope_id"] = netbox_region
 
-        cluster = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
+        # Scope changes must update this source's cluster rather than create a duplicate.
+        candidates = [
+            item for item in self.inventory.get_all_items(NBCluster)
+            if item.data.get("name") == cluster_data["name"] and item.data.get("group") is cluster_group
+        ]
+        if len(candidates) > 1:
+            message = f"Multiple DigitalOcean clusters match '{cluster_data['name']}' in the source cluster group."
+            log.error(message)
+            raise ValueError(message)
+        if candidates:
+            cluster = candidates[0]
+            cluster.update(data=cluster_data, source=self)
+        else:
+            cluster = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
         clusters[key] = cluster
         return cluster
 
