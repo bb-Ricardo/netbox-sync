@@ -4,6 +4,7 @@ This is a tool to sync data from different sources to a NetBox instance.
 
 Available source types:
 * VMware vCenter Server
+* oVirt / Red Hat Virtualization (see [oVirt source](docs/source_ovirt.md))
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 
 **IMPORTANT: READ INSTRUCTIONS CAREFULLY BEFORE RUNNING THIS PROGRAM**
@@ -38,6 +39,9 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * VMWare vCenter >= 6.0
 #### Source: check_redfish (if used)
 * check_redfish >= 1.2.0
+#### Source: oVirt (if used)
+* oVirt / Red Hat Virtualization Engine v4 API
+* Optional SDK and native libraries: see [installation and configuration](docs/source_ovirt.md)
 
 # Installing
 * here we assume we install in ```/opt```
