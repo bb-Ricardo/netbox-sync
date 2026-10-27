@@ -20,7 +20,7 @@ from module.config.base import ConfigOptions
 from module.config import source_config_section_name
 
 # list of valid sources
-valid_sources = [VMWareHandler, CheckRedfish, HetznerHandler]
+valid_sources = [VMWareHandler, CheckRedfish, HetznerHandler, DigitalOceanHandler]
 
 
 def validate_source(source_class_object=None, state="pre"):
