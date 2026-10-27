@@ -89,6 +89,11 @@ DigitalOcean private and public network addresses are assigned to interfaces
 named after their network type. The source does not create NetBox prefixes or
 sites.
 
+Droplets with the same name in different clusters remain distinct. Interfaces
+and virtual disks are matched to their resolved parent VM, not just its name.
+If an earlier run moved child objects between same-named VMs, inspect the next
+dry run for interface, disk, and primary-IP changes before enabling writes.
+
 ## Validation
 
 Start with a dry run:
