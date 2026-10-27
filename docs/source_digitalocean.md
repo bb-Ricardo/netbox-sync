@@ -23,6 +23,7 @@ Add a source section to the existing settings file:
 [source/example-digitalocean]
 type = digitalocean
 api_token = REPLACE_WITH_READ_ONLY_API_TOKEN
+region_mapping = fra1=Germany, nyc1=United States
 sync_volumes = True
 sync_databases = True
 ```
@@ -35,11 +36,34 @@ Generate the complete configuration with:
 python netbox-sync.py -g
 ```
 
+`region_mapping` is optional. It accepts comma-separated, exact
+`DigitalOcean region slug=NetBox Region name` pairs. Quote destination names
+containing commas, for example `nyc1="New York, USA"`. Duplicate source slugs,
+empty entries, and Region names longer than 100 characters are rejected.
+
+On NetBox 4.2+, the source reuses a Region with the destination name, then
+tries its generated slug, and creates it if neither exists. Explicit mappings
+take precedence over Regions matching the DigitalOcean region. Without a
+mapping, the DigitalOcean region name and slug are used (for example
+`Frankfurt 1` and `fra1`). When only a region slug is provided by DigitalOcean,
+it is also used as the name. Existing Regions are not renamed.
+
+Multiple DigitalOcean regions can map to the same NetBox Region; their
+virtualization clusters remain separate and retain their DigitalOcean names.
+Existing clusters in the source's cluster group are updated in place when
+their scope changes, including previously unscoped clusters. Ambiguous
+duplicate clusters in that group cause an explicit error instead of choosing
+one arbitrarily.
+
+The NetBox token needs permission to add Regions when they do not already
+exist. On NetBox versions before 4.2, Region creation and mapping are not
+applied; clusters remain unscoped.
+
 ## NetBox mapping
 
 | DigitalOcean | NetBox |
 | --- | --- |
-| Region | Virtualization cluster; an existing NetBox region is used as its scope on NetBox 4.2+ |
+| Region | Virtualization cluster scoped to a reused or automatically created NetBox Region on NetBox 4.2+ |
 | Droplet | Virtual machine |
 | Droplet size | VM vCPUs and memory |
 | Droplet image distribution/name | VM platform |
@@ -58,9 +82,8 @@ fields. Connection credentials and connection URIs are never copied. Database
 endpoint hostnames are not resolved into IP addresses.
 
 DigitalOcean private and public network addresses are assigned to interfaces
-named after their network type. The source does not create NetBox prefixes,
-sites, or regions. Existing matching NetBox regions are used for cluster scope
-where supported; otherwise clusters are left unscoped.
+named after their network type. The source does not create NetBox prefixes or
+sites.
 
 ## Validation
 
