@@ -1,4 +1,5 @@
 import os
+import socket
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -6,6 +7,7 @@ import pytest
 
 from module.config.file_output import ConfigFileOutput
 from module.config.parser import ConfigParser
+from module.netbox.connection import NetBoxHandler
 from module.netbox import (
     NBCluster, NBDevice, NBInterface, NBIPAddress, NBMACAddress, NBPrefix, NBSite,
     NBVirtualDisk, NBVM, NBVMInterface,
@@ -54,7 +56,7 @@ dns_name_lookup = False
     return make
 
 
-def populate(source, status="up", reported=True, disks=True):
+def populate(source, status="up", reported=True, disks=True, host_address="10.0.0.1"):
     datacenter = obj(id="dc", name="DC")
     cluster = obj(id="cluster", name="Production", data_center=datacenter)
     source.add_datacenter(datacenter)
@@ -71,7 +73,7 @@ def populate(source, status="up", reported=True, disks=True):
             serial_number="asset",
         ),
         os=obj(type="Linux", version=obj(full_version="9")), status="up",
-        nics=[nic], address="10.0.0.1",
+        nics=[nic], address=host_address,
     )
     source.add_host(host)
     vm = obj(
@@ -115,6 +117,7 @@ def test_host_vm_network_and_disk_sync(ovirt_source, inventory, api_version):
     assert nbvm.data["vcpus"] == 4
     assert nbvm.data["memory"] == 2048
     assert nbvm.data["platform"].data["name"] == "Debian 12"
+    assert nbvm.data["device"] is host
     assert cluster.get_site_name() == source.site_name
     assert nbvm.data["primary_ip4"].data["address"] == "10.0.0.2/24"
     assert nbvm.data["primary_ip6"].data["address"] == "2001:db8::2/64"
@@ -139,6 +142,17 @@ def test_host_vm_network_and_disk_sync(ovirt_source, inventory, api_version):
     assert len(inventory.get_all_items(NBVMInterface)) == 1
 
 
+def test_host_primary_ip_matches_fqdn(ovirt_source, inventory, monkeypatch):
+    source = ovirt_source()
+    inventory.add_object(NBPrefix, data={"id": 1, "prefix": "10.0.0.0/24"}, read_from_netbox=True)
+    monkeypatch.setattr(connection.socket, "getaddrinfo", Mock(return_value=[
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.1", 0)),
+    ]))
+    populate(source, host_address="host.example.com")
+    host, = inventory.get_all_items(NBDevice)
+    assert host.data["primary_ip4"].data["address"] == "10.0.0.1/24"
+
+
 def test_offline_vm_without_agent_or_cpu_is_synced(ovirt_source, inventory):
     source = ovirt_source()
     vm, _ = populate(source, status="down", reported=False)
@@ -150,6 +164,57 @@ def test_offline_vm_without_agent_or_cpu_is_synced(ovirt_source, inventory):
     assert "vcpus" not in nbvm.data
     interface, = inventory.get_all_items(NBVMInterface)
     assert interface.data["name"] == "nic1"
+
+
+def test_excluded_vm_interface_is_not_created(ovirt_source, inventory):
+    source = ovirt_source("vm_interface_exclude_filter = ^nic1$")
+    vm, _ = populate(source)
+    vm.reported_devices[0].name = "nic1"
+    mac_count = len(inventory.get_all_items(NBMACAddress))
+
+    source.add_virtual_machine(vm)
+
+    assert inventory.get_all_items(NBVMInterface) == []
+    assert len(inventory.get_all_items(NBMACAddress)) == mac_count
+
+
+def test_excluded_existing_vm_interface_remains_claimed(ovirt_source, inventory):
+    source = ovirt_source("vm_interface_exclude_filter = ^nic1$")
+    vm, _ = populate(source)
+    vm.reported_devices[0].name = "nic1"
+    cluster, = inventory.get_all_items(NBCluster)
+    existing_vm = inventory.add_object(
+        NBVM, data={"id": 1, "name": vm.name, "cluster": cluster}, read_from_netbox=True)
+    existing_interface = inventory.add_object(
+        NBVMInterface,
+        data={"id": 2, "name": "nic1", "virtual_machine": existing_vm,
+              "mac_address": "52:54:00:00:00:02"},
+        read_from_netbox=True,
+    )
+    existing_interface.add_tags([NetBoxHandler.primary_tag, source.source_tag])
+
+    source.add_virtual_machine(vm)
+
+    assert existing_interface.source is source
+    assert inventory.get_all_items(NBVMInterface) == [existing_interface]
+
+
+@pytest.mark.parametrize("guest_os", [
+    None,
+    obj(distribution="", version=obj(full_version="")),
+], ids=["missing", "empty"])
+def test_offline_vm_keeps_last_guest_platform(ovirt_source, inventory, guest_os):
+    source = ovirt_source()
+    vm, _ = populate(source)
+    source.add_virtual_machine(vm)
+    nbvm, = inventory.get_all_items(NBVM)
+    platform = nbvm.data["platform"]
+
+    vm.status = "down"
+    vm.guest_operating_system = guest_os
+    source.add_virtual_machine(vm)
+
+    assert nbvm.data["platform"] is platform
 
 
 def test_unknown_disk_size_is_not_invented(ovirt_source, inventory, caplog):
@@ -253,6 +318,19 @@ def test_connection_error_is_reported(ovirt_source, monkeypatch, caplog):
     assert "unavailable" in caplog.text
 
 
+def test_authentication_error_skips_unavailable_source(ovirt_source, monkeypatch, caplog):
+    source = ovirt_source()
+    source.session = None
+    session = Mock()
+    session.test.side_effect = RuntimeError("access denied")
+    monkeypatch.setattr(connection.sdk, "Connection", Mock(return_value=session))
+
+    assert source.create_ovirt_session() is False
+    assert source.session is None
+    session.close.assert_called_once()
+    assert "access denied" in caplog.text
+
+
 def test_apply_queries_related_data_and_closes_session(ovirt_source, inventory):
     source = ovirt_source()
     vm, host = populate(source)
@@ -264,6 +342,7 @@ def test_apply_queries_related_data_and_closes_session(ovirt_source, inventory):
     system.vms_service.return_value.list.return_value = [vm]
     source.apply()
     assert len(inventory.get_all_items(NBVM)) == 1
+    source.session.test.assert_called_once_with(raise_exception=True)
     system.vms_service.return_value.list.assert_called_once_with(
         follow="nics,disk_attachments,reported_devices")
     source.finish()
