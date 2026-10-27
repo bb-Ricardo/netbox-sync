@@ -1470,7 +1470,6 @@ class NBRegion(NetBoxObject):
     object_type = "dcim.region"
     primary_key = "name"
     prune = False
-    read_only = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
