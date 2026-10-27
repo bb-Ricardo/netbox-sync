@@ -48,7 +48,9 @@ SDK attribute paths). Generate a full example with `python netbox-sync.py -g`.
 Guest IP discovery requires the guest agent to report network devices. VMs
 without agent data still receive their configured interfaces and disks. As with
 other sources, bare guest IPs need a matching prefix in NetBox to determine their
-prefix length. Only addresses allowed by `permitted_subnets` are imported.
+prefix length. Addresses without a matching prefix are not imported; netbox-sync
+does not guess a host-length prefix. Only addresses allowed by `permitted_subnets`
+are imported.
 `ip_tenant_inheritance_order`, `preserve_primary_ips`, `skip_fhrp_group_ips`, and
 interface exclusion filters use the current shared network-sync behavior.
 
