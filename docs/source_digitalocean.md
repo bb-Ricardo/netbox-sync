@@ -30,6 +30,10 @@ sync_databases = True
 
 `api_token` is required. `sync_volumes` and `sync_databases` default to `True`.
 Set either to `False` when the token should not query that API resource.
+Accounts without managed databases can leave `sync_databases` enabled:
+both `{"databases": []}` and `{"databases": null}` are treated as empty
+database collections. Missing collection fields and other malformed values
+remain errors rather than being treated as empty inventory.
 Generate the complete configuration with:
 
 ```sh
