@@ -489,8 +489,7 @@ class NetBoxHandler:
                         cache_this_class = False
 
             if self.testing_cache is True and len(cached_nb_data) > 0:
-                for object_data in cached_nb_data:
-                    self.inventory.add_object(nb_object_class, data=object_data, read_from_netbox=True)
+                self.inventory.load_from_netbox(nb_object_class, cached_nb_data)
 
                 # mark this object class as retrieved
                 self.resolved_dependencies.add(nb_object_class)
@@ -561,8 +560,7 @@ class NetBoxHandler:
 
             log.debug(f"Processing %s returned {nb_object_class.name}%s" % (len(nb_objects), plural(len(nb_objects))))
 
-            for object_data in nb_objects:
-                self.inventory.add_object(nb_object_class, data=object_data, read_from_netbox=True)
+            self.inventory.load_from_netbox(nb_object_class, nb_objects)
 
             # mark this object class as retrieved
             self.resolved_dependencies.add(nb_object_class)

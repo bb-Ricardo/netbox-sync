@@ -900,7 +900,8 @@ class NetBoxObject:
 
             if resolved_data is not None:
                 self.data[key] = resolved_data
-            else:
+            # a type this run did not read from NetBox is expected to be unresolvable, keep the NetBox value
+            elif data_type in self.inventory.loaded_types:
                 log.error(f"Problems resolving relation '{key}' for object '{self.get_display_name()}' and "
                           f"value '{data_value}'")
 
@@ -1727,7 +1728,8 @@ class NBPrefix(NetBoxObject):
 
     def matches_site(self, site=None) -> bool:
         """
-        tries to figure out if this prefix matches a certain site or site group
+        tries to figure out if this prefix matches a certain site or site group.
+        Without a site only a prefix without a scope matches.
 
         Parameters
         ----------
@@ -1739,6 +1741,11 @@ class NBPrefix(NetBoxObject):
         bool: True if matches one of the params
 
         """
+        if site is None:
+            # a scope whose object is not in the inventory resolves to None as well
+            return not self.data.get("scope_type") and self.data.get("scope_id") is None and \
+                self.data.get("site") is None
+
         if isinstance(site, NBSite):
             if isinstance(self.data.get("scope_id"), NBSite) and self.data.get("scope_id") == site:
                 return True
