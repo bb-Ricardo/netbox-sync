@@ -40,6 +40,9 @@ class DigitalOceanClient:
             if not isinstance(payload, dict):
                 raise ValueError(f"DigitalOcean response for '{path}' is not a JSON object.")
             collection = payload.get(collection_name)
+            # DigitalOcean can return {"databases": null} for accounts without databases.
+            if collection_name == "databases" and "databases" in payload and collection is None:
+                collection = []
             if not isinstance(collection, list):
                 raise ValueError(f"DigitalOcean response for '{path}' has no '{collection_name}' list.")
             objects.extend(collection)
