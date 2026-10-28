@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from module.common.logging import get_logger
 
 log = get_logger()
@@ -25,10 +27,27 @@ class AWSClient:
         except BotoCoreError as exc:
             raise AWSDiscoveryError(f"Unable to initialize AWS credentials: {exc}") from exc
         self.account_names = {}
+        self.access_denied = []
+
+    @contextmanager
+    def tolerate_access_denied(self, account=None, region=None, service=None, resource=None):
+        try:
+            yield
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] not in (
+                    "AccessDenied", "AccessDeniedException", "UnauthorizedOperation",
+                    "AuthorizationError", "AuthorizationErrorException", "Forbidden", "ForbiddenException"):
+                raise AWSDiscoveryError(f"Incomplete AWS discovery: {exc}") from exc
+            self.access_denied.append((account, region, service))
+            log.warning(
+                f"AWS access denied (account '{account}', region '{region}', service '{service}', "
+                f"resource '{resource}'): {exc}. "
+                "Skipping inaccessible discovery; existing source objects will be retained.")
 
     def discover_organization(self, regions, role_name, expected_account=None, discovery_region=None,
-                              include_management=False, external_id=None, account_ids=None):
-        """Collect all selected accounts; never return a partial organization."""
+                              include_management=False, external_id=None, account_ids=None, services=()):
+        """Collect selected accounts, recording authorization-denied scopes for retention."""
+        self.access_denied = []
         clients = []
         current_account = None
         try:
@@ -76,25 +95,37 @@ class AWSClient:
                 request = {"RoleArn": role_arn, "RoleSessionName": "netbox-sync", "DurationSeconds": 3600}
                 if external_id:
                     request["ExternalId"] = external_id
-                credentials = sts.assume_role(**request)["Credentials"]
+                credentials = None
+                with self.tolerate_access_denied(current_account, service="sts"):
+                    credentials = sts.assume_role(**request)["Credentials"]
+                if credentials is None:
+                    continue
                 member = AWSClient(session=boto3.Session(
                     aws_access_key_id=credentials["AccessKeyId"],
                     aws_secret_access_key=credentials["SecretAccessKey"],
                     aws_session_token=credentials["SessionToken"], region_name=bootstrap))
-                _, snapshot = member.discover(regions, current_account, discovery_region)
+                options = {"services": services} if services else {}
+                _, snapshot = member.discover(regions, current_account, discovery_region, **options)
+                self.access_denied.extend(member.access_denied)
                 snapshots[current_account] = snapshot
             self.account_names = account_names
             return snapshots
-        except (BotoCoreError, ClientError, KeyError, AWSDiscoveryError) as exc:
+        except ClientError as exc:
+            with self.tolerate_access_denied(service="organizations"):
+                raise exc
+            return {}
+        except (BotoCoreError, KeyError, AWSDiscoveryError) as exc:
             context = f" for account '{current_account}'" if current_account else ""
             raise AWSDiscoveryError(f"Incomplete AWS organization discovery{context}: {exc}") from exc
         finally:
             for client in clients:
                 client.close()
 
-    def discover(self, regions, expected_account=None, discovery_region=None):
-        """Fully collect all configured regions before any inventory changes."""
+    def discover(self, regions, expected_account=None, discovery_region=None, services=()):
+        """Collect accessible regions and record denied scopes before inventory changes."""
         clients = []
+        self.access_denied = []
+        account = expected_account
         try:
             config = Config(retries={"mode": "standard", "max_attempts": 5},
                             connect_timeout=10, read_timeout=60)
@@ -125,36 +156,158 @@ class AWSClient:
             for region in regions:
                 ec2 = self.session.client("ec2", region_name=region, config=config)
                 clients.append(ec2)
-                instances = [
-                    instance
-                    for page in ec2.get_paginator("describe_instances").paginate()
-                    for reservation in page.get("Reservations", [])
-                    for instance in reservation.get("Instances", [])
-                    if instance["State"]["Name"] != "terminated"
-                ]
-                data = {"instances": instances}
-                for operation, result_key, key in (
-                    ("describe_network_interfaces", "NetworkInterfaces", "NetworkInterfaceId"),
-                    ("describe_volumes", "Volumes", "VolumeId"),
-                    ("describe_subnets", "Subnets", "SubnetId"),
-                    ("describe_vpcs", "Vpcs", "VpcId"),
-                ):
-                    data[result_key] = {
-                        item[key]: item
-                        for page in ec2.get_paginator(operation).paginate()
-                        for item in page.get(result_key, [])
-                    }
-                instance_types = {}
-                names = sorted({item["InstanceType"] for item in instances})
-                for start in range(0, len(names), 100):
-                    for page in ec2.get_paginator("describe_instance_types").paginate(
-                            InstanceTypes=names[start:start + 100]):
-                        instance_types.update({item["InstanceType"]: item for item in page["InstanceTypes"]})
-                data["InstanceTypes"] = instance_types
+                data = None
+                with self.tolerate_access_denied(account, region, "ec2"):
+                    data = self.discover_ec2(ec2)
+                if data is None:
+                    data = {"instances": [], "InstanceTypes": {}, "Vpcs": {}, "Subnets": {},
+                            "NetworkInterfaces": {}, "Volumes": {}, "EC2AccessDenied": True}
+                data["InaccessibleServices"] = []
+                for service in services:
+                    service_client = self.session.client(service, region_name=region, config=config)
+                    clients.append(service_client)
+                    try:
+                        with self.tolerate_access_denied(account, region, service):
+                            if service == "s3":
+                                data["Buckets"] = self.discover_s3(service_client, region, account)
+                            elif service == "lambda":
+                                data["Functions"] = self.discover_lambda(service_client)
+                            elif service == "eks":
+                                data["EKSClusters"] = self.discover_eks(service_client)
+                            else:
+                                raise AWSDiscoveryError(f"Unsupported AWS service '{service}'")
+                        key = {"s3": "Buckets", "lambda": "Functions", "eks": "EKSClusters"}[service]
+                        if key not in data:
+                            data["InaccessibleServices"].append(service)
+                    except (BotoCoreError, ClientError, KeyError) as exc:
+                        raise AWSDiscoveryError(
+                            f"Incomplete {service} discovery (account '{account}', region '{region}'): {exc}") from exc
                 snapshot[region] = data
             return account, snapshot
-        except (BotoCoreError, ClientError, KeyError) as exc:
+        except ClientError as exc:
+            with self.tolerate_access_denied(account, service="account"):
+                raise exc
+            return account, {}
+        except (BotoCoreError, KeyError) as exc:
             raise AWSDiscoveryError(f"Incomplete AWS discovery; synchronization aborted: {exc}") from exc
         finally:
             for client in clients:
                 client.close()
+
+    def discover_ec2(self, ec2):
+        instances = [
+            instance
+            for page in ec2.get_paginator("describe_instances").paginate()
+            for reservation in page.get("Reservations", [])
+            for instance in reservation.get("Instances", [])
+            if instance["State"]["Name"] != "terminated"
+        ]
+        data = {"instances": instances}
+        for operation, result_key, key in (
+            ("describe_network_interfaces", "NetworkInterfaces", "NetworkInterfaceId"),
+            ("describe_volumes", "Volumes", "VolumeId"),
+            ("describe_subnets", "Subnets", "SubnetId"),
+            ("describe_vpcs", "Vpcs", "VpcId"),
+        ):
+            data[result_key] = {
+                item[key]: item
+                for page in ec2.get_paginator(operation).paginate()
+                for item in page.get(result_key, [])
+            }
+        instance_types = {}
+        names = sorted({item["InstanceType"] for item in instances})
+        for start in range(0, len(names), 100):
+            for page in ec2.get_paginator("describe_instance_types").paginate(InstanceTypes=names[start:start + 100]):
+                instance_types.update({item["InstanceType"]: item for item in page["InstanceTypes"]})
+        data["InstanceTypes"] = instance_types
+        return data
+
+    def discover_s3(self, client, region, account):
+        buckets = []
+        for page in client.get_paginator("list_buckets").paginate(BucketRegion=region):
+            for bucket in page["Buckets"]:
+                with self.tolerate_access_denied(account, region, "s3", bucket["Name"]):
+                    buckets.append(self.discover_s3_bucket(client, bucket, region, account))
+        return buckets
+
+    def discover_s3_bucket(self, client, bucket, region, account):
+        name = bucket["Name"]
+        bucket_region = bucket.get("BucketRegion")
+        if bucket_region is None:
+            location = client.get_bucket_location(Bucket=name, ExpectedBucketOwner=account)
+            bucket_region = location["LocationConstraint"] or "us-east-1"
+            if bucket_region == "EU":
+                bucket_region = "eu-west-1"
+        if bucket_region != region:
+            raise AWSDiscoveryError(
+                f"S3 bucket '{name}' returned for region '{region}' belongs to '{bucket_region}'")
+        request = {"Bucket": name, "ExpectedBucketOwner": account}
+        try:
+            tags = client.get_bucket_tagging(**request)["TagSet"]
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "NoSuchTagSet":
+                raise
+            tags = []
+        versioning = client.get_bucket_versioning(**request).get("Status", "Unversioned")
+        try:
+            encryption = client.get_bucket_encryption(**request)["ServerSideEncryptionConfiguration"]
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ServerSideEncryptionConfigurationNotFoundError":
+                raise
+            encryption = {}
+        return {
+            "Name": name, "Region": region, "Tags": tags, "Versioning": versioning,
+            "Encryption": encryption, "Arn": f"arn:{client.meta.partition}:s3:::{name}",
+        }
+
+    def discover_lambda(self, client):
+        functions = []
+        for page in client.get_paginator("list_functions").paginate():
+            for reference in page["Functions"]:
+                config = client.get_function_configuration(FunctionName=reference["FunctionArn"])
+                # Do not retain environment variables or other unneeded configuration.
+                function = {key: config[key] for key in (
+                    "FunctionArn", "FunctionName", "MemorySize", "State", "Runtime", "Handler",
+                    "Timeout", "LastModified", "Architectures", "PackageType", "VpcConfig",
+                ) if key in config}
+                if function["FunctionArn"] != reference["FunctionArn"]:
+                    raise AWSDiscoveryError(f"Lambda function identity changed for '{reference['FunctionArn']}'")
+                function["Tags"] = client.list_tags(Resource=function["FunctionArn"]).get("Tags", {})
+                functions.append(function)
+        return functions
+
+    def discover_eks(self, client):
+        clusters = []
+        for page in client.get_paginator("list_clusters").paginate():
+            for name in page["clusters"]:
+                cluster = client.describe_cluster(name=name)["cluster"]
+                if cluster["name"] != name:
+                    raise AWSDiscoveryError(f"EKS cluster identity changed for '{name}'")
+                groups = []
+                for group_page in client.get_paginator("list_nodegroups").paginate(clusterName=name):
+                    for group_name in group_page["nodegroups"]:
+                        group = client.describe_nodegroup(clusterName=name, nodegroupName=group_name)["nodegroup"]
+                        if group["clusterName"] != name or group["nodegroupName"] != group_name:
+                            raise AWSDiscoveryError(f"EKS node group identity changed for '{group_name}'")
+                        groups.append({key: group[key] for key in (
+                            "nodegroupName", "nodegroupArn", "status", "version", "capacityType",
+                            "instanceTypes", "scalingConfig", "subnets", "resources",
+                        ) if key in group})
+                profiles = []
+                for profile_page in client.get_paginator("list_fargate_profiles").paginate(clusterName=name):
+                    for profile_name in profile_page["fargateProfileNames"]:
+                        profile = client.describe_fargate_profile(
+                            clusterName=name, fargateProfileName=profile_name)["fargateProfile"]
+                        if profile["clusterName"] != name or profile["fargateProfileName"] != profile_name:
+                            raise AWSDiscoveryError(f"EKS Fargate profile identity changed for '{profile_name}'")
+                        profiles.append({key: profile[key] for key in (
+                            "fargateProfileName", "fargateProfileArn", "status", "subnets", "selectors",
+                        ) if key in profile})
+                clusters.append({
+                    **{key: cluster[key] for key in (
+                        "name", "arn", "status", "version", "endpoint", "resourcesVpcConfig", "tags",
+                    ) if key in cluster},
+                    "nodegroups": sorted(groups, key=lambda group: group["nodegroupName"]),
+                    "fargateProfiles": sorted(profiles, key=lambda profile: profile["fargateProfileName"]),
+                })
+        return clusters
