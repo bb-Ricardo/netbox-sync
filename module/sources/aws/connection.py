@@ -1,3 +1,4 @@
+from hashlib import sha256
 from ipaddress import ip_address, ip_interface, ip_network
 
 from packaging.version import Version
@@ -10,6 +11,7 @@ from module.netbox import (
     NBMACAddress, NBSite, NBTag, NBTenant, NBVirtualDisk, NBVM, NBVMInterface, NBVRF,
 )
 from module.netbox.inventory import NetBoxInventory
+from module.netbox.connection import NetBoxHandler
 from module.sources.aws.client import AWSClient, AWSDiscoveryError
 from module.sources.aws.config import AWSConfig
 from module.sources.common.source_base import SourceBase
@@ -50,6 +52,11 @@ class AWSHandler(SourceBase):
 
     def apply(self):
         try:
+            if self.settings.sync_s3 and Version(self.inventory.netbox_api_version) < Version("3.7"):
+                raise ValueError("S3 bucket inventory requires NetBox 3.7 or newer")
+            services = tuple(service for service in ("s3", "lambda", "eks")
+                             if getattr(self.settings, f"sync_{service}"))
+            options = {"services": services} if services else {}
             if self.settings.organization:
                 snapshots = self.client.discover_organization(
                     self.settings.regions, self.settings.organization_role_name,
@@ -57,18 +64,23 @@ class AWSHandler(SourceBase):
                     discovery_region=self.settings.discovery_region,
                     include_management=self.settings.organization_include_management,
                     external_id=self.settings.organization_external_id,
-                    account_ids=self.settings.organization_account_ids)
+                    account_ids=self.settings.organization_account_ids, **options)
                 account_names = getattr(self.client, "account_names", {})
             else:
                 account, snapshot = self.client.discover(
-                    self.settings.regions, self.settings.account_id, self.settings.discovery_region)
-                snapshots = {account: snapshot}
+                    self.settings.regions, self.settings.account_id, self.settings.discovery_region, **options)
+                snapshots = {account: snapshot} if account is not None else {}
                 account_names = {}
             if self.settings.organization and self.settings.sync_private_ips:
                 self.resolve_shared_networks(snapshots)
+                self.defer_inaccessible_network_instances(snapshots)
             vrfs = {}
             for account, snapshot in snapshots.items():
+                self.validate_services(account, snapshot)
                 self.validate_snapshot(account, snapshot, vrfs)
+            self.retain_disabled_services()
+            if getattr(self.client, "access_denied", []):
+                self.retain_inaccessible_objects()
             account_labels = {
                 account: account_names.get(account) or self.settings.account_name or account
                 for account in snapshots
@@ -84,6 +96,219 @@ class AWSHandler(SourceBase):
                 self.sync_snapshot(account, snapshot, account_name=account_labels[account])
         except (AWSDiscoveryError, ValueError, KeyError) as exc:
             self.abort(exc)
+
+    def validate_services(self, account, snapshot):
+        for region, data in snapshot.items():
+            inaccessible = data.get("InaccessibleServices", [])
+            for enabled, key in (
+                (self.settings.sync_s3 and "s3" not in inaccessible, "Buckets"),
+                (self.settings.sync_lambda and "lambda" not in inaccessible, "Functions"),
+                (self.settings.sync_eks and "eks" not in inaccessible, "EKSClusters"),
+            ):
+                if enabled and not isinstance(data.get(key), list):
+                    raise ValueError(f"Missing AWS {key} discovery (account '{account}', region '{region}')")
+                if enabled:
+                    identity_key = {"Buckets": "Name", "Functions": "FunctionArn", "EKSClusters": "arn"}[key]
+                    identities = [resource[identity_key] for resource in data[key]]
+                    if len(set(identities)) != len(identities):
+                        raise ValueError(f"Duplicate AWS {key} discovery (account '{account}', region '{region}')")
+            for bucket in data["Buckets"] if self.settings.sync_s3 and "s3" not in inaccessible else []:
+                if bucket["Region"] != region or not bucket["Name"] or len(bucket["Name"]) > 63:
+                    raise ValueError(f"Invalid S3 bucket '{bucket['Name']}' for region '{region}'")
+                self.service_tags({tag["Key"]: tag["Value"] for tag in bucket["Tags"]})
+                if "Versioning" not in bucket or "Encryption" not in bucket:
+                    raise ValueError(f"Incomplete S3 bucket metadata for '{bucket['Name']}'")
+            for function in data["Functions"] if self.settings.sync_lambda and "lambda" not in inaccessible else []:
+                self.validate_arn(function["FunctionArn"], "lambda", account, region)
+                if function["State"] not in ("Pending", "Active", "Inactive", "Failed"):
+                    raise ValueError(f"Unknown Lambda state '{function['State']}' for '{function['FunctionArn']}'")
+                if not function["FunctionName"] or not isinstance(function["MemorySize"], int):
+                    raise ValueError(f"Incomplete Lambda configuration for '{function['FunctionArn']}'")
+                self.service_tags(function["Tags"])
+            if self.settings.sync_eks and "eks" not in inaccessible:
+                clusters = {cluster["name"]: cluster for cluster in data["EKSClusters"]}
+                if len(clusters) != len(data["EKSClusters"]):
+                    raise ValueError(f"Duplicate EKS cluster discovery in account '{account}', region '{region}'")
+                asg_clusters = {}
+                for cluster in data["EKSClusters"]:
+                    self.validate_arn(cluster["arn"], "eks", account, region)
+                    for field in ("status", "version", "resourcesVpcConfig", "nodegroups", "fargateProfiles"):
+                        if field not in cluster:
+                            raise ValueError(f"Incomplete EKS {field} for '{cluster['arn']}'")
+                    self.service_tags(cluster.get("tags", {}))
+                    for group in cluster["nodegroups"]:
+                        for asg in group.get("resources", {}).get("autoScalingGroups", []):
+                            name = asg["name"]
+                            if name in asg_clusters and asg_clusters[name] != cluster["name"]:
+                                raise ValueError(f"EKS Auto Scaling group '{name}' belongs to multiple clusters")
+                            asg_clusters[name] = cluster["name"]
+                data["EKSWorkers"] = {}
+                for instance in data["instances"]:
+                    tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
+                    names = {tags[key] for key in (
+                        "aws:eks:cluster-name", "eks:cluster-name", "eksctl.cluster.k8s.io/v1alpha1/cluster-name",
+                    ) if tags.get(key)}
+                    asg_cluster = asg_clusters.get(tags.get("aws:autoscaling:groupName"))
+                    if asg_cluster:
+                        names.add(asg_cluster)
+                    if len(names) > 1:
+                        raise ValueError(f"Conflicting EKS cluster membership for instance '{instance['InstanceId']}'")
+                    if names:
+                        name = next(iter(names))
+                        if name in clusters:
+                            data["EKSWorkers"][instance["InstanceId"]] = name
+                        else:
+                            log.warning(
+                                f"AWS instance '{instance['InstanceId']}' references undiscovered EKS cluster "
+                                f"'{name}' (account '{account}', region '{region}'); retaining EC2 placement.")
+
+    def validate_arn(self, arn, service, account, region):
+        parts = arn.split(":", 5)
+        if len(parts) != 6 or parts[0] != "arn" or parts[2:5] != [service, region, account] or not parts[5]:
+            raise ValueError(f"Invalid {service} resource ARN '{arn}' for account '{account}', region '{region}'")
+
+    def service_tags(self, tags):
+        result = [f"AWS:{key}={tags[key]}" for key in self.settings.tag_keys if key in tags]
+        if any(len(tag) > 100 for tag in result):
+            raise ValueError("AWS service tag exceeds the NetBox tag name limit (100 characters)")
+        return result
+
+    def reconcile_tags(self, item, tags):
+        # Tag lookup can reuse an existing name with different capitalization.
+        desired_tags = {self.inventory.get_by_data(NBTag, data={"name": name}) for name in tags}
+        managed_prefixes = tuple(f"AWS:{key}=".casefold() for key in self.settings.tag_keys)
+        for tag in item.data.get("tags", []):
+            if tag.get_display_name().casefold().startswith(managed_prefixes) and tag not in desired_tags:
+                item.remove_tags(tag)
+
+    def retain_disabled_services(self):
+        for object_type in (NBVM, NBVirtualDisk, NBCluster):
+            for item in self.inventory.get_all_items(object_type):
+                service = (item.data.get("custom_fields") or {}).get("aws_service")
+                if service in ("s3", "lambda", "eks") and not getattr(self.settings, f"sync_{service}") and \
+                        (item.source is self or self.source_tag in item.get_tags()):
+                    item.set_source(self)
+
+    def retain_inaccessible_objects(self):
+        # Source-wide retention also protects children and cross-account shared-network dependencies.
+        for object_type in self.dependent_netbox_objects:
+            for item in self.inventory.get_all_items(object_type):
+                if self.source_tag in item.get_tags():
+                    item.set_source(self)
+        log.warning(
+            f"AWS source '{self.name}': authorization-denied discovery is incomplete. "
+            "Retaining all previously managed source objects this run; accessible resources will still be updated.")
+
+    def defer_inaccessible_network_instances(self, snapshots):
+        if not any(service in ("ec2", "account", "sts", "organizations")
+                   for _, _, service in getattr(self.client, "access_denied", [])):
+            return
+        for account, snapshot in snapshots.items():
+            for region, data in snapshot.items():
+                retained = []
+                for instance in data["instances"]:
+                    missing_network = False
+                    for reference in instance.get("NetworkInterfaces", []):
+                        eni = data["NetworkInterfaces"].get(reference["NetworkInterfaceId"])
+                        if eni is not None and (eni["VpcId"] not in data["Vpcs"] or
+                                                eni["SubnetId"] not in data["Subnets"]):
+                            missing_network = True
+                    if missing_network:
+                        log.warning(
+                            f"AWS instance '{instance['InstanceId']}' (account '{account}', region '{region}') "
+                            "has missing network dependencies during authorization-denied discovery. "
+                            "Deferring its update and retaining existing objects.")
+                    else:
+                        retained.append(instance)
+                data["instances"] = retained
+
+    def resource_name(self, name, identity, limit):
+        if len(name) <= limit:
+            return name
+        suffix = sha256(identity.encode("utf-8")).hexdigest()[:12]
+        return f"{name[:limit - 13]}-{suffix}"
+
+    def service_object(self, object_type, identity, data):
+        matches = [item for item in self.inventory.get_all_items(object_type)
+                   if (item.data.get("custom_fields") or {}).get("aws_resource_id") == identity]
+        if len(matches) > 1:
+            raise ValueError(f"Multiple NetBox {object_type.name} objects match AWS resource '{identity}'")
+        if matches:
+            item = matches[0]
+            if item.source is not self and self.source_tag not in item.get_tags():
+                raise ValueError(f"AWS resource '{identity}' belongs to another source")
+            item.update(data=data, source=self)
+        else:
+            parent = "virtual_machine" if object_type is NBVirtualDisk else "cluster" if object_type is NBVM else "group"
+            if any(item.data.get("name") == data["name"] and item.data.get(parent) is data.get(parent)
+                   for item in self.inventory.get_all_items(object_type)):
+                raise ValueError(f"NetBox {object_type.name} name collision for AWS resource '{identity}'")
+            item = self.inventory.add_object(object_type, data=data, source=self)
+        self.reconcile_tags(item, data["tags"])
+        return item
+
+    def service_cluster(self, account, region, site, group, service, identity, name,
+                        metadata=None, tags=None):
+        data = {
+            "name": self.resource_name(name, identity, 100), "group": group,
+            "type": {"name": f"AWS {service.upper() if service != 'lambda' else 'Lambda'}"},
+            "custom_fields": {"aws_service": service, "aws_resource_id": identity,
+                              "aws_metadata": metadata or {"account": account, "region": region}},
+            "tags": self.service_tags(tags or {}),
+        }
+        if Version(self.inventory.netbox_api_version) >= Version("4.2"):
+            data.update(scope_type="dcim.site", scope_id=site)
+        else:
+            data["site"] = site
+        return self.service_object(NBCluster, identity, data)
+
+    def logical_vm(self, account, region, site, cluster, service, identity, name, metadata, tags, **attributes):
+        data = {
+            "name": self.resource_name(name, identity, 64), "cluster": cluster, "status": "active",
+            "comments": f"Logical AWS {service} inventory object; not an EC2 instance.",
+            "custom_fields": {
+                "aws_account_id": account, "aws_region": region, "aws_service": service,
+                "aws_resource_id": identity, "aws_metadata": metadata,
+            },
+            "tags": [f"AWS:logical-{service}", *self.service_tags(tags)],
+            **attributes,
+        }
+        if Version(self.inventory.netbox_api_version) >= Version("3.3"):
+            data["site"] = site
+        if self.settings.tenant:
+            data["tenant"] = {"name": self.settings.tenant}
+        return self.service_object(NBVM, identity, data)
+
+    def sync_lambda(self, account, region, site, cluster, function):
+        status = {"Pending": "planned", "Active": "active", "Inactive": "offline", "Failed": "failed"}
+        self.logical_vm(
+            account, region, site, cluster, "lambda", function["FunctionArn"],
+            f"Lambda {function['FunctionName']}",
+            {key: value for key, value in function.items() if key != "Tags"},
+            function["Tags"], memory=function["MemorySize"], status=status[function["State"]])
+
+    def sync_s3(self, account, region, site, group, buckets):
+        if not buckets:
+            return
+        identity = f"s3/{account}/{region}"
+        cluster = self.service_cluster(
+            account, region, site, group, "s3", identity, f"S3 {account}/{region}")
+        holder = self.logical_vm(
+            account, region, site, cluster, "s3", identity, f"S3 inventory {account}/{region}",
+            {"kind": "bucket-inventory-holder", "usage_status": "unknown"}, {})
+        for bucket in buckets:
+            bucket_id = f"s3/{account}/{bucket['Name']}"
+            self.service_object(NBVirtualDisk, bucket_id, {
+                "name": bucket["Name"], "virtual_machine": holder,
+                # NetBox requires size; zero is explicitly unknown, never a usage measurement.
+                "size": 0, "description": "AWS S3 bucket; usage unknown (size 0 is a placeholder, not measured).",
+                "custom_fields": {
+                    "aws_service": "s3", "aws_resource_id": bucket_id,
+                    "aws_metadata": {**{key: value for key, value in bucket.items() if key != "Tags"},
+                                     "usage_status": "unknown", "usage_bytes": None},
+                },
+                "tags": self.service_tags({tag["Key"]: tag["Value"] for tag in bucket["Tags"]}),
+            })
 
     def resolve_shared_networks(self, snapshots):
         networks = {}
@@ -258,6 +483,23 @@ class AWSHandler(SourceBase):
                 "name": name, "label": label, "object_types": types, "type": "text",
                 "description": f"Reported by AWS ({self.name})",
             })
+        if any((self.settings.sync_s3, self.settings.sync_lambda, self.settings.sync_eks)):
+            types = [NBVM.object_type, NBCluster.object_type, NBVirtualDisk.object_type]
+            for name, field_type in (
+                ("aws_service", "text"), ("aws_resource_id", "text"),
+                ("aws_metadata", "json"),
+            ):
+                field = self.add_update_custom_field({
+                    "name": name, "label": name.replace("_", " ").upper(),
+                    "object_types": types, "type": field_type,
+                    "description": f"Reported by AWS ({self.name})",
+                })
+                existing_type = field.data.get("type")
+                if isinstance(existing_type, dict):
+                    existing_type = existing_type.get("value")
+                if existing_type != field_type:
+                    raise ValueError(
+                        f"NetBox custom field '{name}' must have type '{field_type}', not '{existing_type}'")
 
     def sync_snapshot(self, account, snapshot, account_name=None):
         self.custom_fields()
@@ -277,6 +519,24 @@ class AWSHandler(SourceBase):
             else:
                 cluster_data["site"] = site
             cluster = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
+            eks_clusters = {}
+            inaccessible = data.get("InaccessibleServices", [])
+            if self.settings.sync_eks and "eks" not in inaccessible:
+                for resource in data["EKSClusters"]:
+                    eks_cluster = self.service_cluster(
+                        account, region, site, group, "eks", resource["arn"],
+                        f"EKS {account}/{region}/{resource['name']}",
+                        metadata={key: value for key, value in resource.items() if key != "tags"},
+                        tags=resource.get("tags", {}))
+                    eks_clusters[resource["name"]] = eks_cluster
+            if self.settings.sync_lambda and "lambda" not in inaccessible:
+                lambda_cluster = self.service_cluster(
+                    account, region, site, group, "lambda", f"lambda/{account}/{region}",
+                    f"Lambda {account}/{region}")
+                for function in data["Functions"]:
+                    self.sync_lambda(account, region, site, lambda_cluster, function)
+            if self.settings.sync_s3 and "s3" not in inaccessible:
+                self.sync_s3(account, region, site, group, data["Buckets"])
             name_counts = {}
             for instance in data["instances"]:
                 name = next((tag["Value"].strip() for tag in instance.get("Tags", [])
@@ -289,10 +549,18 @@ class AWSHandler(SourceBase):
                 if name_counts[vm_name.casefold()] > 1:
                     vm_name = f"{vm_name} ({instance['InstanceId']})"
                 self.sync_instance(
-                    account, region, instance, data, site, cluster, api_version, vm_name=vm_name)
+                    account, region, instance, data, site,
+                    eks_clusters.get(data.get("EKSWorkers", {}).get(instance["InstanceId"]), cluster),
+                    api_version, vm_name=vm_name)
 
     def sync_instance(self, account, region, instance, data, site, cluster, api_version, vm_name=None):
         instance_id = instance["InstanceId"]
+        if "eks" in data.get("InaccessibleServices", []):
+            existing = next((item for item in self.inventory.get_all_items(NBVM)
+                             if (item.data.get("custom_fields") or {}).get("aws_account_id") == account and
+                             (item.data.get("custom_fields") or {}).get("aws_instance_id") == instance_id), None)
+            if existing is not None and existing.data.get("cluster") is not None:
+                cluster = existing.data["cluster"]
         tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
         spec = data["InstanceTypes"][instance["InstanceType"]]
         vm_data = {
@@ -331,9 +599,7 @@ class AWSHandler(SourceBase):
             vm = self.inventory.add_update_object(NBVM, data=vm_data, source=self)
         else:
             vm.update(data=vm_data, source=self)
-        for tag in vm.get_tags():
-            if any(tag.startswith(f"AWS:{key}=") for key in self.settings.tag_keys) and tag not in vm_data["tags"]:
-                vm.remove_tags(tag)
+        self.reconcile_tags(vm, vm_data["tags"])
         if api_version >= Version("3.7"):
             for volume in disks:
                 self.add_update_vm_child(NBVirtualDisk, vm, {
@@ -409,8 +675,35 @@ class AWSHandler(SourceBase):
             if existing is not None and existing.data.get("assigned_object_id") is not None and \
                     existing.get_interface() is not interface:
                 owner = existing.get_device_vm()
-                if owner is None or (owner.source is not self and self.source_tag not in owner.get_tags()):
-                    raise ValueError(f"IP '{address}' in VRF '{vrf.data['name']}' belongs to another source")
+                owner_tags = owner.get_tags() if owner is not None else []
+                same_source = owner is not None and (
+                    owner.source is self or self.source_tag in owner_tags)
+                managed_owner = same_source or NetBoxHandler.primary_tag in owner_tags
+                managed_orphan = NetBoxHandler.primary_tag in owner_tags and \
+                    NetBoxHandler.orphaned_tag in owner_tags
+                owner_status = owner.data.get("status") if owner is not None else None
+                if isinstance(owner_status, dict):
+                    owner_status = owner_status.get("value")
+                if managed_owner and owner_status == "active" and vm.data["status"] == "offline":
+                    log.error(
+                        f"AWS source '{self.name}': IP '{address}' in VRF '{vrf.data['name']}' "
+                        f"is assigned to active owner '{owner.get_display_name()}'. "
+                        f"Skipping reassignment to offline ENI '{eni['NetworkInterfaceId']}'.")
+                    continue
+                offline_to_active = managed_owner and owner_status == "offline" and vm.data["status"] == "active"
+                if not (same_source or managed_orphan or offline_to_active):
+                    owner_name = owner.get_display_name() if owner is not None else "unresolved owner"
+                    log.error(
+                        f"AWS source '{self.name}': IP '{address}' in VRF '{vrf.data['name']}' "
+                        f"belongs to another source (owner '{owner_name}'). "
+                        f"Skipping reassignment to ENI '{eni['NetworkInterfaceId']}'.")
+                    continue
+                if managed_orphan or offline_to_active:
+                    reason = "orphaned" if managed_orphan else "offline"
+                    log.warning(
+                        f"AWS source '{self.name}': Reclaiming IP '{address}' in VRF '{vrf.data['name']}' "
+                        f"from {reason} owner '{owner.get_display_name()}' "
+                        f"for ENI '{eni['NetworkInterfaceId']}'.")
             ip_data = {"address": address, "vrf": vrf, "assigned_object_id": interface,
                        "assigned_object_type": NBVMInterface}
             if self.settings.tenant:
