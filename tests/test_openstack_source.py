@@ -10,7 +10,7 @@ from module.config.file_output import ConfigFileOutput
 from module.config.files import ConfigFileINI, ConfigFileYAML
 from module.config.parser import ConfigParser
 from module.netbox import (
-    NBCluster, NBClusterGroup, NBCustomField, NBDevice, NBIPAddress, NBMACAddress,
+    NBCluster, NBClusterGroup, NBCustomField, NBDevice, NBInterface, NBIPAddress, NBMACAddress,
     NBPrefix, NBSite, NBTenant, NBVirtualDisk, NBVM, NBVMInterface, NBVRF,
 )
 from module.sources import instantiate_sources, valid_sources
@@ -100,6 +100,7 @@ def test_discovery_uses_current_inventory_apis(cloud, netbox_version):
     host = inventory.get_all_items(NBDevice)[0]
     vm = inventory.get_all_items(NBVM)[0]
     assert host.data["primary_ip4"].data["address"] == "10.0.0.2/24"
+    assert host.data["platform"].data["name"] == "QEMU"
     assert vm.data["device"] is host
     assert vm.data["status"] == "active"
     assert vm.data["vcpus"] == 2
@@ -211,6 +212,73 @@ def test_filters_active_duplicates_and_uuid_custom_field(cloud):
     assert field.data["object_types"] == ["virtualization.virtualmachine"]
 
 
+def test_duplicate_vm_names_keep_the_existing_server_identity(cloud):
+    cloud.session.compute.servers.return_value = [
+        server(id="server-a", status="SHUTOFF"),
+        server(id="server-b", status="ACTIVE"),
+    ]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+    vm = cloud.inventory.get_all_items(NBVM)[0]
+    assert vm.data["comments"] == "server-b"
+
+    cloud.session.compute.servers.return_value = [
+        server(id="server-a", status="ACTIVE"),
+        server(id="server-b", status="SHUTOFF"),
+    ]
+    handler.apply()
+    assert vm.data["comments"] == "server-b"
+    assert vm.data["status"] == "offline"
+    assert len(cloud.inventory.get_all_items(NBVM)) == 1
+
+
+def test_duplicate_zone_hosts_are_assigned_to_the_nova_compute_zone(cloud):
+    cloud.session.compute.availability_zones.return_value = [
+        resource(name="internal", hosts={
+            "compute1": {"nova-scheduler": {}, "nova-conductor": {}},
+        }),
+        resource(name="nova", hosts={"compute1": {"nova-compute": {}}}),
+    ]
+    cloud.session.compute.servers.return_value = [server(availability_zone="nova")]
+
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+
+    host = cloud.inventory.get_all_items(NBDevice)[0]
+    vm = cloud.inventory.get_all_items(NBVM)[0]
+    assert host.data["cluster"].data["name"] == "nova"
+    assert vm.data["cluster"].data["name"] == "nova"
+    assert vm.data["device"] is host
+
+
+def test_interface_names_and_host_interface_type_are_preserved(cloud):
+    addresses = {
+        "private": [{
+            "addr": "10.0.0.8", "version": 4,
+            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:01",
+        }],
+        "secondary": [{
+            "addr": "10.0.0.9", "version": 4,
+            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:02",
+        }],
+    }
+    cloud.session.compute.servers.return_value = [server(addresses=addresses)]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+    vm_nic = next(nic for nic in cloud.inventory.get_all_items(NBVMInterface)
+                  if nic.data["name"] == "vNIC2 (secondary)")
+    host_interface = cloud.inventory.get_all_items(NBInterface)[0]
+    host_interface.data["type"] = "1000base-t"
+
+    cloud.session.compute.servers.return_value = [
+        server(addresses={"secondary": addresses["secondary"]}),
+    ]
+    handler.apply()
+
+    assert vm_nic.data["name"] == "vNIC2 (secondary)"
+    assert host_interface.data["type"] == "1000base-t"
+
+
 def test_network_ports_invalid_addresses_and_floating_primary_preference(cloud):
     cloud.settings["permitted_subnets"] += ", 192.0.2.0/24"
     vm_resource = server()
@@ -228,6 +296,22 @@ def test_network_ports_invalid_addresses_and_floating_primary_preference(cloud):
     assert {ip.data["address"] for ip in nics[0].get_ip_addresses()} == {
         "10.0.0.8/32", "fd00::8/128", "192.0.2.8/32",
     }
+
+
+def test_primary_ip_uses_first_fixed_address(cloud):
+    cloud.settings["permitted_subnets"] += ", 192.0.2.0/24"
+    cloud.session.compute.servers.return_value = [server(addresses={
+        "private": [
+            {"addr": "192.0.2.8", "version": 4, "OS-EXT-IPS:type": "floating"},
+            {"addr": "10.0.0.8", "version": 4, "OS-EXT-IPS:type": "fixed"},
+            {"addr": "10.0.0.9", "version": 4, "OS-EXT-IPS:type": "fixed"},
+        ],
+    })]
+
+    OpenStackHandler("cloud").apply()
+
+    vm = cloud.inventory.get_all_items(NBVM)[0]
+    assert vm.data["primary_ip4"].data["address"] == "10.0.0.8/32"
 
 
 def test_flavor_lookup_unknown_volume_and_ipv6_hypervisor(cloud):
