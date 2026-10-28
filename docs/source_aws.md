@@ -144,6 +144,32 @@ is denied. Authentication/credential expiration, throttling exhaustion, service
 errors, account mismatches, and invalid or conflicting data remain fatal.
 Successful empty results are authoritative only when discovery has no denials.
 
+Authorization failures also add operation-specific tags to matching managed
+NetBox objects, for example `Sync:AccessDenied:GetBucketTagging`. Bucket-specific
+failures tag the bucket's virtual disk. Failures without an individual resource
+identifier tag existing managed objects in the affected account/region/service
+scope; account/role or organization failures cover their broader scopes. Objects
+not managed by this AWS source are not tagged. Resources that have never been
+imported are not created as placeholders, so those failures remain log-only.
+
+Permission tags clear automatically after the same operation succeeds for the
+relevant resource or scope. A disabled service, unattempted operation, or success
+for another resource does not clear a tag. A denial takes precedence over success
+in the same applicable scope during a run. Other user tags are preserved.
+
+### NetBox resource conflicts
+
+Logical service resources with duplicate NetBox resource identities, ownership
+by another source, or a NetBox name collision are logged and skipped, without
+aborting unrelated resources, regions, or accounts. Conflicting objects are not
+adopted or overwritten. A skipped cluster also skips its dependent resources,
+including EKS workers; a skipped S3 inventory VM skips its buckets.
+
+If a resource conflict occurs, all previously managed objects for this source
+are retained for the run, protecting skipped resources and their children from
+orphaning/pruning. Discovery and snapshot-validation errors retain their existing
+failure handling.
+
 ### Troubleshooting incomplete network discovery
 
 With private IP synchronization enabled, each attached ENI must have a discovered
