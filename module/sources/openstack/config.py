@@ -274,13 +274,13 @@ class OpenStackConfig(ConfigBase):
                          removed=True),
             ConfigOption("sync_tags",
                          bool,
-                         deprecation_message="You need to switch to 'host_tag_source', " +
-                                             "'vm_tag_source' or 'cluster_tag_source'",
+                         deprecation_message="You need to switch to 'host_tag_relation', " +
+                                             "'vm_tag_relation' or 'cluster_tag_relation'",
                          removed=True),
             ConfigOption("sync_parent_tags",
                          bool,
-                         deprecation_message="You need to switch to 'host_tag_source', " +
-                                             "'vm_tag_source' or 'cluster_tag_source'",
+                         deprecation_message="You need to switch to 'host_tag_relation', " +
+                                             "'vm_tag_relation' or 'cluster_tag_relation'",
                          removed=True)
         ]
 
