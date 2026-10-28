@@ -51,6 +51,14 @@ class AWSConfig(ConfigBase):
             ConfigOption(**config_option_permitted_subnets_definition),
             ConfigOption("sync_private_ips", bool, default_value=True,
                          description="Import private IPv4 and IPv6 into VPC-specific VRFs, creating default VRFs as needed."),
+            ConfigOption("sync_s3", bool, default_value=False,
+                         description="""Import S3 buckets as metadata-only virtual disks on logical account/region VMs.
+                         Requires NetBox 3.7+. Disk size zero is a placeholder for unknown usage, not empty storage."""),
+            ConfigOption("sync_lambda", bool, default_value=False,
+                         description="Import Lambda functions as logical VMs in AWS Lambda clusters."),
+            ConfigOption("sync_eks", bool, default_value=False,
+                         description="""Import EKS clusters, node-group/Fargate metadata, and associate existing
+                         EC2 workers with their EKS cluster. Does not discover Kubernetes pods."""),
             ConfigOption("vpc_vrf_relation", str,
                          description="""Comma-separated region/vpc-id = NetBox VRF name mappings.
                          Use account-id/region/vpc-id keys for account-specific mappings in organization mode.
