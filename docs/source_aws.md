@@ -1,7 +1,8 @@
-# AWS EC2 source
+# AWS source
 
 The `aws` source imports EC2 instances, attached EBS volumes, attached network
 interfaces (ENIs), MAC addresses, and permitted private IPv4 / IPv6 addresses.
+Optional discovery adds S3 buckets, Lambda functions, and EKS clusters.
 AWS is queried read-only; writes are only made to NetBox. This branch is based
 on current main and does not depend on the oVirt or OpenStack branches.
 
@@ -38,7 +39,8 @@ Profile-based assume-role credential refresh is handled by boto3. Credentials
 must allow access to every configured region.
 
 No SSH access, guest agents, inbound connections, or AWS write permissions are
-needed. Outbound HTTPS to the regional EC2 and STS endpoints is required.
+needed. Outbound HTTPS to the regional EC2 and STS endpoints is required,
+plus the S3, Lambda, and EKS endpoints for enabled optional services.
 
 Example IAM policy (attach to a dedicated role or non-root identity):
 
@@ -68,6 +70,101 @@ An assume-role profile additionally needs `sts:AssumeRole` permission on the
 target role and a matching target-account trust policy (and external ID where
 required). Single-account mode does not use Organizations permissions.
 
+### Additional permissions for optional services
+
+The new services are **opt-in**. Add only the actions for the services you enable
+to the single-account inventory identity or every selected member-account role.
+For example, the following supplemental policy enables all three:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListAllMyBuckets",
+        "s3:GetBucketLocation",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "lambda:ListFunctions",
+        "lambda:GetFunctionConfiguration",
+        "lambda:ListTags",
+        "eks:ListClusters",
+        "eks:DescribeCluster",
+        "eks:ListNodegroups",
+        "eks:DescribeNodegroup",
+        "eks:ListFargateProfiles",
+        "eks:DescribeFargateProfile"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Where your IAM policy supports resource-level permissions, restrict the
+resource-specific actions to the intended buckets, functions, and EKS resources.
+Listing actions still need their documented wildcard scope. No S3 object reads,
+Lambda code downloads, Kubernetes credentials, or CloudWatch permissions are
+required. Authorization denials are logged and skipped as described below;
+other discovery failures still abort before NetBox writes and pruning.
+
+### Authorization-denied discovery
+
+Recognized authorization errors (`AccessDenied`, `AccessDeniedException`,
+`UnauthorizedOperation`, `AuthorizationError`, `AuthorizationErrorException`,
+`Forbidden`, and `ForbiddenException`) produce warnings and allow accessible
+discovery to continue. Warnings include account, region, service, AWS operation,
+and the bucket name when applicable.
+
+* S3 bucket metadata denial skips that bucket and continues with subsequent
+  buckets. Existing bucket metadata and tags are not cleared.
+* Denied S3/Lambda/EKS service discovery skips that service in that region.
+  Partially collected service results are discarded if listing or detail
+  discovery fails outside the per-bucket handling.
+* Denied EC2 discovery discards the regional EC2 snapshot, but still attempts
+  optional services and other regions. Dependent instances whose shared
+  network metadata is unavailable during denied organization discovery are
+  deferred rather than imported with guessed masks.
+* Denied member-role assumption skips that account and scans remaining
+  accounts. Denied identity, region enumeration, or organization enumeration
+  skips the affected scan without treating its inventory as empty.
+
+**Any authorization denial conservatively retains all objects previously
+managed by this AWS source for that run**, including children and shared-network
+dependencies. Accessible objects still update. This also postpones orphaning
+and pruning for genuinely deleted objects in otherwise accessible scopes of
+this source; a later fully authorized run resumes normal lifecycle processing.
+Objects from other sources are unaffected.
+
+Existing EKS worker cluster placement is preserved when regional EKS discovery
+is denied. Authentication/credential expiration, throttling exhaustion, service
+errors, account mismatches, and invalid or conflicting data remain fatal.
+Successful empty results are authoritative only when discovery has no denials.
+
+### Troubleshooting incomplete network discovery
+
+With private IP synchronization enabled, each attached ENI must have a discovered
+VPC and subnet, and the subnet's VPC must match the ENI's VPC. If validation fails,
+the error includes the account, region, instance, ENI, VPC, and subnet IDs. It
+identifies resources missing from `DescribeVpcs` or `DescribeSubnets`, or reports
+the conflicting VPC ID for a subnet mismatch. Multiple failures for the same ENI
+are reported together.
+
+Check those resource IDs in the reported account and region using the same role
+or profile as discovery, including any cross-account network sharing setup.
+In organization mode, VPCs and subnets discovered in another selected account
+can satisfy these checks as described under shared VPCs below. Missing resources
+must still be discovered somewhere in the selected organization scope.
+Missing or mismatched network data normally aborts without NetBox writes or
+pruning. When denied organization discovery leaves shared-network dependencies
+unavailable, affected instance updates are instead deferred with a warning and
+existing objects retained. Address-space checks are not bypassed for imports.
+Earlier "Created new VRF object" log messages refer to in-memory inventory
+objects created during validation, not completed NetBox API writes.
+
 ## Configuration
 
 ```ini
@@ -89,6 +186,91 @@ environment variables. `regions` and `tag_keys` accept YAML lists as well as
 comma-separated strings. Quote the account ID in YAML so it remains a string.
 `python netbox-sync.py -g` generates the full configuration.
 
+### Optional S3, Lambda, and EKS discovery
+
+These settings default to `False`, preserving existing EC2-only discovery and
+permissions. Add them to the same AWS source for single-account or organization
+mode:
+
+```ini
+sync_s3 = True
+sync_lambda = True
+sync_eks = True
+```
+
+All three follow the source's selected account and region scope. Pagination is
+completed before reconciliation. Disabling an optional service retains its
+previously managed logical VMs, disks, and clusters instead of orphaning them.
+While a service is enabled, successfully discovered empty results are
+authoritative when discovery has no denials: removed functions, buckets, and empty S3 holders follow the
+normal orphaning/pruning policy. Clusters remain subject to the existing
+non-pruning cluster policy.
+
+#### S3 buckets
+
+Requires **NetBox 3.7+**; older versions abort before discovery when `sync_s3`
+is enabled. Each account/region with buckets gets:
+
+* Cluster `S3 <account-id>/<region>`, type `AWS S3`.
+* Logical VM `S3 inventory <account-id>/<region>`, tagged `AWS:logical-s3`.
+* One virtual disk per general-purpose bucket, named by its bucket name.
+
+The holder VM is explicitly an inventory container, not a server. It has no
+invented CPU, memory, MAC address, or IP. Bucket metadata includes ARN, region,
+versioning, and encryption configuration in the disk's `aws_metadata` JSON
+custom field. Configured `tag_keys` are copied to the bucket disk.
+
+**Disk size zero is a required-field placeholder, not a measurement.**
+`aws_metadata.usage_status` is `unknown` and `usage_bytes` is JSON null; the
+description also states that usage is unknown. Empty and unmeasured buckets
+are therefore not treated as equivalent usage measurements. No provisioned
+capacity or CloudWatch usage is inferred, and S3 disk totals must not be used
+as storage-capacity reporting. Bucket contents, directory buckets, access
+points, and S3-compatible non-AWS services are not discovered.
+
+#### Lambda functions
+
+Each account/region gets a logical `AWS Lambda` cluster and one logical VM per
+function, tagged `AWS:logical-lambda`. Matching uses the unqualified function ARN,
+not the display name. Long display names use a deterministic hash suffix to fit
+the importer's name limit without losing resource identity.
+
+Configured function memory is VM memory. vCPUs and interfaces are not invented,
+and shared Lambda VPC ENIs are not assigned to a function VM. `aws_metadata`
+records runtime, handler, architecture, timeout, modification time, package
+type, VPC configuration, and AWS state when returned. Environment variables,
+code, credentials, invocation instances, aliases, and published versions are
+not imported.
+
+State maps as follows: `Active` to `active`, `Pending` to `planned`, `Inactive`
+to `offline`, and `Failed` to `failed`. These describe AWS function state, not
+whether an invocation is currently executing.
+
+#### EKS clusters and workers
+
+Each real EKS cluster becomes a NetBox cluster of type `AWS EKS`. Its ARN is
+the stable identity. `aws_metadata` records Kubernetes version, AWS status,
+endpoint/VPC configuration, managed node groups (including scaling and Auto
+Scaling group information), and Fargate profile metadata.
+
+Existing discovered EC2 worker VMs move into that cluster; duplicate worker VMs
+and fabricated control-plane VMs are not created. Worker membership is matched
+using managed node-group Auto Scaling group names or the EC2 tags
+`aws:eks:cluster-name`, `eks:cluster-name`, and
+`eksctl.cluster.k8s.io/v1alpha1/cluster-name`. Conflicting membership aborts the
+run. A reference to a cluster no longer discovered emits a warning and leaves
+the instance in its regular EC2 cluster. Untagged self-managed workers without
+a discovered node-group relationship remain ordinary EC2 VMs.
+
+Disabling EKS discovery returns discovered EC2 workers to their normal EC2
+clusters. Kubernetes API access, pods, workloads, and individual Fargate runtime
+instances are outside this discovery scope.
+
+Optional resources use `aws_service`, `aws_resource_id`, and `aws_metadata`
+custom fields on VMs, clusters, and virtual disks. Existing unrelated tags are
+preserved. These objects are logical documentation of AWS resources, not
+claims that serverless services are virtual servers.
+
 ### Automatic or explicit regions
 
 `regions = auto` (also the default when omitted) calls EC2 `DescribeRegions` and
@@ -107,9 +289,9 @@ mode does not call `DescribeRegions`, does not need that permission, and ignores
 `discovery_region`. Do not combine `auto` and named regions in the same list.
 
 Auto mode requires `ec2:DescribeRegions` in addition to the inventory permissions.
-Failure to discover regions, an empty enabled-region result, or failure to query
-any enabled region aborts synchronization before NetBox writes or pruning.
-There is no silent fallback to a partial region list. Use explicit mode when
+Authorization denial during region discovery is logged and preserves existing
+objects. Other failures, or an empty enabled-region result, abort synchronization
+before NetBox writes or pruning. There is no silent fallback to a partial region list. Use explicit mode when
 credentials are intentionally restricted to a subset of enabled regions.
 Switching between modes changes discovery scope; inspect a dry run before
 allowing writes, particularly if narrowing to an explicit list.
@@ -151,10 +333,11 @@ there. A role path such as `service-accounts/NetBoxInventoryReadOnly` is support
 Role ARNs use the collector's AWS partition; cross-partition discovery is not
 supported.
 
-All selected accounts are collected and validated before reconciliation. An
-Organizations API error, role-assumption failure, account mismatch, or regional
-discovery failure aborts the entire run before NetBox writes or pruning. No
-inaccessible account is treated as empty. A selection with no eligible accounts
+All accessible selected accounts are collected and validated before reconciliation.
+Authorization denials are logged and inaccessible scopes skipped with source-wide
+retention. Other Organizations API errors, role-assumption failures, account
+mismatches, or regional discovery failures abort before NetBox writes or pruning.
+No inaccessible account is treated as empty. A selection with no eligible accounts
 also fails. Account discovery and scanning are sequential. Fresh one-hour STS
 credentials are obtained immediately before each account scan, so time spent
 scanning earlier accounts does not consume later accounts' credential lifetime.
@@ -398,9 +581,39 @@ mode; this takes precedence over a legacy `region/vpc-id` mapping. For example:
 vpc_vrf_relation = 111122223333/us-east-1/vpc-0123456789abcdef0 = Production VPC
 ```
 
-A mapping must not share a VRF between discovered VPCs. VRFs must remain distinct across
-accounts and separately configured sources too. Organization mode validates
-VRF isolation across all selected accounts before reconciliation.
+A mapping must not share a VRF between distinct discovered VPCs. VRFs must remain
+distinct for different VPC owners and separately configured sources too.
+Organization mode validates VRF isolation across all selected accounts before
+reconciliation.
+
+#### Shared VPCs in organization mode
+
+With private IP synchronization enabled, organization mode resolves attached
+ENIs' network resources across all selected account snapshots. A participant
+account may omit the VPC or subnet from its EC2 responses if another selected
+account discovers them in the **same region**. Resolution uses exact resource
+IDs and AWS `OwnerId`, never IP overlap or guessed subnet masks. In the absence
+of `OwnerId`, a resource remains associated with the account that discovered it;
+an ambiguous cross-account match aborts the run.
+
+All participants of the same shared VPC use **one owner-account VRF**:
+`AWS <vpc-owner-account-id>/<region>/<vpc-id>`. Account-specific
+`vpc_vrf_relation` mappings must use the **VPC owner's account ID**, not the
+participant's. VM account custom fields and cluster membership still use the
+instance account. The owner account can supply network metadata even when it
+has no EC2 instances.
+
+Include the network owner account in the same organization source when its
+resources are not visible to participants. Resolution cannot borrow metadata
+from another source or region. Missing resources, conflicting ownership or
+CIDRs, and subnet/VPC mismatches still abort before reconciliation. If
+authorization-denied discovery leaves network dependencies unavailable, affected
+instance updates are deferred and existing objects retained instead.
+
+This changes IP placement for shared VPCs previously imported into separate
+participant-account VRFs. Review a dry run and existing mappings before enabling
+pruning; previously imported IPs may remain in the old VRFs until reconciled
+under the normal lifecycle rules.
 
 There is no fallback to global address space. Subnet mask lengths come from AWS
 subnet CIDRs; NetBox prefixes are neither required nor created. Identical IPs in
@@ -429,6 +642,10 @@ host.
 | ENI MAC | MAC object on NetBox 4.2+; legacy interface field on older versions |
 | Private IPv4 / IPv6 | IP in the VPC's existing VRF, assigned to the ENI |
 | EBS volume | Virtual disk named by volume ID |
+| S3 bucket (opt-in) | Metadata-only virtual disk on an account/region logical VM |
+| Lambda function (opt-in) | Logical VM in an `AWS Lambda` cluster |
+| EKS cluster (opt-in) | `AWS EKS` cluster with node-group and Fargate profile metadata |
+| EKS EC2 worker (opt-in) | Existing EC2 VM associated with its EKS cluster |
 
 In single-account mode, set `account_name` to use a friendly label in the
 cluster group and cluster names; it defaults to the account ID. Organization
@@ -449,8 +666,9 @@ provisioned capacity, not utilization.
 Running instances are `active`; stopped, pending, stopping, and shutting-down
 instances are `offline`. Terminated instances are excluded and subsequently
 follow the existing NetBox orphaning/pruning configuration. An empty, successfully
-queried account/region is authoritative. All configured regions and paginated
-responses are collected before reconciliation. AWS access failures, credential
+queried account/region is authoritative when discovery has no denials. All accessible
+configured regions and paginated responses are collected before reconciliation.
+Authorization denials log warnings and retain existing objects. Other AWS failures, credential
 failures, missing attached resources, and missing VRF mappings abort the run
 before the application's NetBox write/prune phase. Transient attachment changes
 may therefore require retrying the run rather than importing partial data.
@@ -466,10 +684,32 @@ are stored on the ENI as `aws_public_ipv4`, not assigned as guest IPs or made
 primary. IPv6 addresses are actual interface addresses even when globally
 routable. Delegated address prefixes are not imported.
 
+An IP already assigned to another interface can be reassigned when its current
+VM/device belongs to this source, or carries both `NetBox-synced` and
+`NetBox-synced: Orphaned` tags. Reclamation from an orphaned owner logs a warning;
+the orphan lifecycle removes source tags, so the former source may be different.
+An active EC2 VM can also reclaim an IP from an `offline` owner managed by
+netbox-sync (the current source's ownership or a `NetBox-synced` tag), even if
+another source originally managed it. This logs a warning and clears the old
+owner's primary-IP reference when applicable. An offline EC2 VM cannot take an
+IP from an active managed owner, regardless of discovery order. Other non-active
+statuses do not qualify as offline, and manually managed offline owners are not
+eligible for this exception.
+Other ownership conflicts, including unresolved owners, log an error and skip
+that IP without aborting the sync. Its existing assignment is left untouched,
+and it is not set as the discovered VM's primary IP. Normal write and pruning
+phases still proceed.
+
 Only explicitly selected `tag_keys` become tags (`AWS:<key>=<value>`). Their
 combined names must fit NetBox's 100-character limit. Existing unrelated NetBox
 tags are preserved. Metadata custom fields use the `aws_` prefix. Their names
 should not conflict with user-defined fields of incompatible types.
+
+Tag reconciliation uses the same inventory lookup as tag assignment. When that
+lookup reuses an existing NetBox tag with different capitalization, its existing
+name is preserved and the assigned tag is not removed as stale. This applies to
+EC2 VMs, S3 bucket disks, Lambda VMs, and EKS clusters. Tags for configured keys
+are still removed when they are no longer reported by AWS.
 
 Avoid overlapping source definitions for the same account/region. Narrowing
 regions, disabling IP import, or changing permitted networks affects the
@@ -489,9 +729,9 @@ AWS credentials or network calls:
 
 ```sh
 pip install -r requirements-aws.txt pytest
-python -m pytest tests/test_aws_source.py
+python -m pytest tests/test_aws_source.py tests/test_aws_services.py
 ```
 
 Live AWS/NetBox validation is still required before production use. This source
-does not inventory RDS, load balancers, ECS/EKS workloads, security groups,
+does not inventory RDS, load balancers, ECS/Kubernetes workloads, security groups,
 software, or guest operating-system configuration.
