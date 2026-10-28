@@ -179,8 +179,8 @@ class OpenStackHandler(SourceBase):
             self.add_volume(volume)
 
         servers = self.session.compute.servers(details=True, all_projects=self.settings.all_projects)
-        # Prefer active machines when duplicate names occur during a migration.
-        for server in sorted(servers, key=lambda server: server.status != "ACTIVE"):
+        # Prefer an already-associated server before using status to break ties.
+        for server in sorted(servers, key=self.get_server_priority):
             self.add_virtual_machine(server)
 
         self.update_basic_data()
@@ -477,6 +477,43 @@ class OpenStackHandler(SourceBase):
                 return cluster
         return None
 
+    def get_server_priority(self, server):
+        name = get_string_or_none(grab(server, "name"))
+        if name is not None and self.settings.strip_vm_domain_name:
+            name = name.split(".")[0]
+        if self.settings.set_vm_name_to_uuid:
+            name = get_string_or_none(grab(server, "id"))
+
+        cluster_name = get_string_or_none(grab(server, "availability_zone"))
+        cluster = self.get_object_from_cache(NBCluster, cluster_name)
+        if name is not None and cluster is not None and not self.settings.skip_vm_comments:
+            existing_vm = self.inventory.get_by_data(
+                NBVM, data={"name": name, "cluster": cluster}
+            )
+            if grab(existing_vm, "data.comments") == get_string_or_none(grab(server, "id")):
+                return 0, server.status != "ACTIVE"
+
+        return 1, server.status != "ACTIVE"
+
+    @staticmethod
+    def get_compute_host_names(hosts):
+        compute_host_names = []
+        for hostname, services in (hosts or {}).items():
+            if not isinstance(services, dict) or not services:
+                compute_host_names.append(hostname)
+                continue
+
+            service_names = {str(name).lower() for name in services}
+            service_names.update(
+                str(grab(service, "binary", fallback="")).lower()
+                for service in services.values()
+            )
+            has_nova_services = any(name.startswith("nova-") for name in service_names)
+            if not has_nova_services or "nova-compute" in service_names:
+                compute_host_names.append(hostname)
+
+        return compute_host_names
+
     def object_synced_by_other_source(self, nb_object):
         if nb_object.source is not None:
             return nb_object.source is not self
@@ -660,6 +697,13 @@ class OpenStackHandler(SourceBase):
                 log.error(f"Primary IPv6 ({p_ipv6}) does not appear to be a valid IP address (needs included suffix).")
 
         for int_name, int_data in nic_data.items():
+            existing_interface = nic_object_dict.get(int_name)
+            if existing_interface is not None:
+                existing_name = grab(existing_interface, "data.name")
+                if existing_name is not None:
+                    int_data["name"] = existing_name
+                if object_type == NBDevice:
+                    int_data.pop("type", None)
 
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
@@ -834,12 +878,9 @@ class OpenStackHandler(SourceBase):
 
         self.add_object_to_cache(NBCluster, name, cluster_object)
 
-        self.cluster_host_map[name] = list()
-        log.debug2(f"Found an existing host where 'name' matches (NetBox id: {obj.hosts})")
-        # trap for a cluster with no hosts
-        if obj.hosts is not None:
-            for host in obj.hosts:
-                self.cluster_host_map[name].append(host)
+        self.cluster_host_map[name] = self.get_compute_host_names(grab(obj, "hosts"))
+        log.debug2(f"Found compute hosts for availability zone '{name}': "
+                   f"{self.cluster_host_map[name]}")
 
         self.permitted_clusters[name] = site_name
 
@@ -923,9 +964,7 @@ class OpenStackHandler(SourceBase):
         # collect all necessary data
         manufacturer = None
         model = None
-        product_name = get_string_or_none(obj.hypervisor_type)
-        product_version = get_string_or_none(obj.hypervisor_version)
-        platform = f"{product_name} {product_version}"
+        platform = get_string_or_none(obj.hypervisor_type)
 
         # if the device vendor/model cannot be retrieved (due to problem on the host),
         # set a dummy value so the host still gets synced
@@ -1150,6 +1189,8 @@ class OpenStackHandler(SourceBase):
 
         vm_primary_ip4 = None
         vm_primary_ip6 = None
+        vm_primary_ip4_is_fixed = False
+        vm_primary_ip6_is_fixed = False
         vm_nic_dict = dict()
         nic_ips = dict()
         count = 0
@@ -1189,12 +1230,15 @@ class OpenStackHandler(SourceBase):
                     ip_addr = f"{ip_interface(ip_addr).ip}/{prefix}"
 
                 nic_ips[full_name].append(ip_addr)
+                is_fixed = address.get("OS-EXT-IPS:type") == "fixed"
                 if ip_interface(ip_addr).version == 4 and (
-                        vm_primary_ip4 is None or address.get("OS-EXT-IPS:type") == "fixed"):
+                        vm_primary_ip4 is None or (is_fixed and not vm_primary_ip4_is_fixed)):
                     vm_primary_ip4 = ip_addr
+                    vm_primary_ip4_is_fixed = is_fixed
                 if ip_interface(ip_addr).version == 6 and (
-                        vm_primary_ip6 is None or address.get("OS-EXT-IPS:type") == "fixed"):
+                        vm_primary_ip6 is None or (is_fixed and not vm_primary_ip6_is_fixed)):
                     vm_primary_ip6 = ip_addr
+                    vm_primary_ip6_is_fixed = is_fixed
 
         # add VM to inventory
         vm = self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=vm_nic_dict,
