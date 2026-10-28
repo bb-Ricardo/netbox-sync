@@ -276,9 +276,10 @@ class DigitalOceanHandler(SourceBase):
         claim_key = str(ip_obj.ip)
         previous_claim = self._ip_claims.get(claim_key)
         if previous_claim is not None and previous_claim is not interface:
-            message = f"DigitalOcean source '{self.name}' reports IP '{ip_obj}' on multiple interfaces."
+            message = (f"DigitalOcean source '{self.name}' reports IP '{ip_obj}' on multiple interfaces. "
+                       f"Skipping assignment to '{interface.get_display_name()}'; keeping the first assignment.")
             log.error(message)
-            raise ValueError(message)
+            return None
 
         ip_data = {
             "address": str(ip_obj),
@@ -298,10 +299,14 @@ class DigitalOceanHandler(SourceBase):
                 if not same_source or other_source:
                     message = (
                         f"DigitalOcean IP '{ip_obj}' has conflicting or uncertain source ownership; "
-                        f"cannot reassign it for source '{self.name}'. Resolve the assignment before syncing."
+                        f"cannot reassign it for source '{self.name}'. "
+                        f"Skipping assignment to '{interface.get_display_name()}'; resolve the existing assignment."
                     )
                     log.error(message)
-                    raise ValueError(message)
+                    if existing.source is None and self.source_tag in source_tags:
+                        # Retain previously managed IPs without changing their assignment or ownership tags.
+                        existing.set_source(self)
+                    return None
                 log.info(f"Repairing DigitalOcean IP '{ip_obj}' assignment for source '{self.name}' "
                          f"to interface '{interface.get_display_name()}'.")
         result = self.inventory.add_update_object(NBIPAddress, data=ip_data, source=self)
