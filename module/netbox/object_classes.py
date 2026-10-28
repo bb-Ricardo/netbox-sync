@@ -1323,6 +1323,8 @@ class NBCustomField(NetBoxObject):
             NBInventoryItem.object_type,
             NBPowerPort.object_type,
             NBClusterGroup.object_type,
+            NBCluster.object_type,
+            NBVirtualDisk.object_type,
             NBVMInterface.object_type,
             NBVM.object_type,
             NBModule.object_type
@@ -1914,7 +1916,8 @@ class NBCluster(NetBoxObject):
             "scope_id": self.scopes,
             # supports pre4.2.0 clusters with site
             "site": NBSite,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
 
@@ -2134,7 +2137,8 @@ class NBVirtualDisk(NetBoxObject):
             "virtual_machine": NBVM,
             "description": 200,
             "size": int,  # in MB
-            "tags": NBTagList
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
 
