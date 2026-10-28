@@ -18,12 +18,6 @@ uv sync --extra openstack
 The supported SDK range is `openstacksdk>=4.0,<5`. Selecting an OpenStack source
 without the SDK logs an error and skips that source.
 
-On the consolidated branch, Docker builds can enable the SDK with:
-
-```sh
-docker build --build-arg INSTALL_OPENSTACK=true -t netbox-sync:openstack .
-```
-
 ## Authentication and permissions
 
 The current source uses Keystone Identity v3 username/password authentication
@@ -112,8 +106,8 @@ Only addresses permitted by `permitted_subnets` are imported. Pre-create the
 NetBox prefixes, VRFs, and VLANs appropriate to your cloud's networks. Address
 prefix matching prefers the mapped site and can fall back to other matching
 prefixes; without a matching prefix, a bare IPv4/IPv6 address retains its
-host-length mask. This source does not implement AWS-style per-VPC isolation:
-carefully inspect overlapping tenant address spaces before permitting IP writes.
+host-length mask. Carefully inspect overlapping tenant address spaces before
+permitting IP writes.
 
 Interfaces and addresses come from Nova server address data, not a separate
 Neutron topology inventory. Fixed and floating addresses may both be imported
@@ -162,10 +156,11 @@ disables VM UUID comments. `strip_host_domain_name` and
 SDK resource attributes into custom fields; dotted paths are supported.
 
 NetBox 3.7+ uses separate virtual disks; older versions retain aggregate VM
-disk capacity. Disk units follow the existing convention: GiB before NetBox 4.1
-and MiB from 4.1 onward. Missing attached-volume sizes are logged rather than
-replaced with fabricated zero sizes. NetBox 4.2+ uses scoped cluster sites and
-separate MAC address objects.
+disk capacity. OpenStack reports flavor and volume sizes in gigabytes. NetBox
+versions before 4.1 store the reported value as gigabytes; from 4.1, the source
+converts it to megabytes by multiplying by 1000. Missing attached-volume sizes
+are logged rather than replaced with fabricated zero sizes. NetBox 4.2+ uses
+scoped cluster sites and separate MAC address objects.
 
 ## Filters and lifecycle
 
@@ -177,8 +172,7 @@ does not by itself exclude its VMs.
 Objects participate in the application's normal source tagging, orphaning, and
 pruning lifecycle. Changing project scope, filters, naming, or permitted networks
 can change which objects are considered discovered. Avoid overlapping sources
-and inspect the dry-run log before allowing writes or pruning. Do not assume
-this source has the AWS implementation's collect-all-accounts failure contract.
+and inspect the dry-run log before allowing writes or pruning.
 
 ## Validation
 
