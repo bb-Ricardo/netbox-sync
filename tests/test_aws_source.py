@@ -13,7 +13,7 @@ from botocore.stub import Stubber
 from module.config.file_output import ConfigFileOutput
 from module.config.parser import ConfigParser
 from module.netbox import (
-    NBCluster, NBIPAddress, NBMACAddress, NBVirtualDisk, NBVM, NBVMInterface, NBVRF,
+    NBCluster, NBIPAddress, NBMACAddress, NBTag, NBVirtualDisk, NBVM, NBVMInterface, NBVRF,
 )
 from module.netbox.connection import NetBoxHandler
 from module.sources import instantiate_sources, valid_sources
@@ -302,6 +302,24 @@ def test_duplicate_organization_account_names_remain_distinct(make_source, inven
     assert len(inventory.get_all_items(NBVM)) == 2
 
 
+@pytest.mark.parametrize("tag_name", ["AWS:Environment=Dev", "aws:environment=Dev"])
+def test_aws_vm_tags_use_resolved_identity(make_source, inventory, vpc_vrf, tag_name):
+    tag = inventory.add_object(NBTag, data={"name": tag_name})
+    data = inventory_data()
+    data["instances"][0]["Tags"] = [{"Key": "Environment", "Value": "dev"}]
+    source = make_source(data=data)
+    for _ in range(2):
+        source.apply()
+        vm, = inventory.get_all_items(NBVM)
+        assert tag in vm.data["tags"]
+        assert tag_name in vm.get_tags()
+    vm.add_tags("user-managed")
+    data["instances"][0]["Tags"] = []
+    source.apply()
+    assert tag_name not in vm.get_tags()
+    assert "user-managed" in vm.get_tags()
+
+
 def test_removed_aws_tag_is_reconciled_but_user_tag_is_kept(make_source, inventory, vpc_vrf):
     data = inventory_data()
     source = make_source(data=data)
@@ -343,17 +361,151 @@ def test_primary_address_removal_clears_primary_ip(make_source, inventory, vpc_v
     assert "primary_ip6" in vm.unset_items
 
 
-def test_ip_owned_by_other_source_is_not_reassigned(make_source, inventory, vpc_vrf):
+@pytest.mark.parametrize("tags", [
+    [],
+    [NetBoxHandler.primary_tag],
+    [NetBoxHandler.orphaned_tag],
+    [NetBoxHandler.primary_tag, "Source: other"],
+])
+def test_ip_owned_by_other_source_is_not_reassigned(
+        make_source, inventory, vpc_vrf, caplog, tags):
     source = make_source()
-    other = inventory.add_object(NBVM, data={"name": "other", "status": "active"})
+    other = inventory.add_object(NBVM, data={"name": "other", "status": "active", "tags": tags})
     other_interface = inventory.add_object(NBVMInterface, data={"name": "eth0", "virtual_machine": other})
     existing = inventory.add_object(NBIPAddress, data={
         "address": "10.0.0.10/24", "vrf": vpc_vrf, "assigned_object_id": other_interface,
         "assigned_object_type": NBVMInterface,
     })
-    with pytest.raises(SystemExit):
-        source.apply()
+    source.apply()
     assert existing.get_interface() is other_interface
+    assert "belongs to another source" in caplog.text
+    assert "Skipping reassignment" in caplog.text
+    vm = next(item for item in inventory.get_all_items(NBVM) if item is not other)
+    assert "primary_ip4" not in vm.data
+    assert vm.data["primary_ip6"].data["address"] == "2001:db8::10/64"
+    assert len(inventory.get_all_items(NBIPAddress)) == 3
+
+
+@pytest.mark.parametrize("previous_source", [None, "Source: other"])
+def test_ip_on_managed_orphan_is_reclaimed(
+        make_source, inventory, vpc_vrf, caplog, previous_source):
+    source = make_source()
+    tags = [NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag]
+    if previous_source:
+        tags.append(previous_source)
+    other = inventory.add_object(NBVM, data={"name": "old", "status": "offline", "tags": tags})
+    other_interface = inventory.add_object(NBVMInterface, data={"name": "eth0", "virtual_machine": other})
+    existing = inventory.add_object(NBIPAddress, data={
+        "address": "10.0.0.10/24", "vrf": vpc_vrf, "assigned_object_id": other_interface,
+        "assigned_object_type": NBVMInterface,
+    })
+    other.update(data={"primary_ip4": existing})
+    source.apply()
+    vm = next(item for item in inventory.get_all_items(NBVM) if item is not other)
+    assert existing.get_device_vm() is vm
+    assert vm.data["primary_ip4"] is existing
+    assert "primary_ip4" in other.unset_items
+    assert len(inventory.get_all_items(NBIPAddress)) == 3
+    assert "Reclaiming IP" in caplog.text
+
+
+def test_ip_with_unresolved_owner_is_not_reassigned(make_source, inventory, vpc_vrf, caplog):
+    source = make_source()
+    existing = inventory.add_object(NBIPAddress, data={
+        "id": 99, "address": "10.0.0.10/24", "vrf": vpc_vrf,
+        "assigned_object_id": 999, "assigned_object_type": NBVMInterface.object_type,
+    }, read_from_netbox=True)
+    source.apply()
+    assert existing.data["assigned_object_id"] == 999
+    assert "unresolved owner" in caplog.text
+    assert "Skipping reassignment" in caplog.text
+    vm, = inventory.get_all_items(NBVM)
+    assert "primary_ip4" not in vm.data
+    assert vm.data["primary_ip6"].data["address"] == "2001:db8::10/64"
+
+
+@pytest.mark.parametrize("management", ["tag", "source", "source-tag", "unmanaged"])
+def test_offline_owner_ip_reclamation(
+        make_source, inventory, vpc_vrf, caplog, management):
+    source = make_source()
+    tags = {
+        "tag": [NetBoxHandler.primary_tag, "Source: other"],
+        "source-tag": [source.source_tag],
+    }.get(management, [])
+    other = inventory.add_object(
+        NBVM, data={"name": "down", "status": "offline", "tags": tags},
+        source=source if management == "source" else None)
+    other_interface = inventory.add_object(NBVMInterface, data={"name": "eth0", "virtual_machine": other})
+    existing = inventory.add_object(NBIPAddress, data={
+        "address": "10.0.0.10/24", "vrf": vpc_vrf, "assigned_object_id": other_interface,
+        "assigned_object_type": NBVMInterface,
+    })
+    other.update(data={"primary_ip4": existing})
+    source.apply()
+    vm = next(item for item in inventory.get_all_items(NBVM) if item is not other)
+    if management == "unmanaged":
+        assert existing.get_device_vm() is other
+        assert other.data["primary_ip4"] is existing
+        assert "primary_ip4" not in vm.data
+        assert "Skipping reassignment" in caplog.text
+    else:
+        assert existing.get_device_vm() is vm
+        assert vm.data["primary_ip4"] is existing
+        assert "primary_ip4" in other.unset_items
+        assert "Reclaiming IP" in caplog.text
+
+
+@pytest.mark.parametrize("owner_status,instance_state,reclaim", [
+    ({"value": "offline", "label": "Offline"}, "running", True),
+    ("offline", "stopped", False),
+    ("active", "running", False),
+    ("failed", "running", False),
+    ("planned", "running", False),
+])
+def test_cross_source_reclamation_requires_offline_to_active(
+        make_source, inventory, vpc_vrf, owner_status, instance_state, reclaim):
+    data = inventory_data()
+    data["instances"][0]["State"]["Name"] = instance_state
+    source = make_source(data=data)
+    other = inventory.add_object(NBVM, data={
+        "id": 99, "name": "other", "status": owner_status,
+    }, read_from_netbox=True)
+    other.add_tags([NetBoxHandler.primary_tag, "Source: other"])
+    other_interface = inventory.add_object(NBVMInterface, data={"name": "eth0", "virtual_machine": other})
+    existing = inventory.add_object(NBIPAddress, data={
+        "address": "10.0.0.10/24", "vrf": vpc_vrf, "assigned_object_id": other_interface,
+        "assigned_object_type": NBVMInterface,
+    })
+    source.apply()
+    assert (existing.get_device_vm() is not other) is reclaim
+
+
+@pytest.mark.parametrize("active_first", [False, True])
+def test_active_instance_keeps_shared_ip_regardless_of_discovery_order(
+        make_source, inventory, vpc_vrf, active_first, caplog):
+    data = inventory_data()
+    stopped = copy.deepcopy(data["instances"][0])
+    stopped_id, stopped_eni = "i-11111111111111111", "eni-11111111111111111"
+    stopped.update(InstanceId=stopped_id, State={"Name": "stopped"},
+                   NetworkInterfaces=[{"NetworkInterfaceId": stopped_eni}], BlockDeviceMappings=[])
+    eni = copy.deepcopy(data["NetworkInterfaces"][ENI])
+    eni.update(NetworkInterfaceId=stopped_eni, MacAddress="02:00:00:00:00:01")
+    eni["Attachment"]["InstanceId"] = stopped_id
+    data["NetworkInterfaces"][stopped_eni] = eni
+    data["instances"].insert(1 if active_first else 0, stopped)
+    source = make_source(data=data)
+    for _ in range(2):
+        source.apply()
+        active = next(vm for vm in inventory.get_all_items(NBVM) if vm.data["status"] == "active")
+        offline = next(vm for vm in inventory.get_all_items(NBVM) if vm.data["status"] == "offline")
+        ips = inventory.get_all_items(NBIPAddress)
+        assert len(ips) == 3
+        assert all(ip.get_device_vm() is active for ip in ips)
+        assert active.data["primary_ip4"].data["address"] == "10.0.0.10/24"
+        assert active.data["primary_ip6"].data["address"] == "2001:db8::10/64"
+        for field in ("primary_ip4", "primary_ip6"):
+            assert not offline.data.get(field) or field in offline.unset_items
+    assert "Skipping reassignment" in caplog.text or "Reclaiming IP" in caplog.text
 
 
 def test_tagging_and_successful_empty_discovery_use_existing_orphan_lifecycle(
@@ -567,7 +719,7 @@ def test_profile_is_forwarded_to_sdk(sdk):
     aws_client.boto3.Session.assert_called_once_with(profile_name="inventory")
 
 
-def test_sdk_error_after_first_region_aborts_entire_apply(sdk, inventory, load_config, caplog):
+def test_sdk_access_denied_after_first_region_continues(sdk, inventory, load_config, caplog):
     sts, ec2 = sdk
     identity(sts)
     stub_region(ec2, inventory_data())
@@ -580,11 +732,10 @@ regions = {REGION}, us-west-2
 sync_private_ips = False
 """)
     source, = instantiate_sources()
-    with pytest.raises(SystemExit):
-        source.apply()
-    assert inventory.get_all_items(NBVM) == []
-    assert inventory.get_all_items(NBCluster) == []
-    assert "No NetBox writes or pruning" in caplog.text
+    source.apply()
+    assert len(inventory.get_all_items(NBVM)) == 1
+    assert "UnauthorizedOperation" in caplog.text
+    assert source.client.access_denied == [(ACCOUNT, "us-west-2", "ec2")]
 
 
 def test_wrong_account_aborts(sdk):
@@ -673,7 +824,7 @@ def test_auto_no_enabled_regions_aborts(sdk, regions):
         AWSClient().discover(["auto"])
 
 
-def test_auto_permission_failure_aborts_before_inventory_changes(
+def test_auto_permission_failure_logs_and_returns_without_inventory_changes(
         sdk, inventory, load_config, caplog):
     sts, ec2 = sdk
     identity(sts)
@@ -687,14 +838,14 @@ sync_private_ips = False
 """)
     source, = instantiate_sources()
     assert source.settings.regions == ["auto"]
-    with pytest.raises(SystemExit):
-        source.apply()
+    source.apply()
     assert inventory.get_all_items(NBVM) == []
     assert inventory.get_all_items(NBCluster) == []
-    assert "No NetBox writes or pruning" in caplog.text
+    assert "UnauthorizedOperation" in caplog.text
+    assert source.client.access_denied
 
 
-def test_auto_later_region_failure_does_not_return_partial_inventory(
+def test_auto_later_region_denied_keeps_accessible_inventory(
         sdk, inventory, load_config):
     sts, ec2 = sdk
     identity(sts)
@@ -709,10 +860,9 @@ regions = auto
 sync_private_ips = False
 """)
     source, = instantiate_sources()
-    with pytest.raises(SystemExit):
-        source.apply()
-    assert inventory.get_all_items(NBVM) == []
-    assert inventory.get_all_items(NBCluster) == []
+    source.apply()
+    assert len(inventory.get_all_items(NBVM)) == 1
+    assert source.client.access_denied == [(ACCOUNT, "us-west-2", "ec2")]
 
 
 @pytest.mark.parametrize("regions", ["auto, us-east-1", "us-east-1, auto"])
@@ -883,7 +1033,7 @@ def test_organization_can_include_management(org_sdk):
 
 
 @pytest.mark.parametrize("failure", ["assume", "scan", "identity"])
-def test_organization_later_account_failure_prevents_all_mutations(
+def test_organization_later_account_denied_continues_but_identity_failure_aborts(
         org_sdk, inventory, load_config, failure, caplog):
     organization_accounts(org_sdk)
     first = assume_member(org_sdk, ACCOUNT)
@@ -905,24 +1055,31 @@ def test_organization_later_account_failure_prevents_all_mutations(
     source = organization_source(load_config)
     sync = Mock()
     source.sync_snapshot = sync
-    with pytest.raises(SystemExit):
+    if failure == "identity":
+        with pytest.raises(SystemExit):
+            source.apply()
+        sync.assert_not_called()
+        assert "No NetBox writes or pruning" in caplog.text
+    else:
         source.apply()
-    sync.assert_not_called()
+        assert sync.called
+        assert source.client.access_denied
     assert inventory.get_all_items(NBVM) == []
     assert inventory.get_all_items(NBCluster) == []
     assert SECOND_ACCOUNT in caplog.text
-    assert "No NetBox writes or pruning" in caplog.text
 
 
-def test_organization_listing_failure_aborts(org_sdk):
+def test_organization_listing_denied_returns_non_authoritative_empty_result(org_sdk, caplog):
     identity(org_sdk.central.sts, MANAGEMENT)
     org_sdk.central.organizations.add_response("describe_organization", {
         "Organization": {"MasterAccountId": MANAGEMENT},
     }, {})
     org_sdk.central.organizations.add_client_error(
         "list_accounts", service_error_code="AccessDeniedException", http_status_code=403, expected_params={})
-    with pytest.raises(aws_client.AWSDiscoveryError, match="AccessDeniedException"):
-        AWSClient().discover_organization([REGION], "NetBoxInventoryReadOnly")
+    client = AWSClient()
+    assert client.discover_organization([REGION], "NetBoxInventoryReadOnly") == {}
+    assert client.access_denied
+    assert "AccessDeniedException" in caplog.text
 
 
 @pytest.mark.parametrize("selection", [[MANAGEMENT], ["999999999999"], ["345678901234"]])
