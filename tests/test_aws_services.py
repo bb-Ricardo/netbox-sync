@@ -7,10 +7,12 @@ import pytest
 boto3 = pytest.importorskip("boto3")
 from botocore.stub import Stubber
 
-from module.netbox import NBCustomField, NBCluster, NBIPAddress, NBTag, NBVirtualDisk, NBVM, NBVMInterface
+from module.netbox import (
+    NBCustomField, NBCluster, NBClusterGroup, NBIPAddress, NBTag, NBVirtualDisk, NBVM, NBVMInterface,
+)
 from module.sources import instantiate_sources
 from module.sources.aws import client as aws_client
-from module.sources.aws.client import AWSClient, AWSDiscoveryError
+from module.sources.aws.client import AWSAccessCheck, AWSClient, AWSDiscoveryError
 from test_aws_source import (
     ACCOUNT, INSTANCE, REGION, SECOND_ACCOUNT, VPC, assume_member, identity, inventory_data,
     make_source, org_sdk, organization_accounts, stub_region, windows_config_paths,
@@ -186,15 +188,218 @@ def test_long_names_and_same_lambda_names_across_regions(make_source, inventory)
     assert len({vm.data["name"] for vm in functions}) == 2
 
 
-def test_services_do_not_overwrite_unmanaged_objects(make_source, inventory):
+def test_services_do_not_overwrite_unmanaged_objects(make_source, inventory, caplog):
     data = service_data()
     source = make_source("sync_lambda = True", data=data)
     source.apply()
     function = next(vm for vm in inventory.get_all_items(NBVM)
                     if vm.data["custom_fields"].get("aws_service") == "lambda")
     function.source = None
-    with pytest.raises(SystemExit):
+    before = copy.deepcopy(function.data["custom_fields"])
+    data["Functions"][0]["MemorySize"] = 256
+    source.apply()
+    assert "belongs to another source" in caplog.text
+    assert function.source is None
+    assert function.data["custom_fields"] == before
+    assert function.data["memory"] == 128
+
+
+@pytest.mark.parametrize("conflict", ["name", "duplicate_identity", "other_source"])
+def test_lambda_cluster_conflict_continues_and_retains_children(
+        make_source, inventory, caplog, conflict):
+    source = make_source("sync_lambda = True\nsync_private_ips = False", data=service_data())
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": f"AWS {ACCOUNT}"})
+    fields = {} if conflict == "name" else {"aws_resource_id": f"lambda/{ACCOUNT}/{REGION}"}
+    cluster = inventory.add_object(NBCluster, data={
+        "name": f"Lambda {ACCOUNT}/{REGION}", "group": group, "custom_fields": fields,
+    })
+    if conflict == "duplicate_identity":
+        inventory.add_object(NBCluster, data={
+            "name": "Duplicate", "group": group, "custom_fields": fields,
+        })
+    retained = inventory.add_object(NBVM, data={
+        "name": "Existing function", "cluster": cluster, "tags": [source.source_tag],
+    })
+    source.apply()
+    inventory.tag_all_the_things(make_netbox_handler())
+    assert "Skipping" in caplog.text
+    assert retained.source is source
+    assert make_netbox_handler().orphaned_tag not in retained.get_tags()
+    assert cluster.source is None
+    assert cluster.data.get("custom_fields", {}) == fields
+    assert any(vm.data.get("custom_fields", {}).get("aws_instance_id") == INSTANCE
+               for vm in inventory.get_all_items(NBVM))
+    assert not any(vm.data.get("custom_fields", {}).get("aws_resource_id") == FUNCTION_ARN
+                   for vm in inventory.get_all_items(NBVM))
+
+
+@pytest.mark.parametrize("stage", ["cluster", "holder", "bucket"])
+def test_s3_conflict_skips_dependencies_but_continues(make_source, inventory, caplog, stage):
+    data = service_data()
+    data["Buckets"].append({**data["Buckets"][0], "Name": "second"})
+    source = make_source("sync_s3 = True\nsync_private_ips = False", data=data)
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": f"AWS {ACCOUNT}"})
+    identity = f"s3/{ACCOUNT}/{REGION}"
+    cluster = inventory.add_object(NBCluster, data={
+        "name": f"S3 {ACCOUNT}/{REGION}", "group": group,
+        "custom_fields": {} if stage == "cluster" else {"aws_resource_id": identity},
+    }, source=source)
+    if stage != "cluster":
+        holder = inventory.add_object(NBVM, data={
+            "name": f"S3 inventory {ACCOUNT}/{REGION}", "cluster": cluster,
+            "custom_fields": {} if stage == "holder" else {"aws_resource_id": identity},
+        }, source=source)
+        if stage == "bucket":
+            inventory.add_object(NBVirtualDisk, data={
+                "name": "inventory-bucket", "virtual_machine": holder, "size": 0,
+            })
+    source.apply()
+    assert "name collision" in caplog.text
+    buckets = [disk.data["name"] for disk in inventory.get_all_items(NBVirtualDisk)
+               if disk.data.get("custom_fields", {}).get("aws_service") == "s3"]
+    assert buckets == (["second"] if stage == "bucket" else [])
+    assert any(vm.data.get("custom_fields", {}).get("aws_instance_id") == INSTANCE
+               for vm in inventory.get_all_items(NBVM))
+
+
+def test_eks_conflict_skips_workers_and_continues_next_region(make_source, inventory, caplog):
+    data = service_data()
+    source = make_source("sync_eks = True\nsync_private_ips = False", data=data)
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": f"AWS {ACCOUNT}"})
+    inventory.add_object(NBCluster, data={
+        "name": f"EKS {ACCOUNT}/{REGION}/inventory-cluster", "group": group,
+    })
+    next_region = inventory_data()
+    next_region["EKSClusters"] = []
+    next_region["instances"][0]["InstanceId"] = "i-next-region"
+    for eni in next_region["NetworkInterfaces"].values():
+        eni["Attachment"]["InstanceId"] = "i-next-region"
+    source.client.discover.return_value = ACCOUNT, {REGION: data, "us-west-2": next_region}
+    source.apply()
+    assert f"Skipping instance '{INSTANCE}'" in caplog.text
+    instances = [vm.data.get("custom_fields", {}).get("aws_instance_id")
+                 for vm in inventory.get_all_items(NBVM)]
+    assert INSTANCE not in instances
+    assert "i-next-region" in instances
+
+
+def test_lambda_function_conflict_continues_next_function(make_source, inventory, caplog):
+    data = service_data()
+    source = make_source("sync_lambda = True\nsync_private_ips = False", data=data)
+    source.apply()
+    cluster = next(item for item in inventory.get_all_items(NBCluster)
+                   if item.data.get("custom_fields", {}).get("aws_service") == "lambda")
+    inventory.add_object(NBVM, data={"name": "Lambda second", "cluster": cluster})
+    data["Functions"].extend([
+        {**data["Functions"][0], "FunctionName": name, "FunctionArn": f"{FUNCTION_ARN}-{name}"}
+        for name in ("second", "third")
+    ])
+    source.apply()
+    assert "name collision" in caplog.text
+    assert any(vm.data["name"] == "Lambda third" for vm in inventory.get_all_items(NBVM))
+
+
+def test_access_tracking_replaces_scope_and_records_operations(service_sdk):
+    client = AWSClient()
+    sts = service_sdk["sts"].client
+    client.track_access(sts, ACCOUNT, None, "sts")
+    client.track_access(sts, SECOND_ACCOUNT, None, "sts")
+    params = {"RoleArn": f"arn:aws:iam::{SECOND_ACCOUNT}:role/reports", "RoleSessionName": "test"}
+    service_sdk["sts"].add_client_error("assume_role", service_error_code="AccessDenied", expected_params=params)
+    with client.tolerate_access_denied(SECOND_ACCOUNT, service="sts"):
+        sts.assume_role(**params)
+    assert client.access_checks == [
+        AWSAccessCheck(SECOND_ACCOUNT, None, "sts", None, "AssumeRole", True)]
+
+
+@pytest.mark.parametrize("scope", ["resource", "service", "account", "organization"])
+def test_permission_tags_require_verified_recovery(make_source, inventory, scope):
+    source = make_source("sync_s3 = True", data=service_data())
+    source.apply()
+    bucket = next(disk for disk in inventory.get_all_items(NBVirtualDisk)
+                  if disk.data["name"] == "inventory-bucket")
+    bucket.add_tags("user-tag")
+    unmanaged = inventory.add_object(NBVirtualDisk, data={
+        "name": "unmanaged", "virtual_machine": bucket.data["virtual_machine"], "size": 0,
+    })
+    account = None if scope == "organization" else ACCOUNT
+    region = REGION if scope in ("resource", "service") else None
+    service = {"resource": "s3", "service": "s3", "account": "sts",
+               "organization": "organizations"}[scope]
+    resource = "inventory-bucket" if scope == "resource" else None
+    operation = "GetBucketTagging"
+    tag = f"Sync:AccessDenied:{operation}"
+    failure = AWSAccessCheck(account, region, service, resource, operation, True)
+    success = AWSAccessCheck(account, region, service, resource, operation, False)
+    source.client.access_checks = [failure]
+    source.reconcile_access_tags()
+    assert tag in bucket.get_tags()
+    assert tag not in unmanaged.get_tags()
+    for checks in ([], [AWSAccessCheck(ACCOUNT, REGION, "s3", "other", operation, False)],
+                   [success, failure]):
+        source.client.access_checks = checks
+        source.reconcile_access_tags()
+        assert tag in bucket.get_tags()
+    source.client.access_checks = [success]
+    source.reconcile_access_tags()
+    assert tag not in bucket.get_tags()
+    assert "user-tag" in bucket.get_tags()
+
+
+def test_permission_tags_do_not_leak_across_scopes(make_source, inventory):
+    source = make_source("sync_s3 = True", data=service_data())
+    source.custom_fields()
+    objects = []
+    for account, region, service in (
+            (ACCOUNT, REGION, "s3"), (SECOND_ACCOUNT, REGION, "s3"),
+            (ACCOUNT, "us-west-2", "s3"), (ACCOUNT, REGION, "lambda")):
+        objects.append(inventory.add_object(NBVM, data={
+            "name": f"{account}-{region}-{service}", "tags": [source.source_tag],
+            "custom_fields": {
+                "aws_account_id": account, "aws_region": region, "aws_service": service,
+            },
+        }))
+    source.client.access_checks = [AWSAccessCheck(ACCOUNT, REGION, "s3", None, "ListBuckets", True)]
+    source.reconcile_access_tags()
+    assert ["Sync:AccessDenied:ListBuckets" in item.get_tags() for item in objects] == [
+        True, False, False, False]
+
+
+def test_bucket_permission_tag_through_sdk_denial_and_recovery(service_sdk, inventory, load_config):
+    load_config(f"""
+[source/services]
+type = aws
+regions = {REGION}
+sync_s3 = True
+sync_private_ips = False
+""")
+    source, = instantiate_sources()
+    tag = "Sync:AccessDenied:GetBucketTagging"
+    for denied in (False, True, False):
+        identity(service_sdk["sts"])
+        stub_region(service_sdk["ec2"], inventory_data())
+        if denied:
+            service_sdk["s3"].add_response("list_buckets", {"Buckets": [{
+                "Name": "inventory-bucket", "BucketRegion": REGION,
+            }]}, {"BucketRegion": REGION})
+            service_sdk["s3"].add_client_error("get_bucket_tagging", service_error_code="AccessDenied",
+                                               expected_params={
+                                                   "Bucket": "inventory-bucket", "ExpectedBucketOwner": ACCOUNT,
+                                               })
+        else:
+            stub_s3(service_sdk["s3"])
         source.apply()
+        inventory.tag_all_the_things(make_netbox_handler())
+        bucket = next(disk for disk in inventory.get_all_items(NBVirtualDisk)
+                      if disk.data["name"] == "inventory-bucket")
+        assert (tag in bucket.get_tags()) is denied
+        assert make_netbox_handler().orphaned_tag not in bucket.get_tags()
+        assert any(check.operation == "GetBucketTagging" and check.resource == "inventory-bucket"
+                   and check.denied is denied for check in source.client.access_checks)
+        bucket.source = None
 
 
 @pytest.mark.parametrize("failure", ["arn", "membership", "tag", "state"])
