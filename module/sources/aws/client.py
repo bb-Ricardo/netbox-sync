@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from module.common.logging import get_logger
 
@@ -18,6 +19,16 @@ class AWSDiscoveryError(RuntimeError):
     """Discovery failed; do not reconcile this run with NetBox."""
 
 
+@dataclass(frozen=True)
+class AWSAccessCheck:
+    account: str | None
+    region: str | None
+    service: str
+    resource: str | None
+    operation: str
+    denied: bool
+
+
 class AWSClient:
     def __init__(self, profile=None, *, session=None):
         if boto3 is None:
@@ -28,6 +39,31 @@ class AWSClient:
             raise AWSDiscoveryError(f"Unable to initialize AWS credentials: {exc}") from exc
         self.account_names = {}
         self.access_denied = []
+        self.access_checks = []
+
+    def track_access(self, client, account, region, service):
+        def capture_resource(params, context, **kwargs):
+            context["netbox_sync_resource"] = next((
+                params[key] for key in ("Bucket", "clusterName", "FunctionName", "Resource", "name")
+                if key in params
+            ), None)
+
+        def record_access(model, parsed, context, **kwargs):
+            code = parsed.get("Error", {}).get("Code")
+            denied = code in (
+                "AccessDenied", "AccessDeniedException", "UnauthorizedOperation",
+                "AuthorizationError", "AuthorizationErrorException", "Forbidden", "ForbiddenException")
+            if code is None or denied or code in (
+                    "NoSuchTagSet", "ServerSideEncryptionConfigurationNotFoundError"):
+                check_account = parsed.get("Account", account) if model.name == "GetCallerIdentity" else account
+                self.access_checks.append(AWSAccessCheck(
+                    check_account, region, service, context.get("netbox_sync_resource"), model.name, denied))
+
+        for event, handler in (
+                ("before-parameter-build.*.*", capture_resource), ("after-call.*.*", record_access)):
+            unique_id = f"netbox-sync-access-{event}"
+            client.meta.events.unregister(event, unique_id=unique_id)
+            client.meta.events.register(event, handler, unique_id=unique_id)
 
     @contextmanager
     def tolerate_access_denied(self, account=None, region=None, service=None, resource=None):
@@ -48,6 +84,7 @@ class AWSClient:
                               include_management=False, external_id=None, account_ids=None, services=()):
         """Collect selected accounts, recording authorization-denied scopes for retention."""
         self.access_denied = []
+        self.access_checks = []
         clients = []
         current_account = None
         try:
@@ -59,6 +96,7 @@ class AWSClient:
             config = Config(retries={"mode": "standard", "max_attempts": 5},
                             connect_timeout=10, read_timeout=60)
             sts = self.session.client("sts", region_name=bootstrap, config=config)
+            self.track_access(sts, None, None, "sts")
             clients.append(sts)
             identity = sts.get_caller_identity()
             if expected_account is not None and identity["Account"] != expected_account:
@@ -66,6 +104,7 @@ class AWSClient:
                     f"AWS account mismatch: expected {expected_account}, authenticated as {identity['Account']}.")
             partition = identity["Arn"].split(":")[1]
             organizations = self.session.client("organizations", region_name=bootstrap, config=config)
+            self.track_access(organizations, None, None, "organizations")
             clients.append(organizations)
             management_account = organizations.describe_organization()["Organization"]["MasterAccountId"]
             accounts = set()
@@ -96,6 +135,7 @@ class AWSClient:
                 if external_id:
                     request["ExternalId"] = external_id
                 credentials = None
+                self.track_access(sts, current_account, None, "sts")
                 with self.tolerate_access_denied(current_account, service="sts"):
                     credentials = sts.assume_role(**request)["Credentials"]
                 if credentials is None:
@@ -107,6 +147,7 @@ class AWSClient:
                 options = {"services": services} if services else {}
                 _, snapshot = member.discover(regions, current_account, discovery_region, **options)
                 self.access_denied.extend(member.access_denied)
+                self.access_checks.extend(member.access_checks)
                 snapshots[current_account] = snapshot
             self.account_names = account_names
             return snapshots
@@ -125,6 +166,7 @@ class AWSClient:
         """Collect accessible regions and record denied scopes before inventory changes."""
         clients = []
         self.access_denied = []
+        self.access_checks = []
         account = expected_account
         try:
             config = Config(retries={"mode": "standard", "max_attempts": 5},
@@ -136,6 +178,7 @@ class AWSClient:
                     "Automatic region discovery requires discovery_region or an AWS profile/environment region "
                     "(AWS_DEFAULT_REGION).")
             sts = self.session.client("sts", region_name=bootstrap, config=config)
+            self.track_access(sts, account, None, "account")
             clients.append(sts)
             account = sts.get_caller_identity()["Account"]
             if expected_account is not None and account != expected_account:
@@ -143,6 +186,7 @@ class AWSClient:
                     f"AWS account mismatch: expected {expected_account}, authenticated as {account}.")
             if automatic:
                 discovery_client = self.session.client("ec2", region_name=bootstrap, config=config)
+                self.track_access(discovery_client, account, None, "account")
                 clients.append(discovery_client)
                 response = discovery_client.describe_regions(AllRegions=True)
                 regions = sorted({
@@ -155,6 +199,7 @@ class AWSClient:
             snapshot = {}
             for region in regions:
                 ec2 = self.session.client("ec2", region_name=region, config=config)
+                self.track_access(ec2, account, region, "ec2")
                 clients.append(ec2)
                 data = None
                 with self.tolerate_access_denied(account, region, "ec2"):
@@ -165,6 +210,7 @@ class AWSClient:
                 data["InaccessibleServices"] = []
                 for service in services:
                     service_client = self.session.client(service, region_name=region, config=config)
+                    self.track_access(service_client, account, region, service)
                     clients.append(service_client)
                     try:
                         with self.tolerate_access_denied(account, region, service):
