@@ -2391,7 +2391,7 @@ class NBFHRPGroupItem(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "group_id": int,
-            "ip_addresses": NBIPAddress,
+            "ip_addresses": NBIPAddressList,
             "description": 200,
             "tags": NBTagList,
             "custom_fields": NBCustomField
