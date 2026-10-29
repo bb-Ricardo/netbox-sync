@@ -331,6 +331,23 @@ def test_flavor_lookup_unknown_volume_and_ipv6_hypervisor(cloud):
     cloud.session.compute.get_flavor.assert_called_once_with("flavor-1")
 
 
+@pytest.mark.parametrize("status, level, message", [
+    ("disabled", "INFO", "is disabled in Nova"),
+    ("enabled", "ERROR", "Unable to find an availability zone"),
+])
+def test_host_without_availability_zone_is_skipped(cloud, caplog, status, level, message):
+    cloud.session.compute.hypervisors.return_value.append(
+        resource(name="compute2.example", service_details={"host": "compute2"}, status=status,
+                 state="up", host_ip="10.0.0.3", hypervisor_type="QEMU", hypervisor_version=8000000))
+    handler = OpenStackHandler("cloud")
+    with caplog.at_level("INFO"):
+        handler.apply()
+    names = [device.data["name"] for device in cloud.inventory.get_all_items(NBDevice)]
+    assert "compute2.example" not in names
+    records = [r for r in caplog.records if "compute2.example" in r.getMessage() and message in r.getMessage()]
+    assert [r.levelname for r in records] == [level]
+
+
 def test_cluster_matching_does_not_reassign_another_cloud(cloud):
     other_group = cloud.inventory.add_object(NBClusterGroup, data={"name": "Other"})
     other_site = cloud.inventory.add_object(NBSite, data={"name": "Other Site"})
