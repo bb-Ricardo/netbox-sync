@@ -922,7 +922,11 @@ class OpenStackHandler(SourceBase):
         cluster_name = self.get_cluster_for_host(short_name)
 
         if cluster_name is None:
-            log.error(f"Requesting cluster for host '{name}' failed. Skipping.")
+            # Nova omits disabled compute services from availability zone host lists
+            if get_string_or_none(grab(obj, "status")) == "disabled":
+                log.info(f"Host '{name}' is disabled in Nova and not part of any availability zone. Skipping.")
+            else:
+                log.error(f"Unable to find an availability zone for host '{name}'. Skipping.")
             return
 
         if log.level == DEBUG3:
