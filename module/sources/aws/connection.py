@@ -1,5 +1,6 @@
 from hashlib import sha256
 from ipaddress import ip_address, ip_interface, ip_network
+from itertools import product
 
 from packaging.version import Version
 
@@ -94,6 +95,7 @@ class AWSHandler(SourceBase):
                     account_labels[account] = f"{label} ({account})"
             for account, snapshot in snapshots.items():
                 self.sync_snapshot(account, snapshot, account_name=account_labels[account])
+            self.reconcile_access_tags()
         except (AWSDiscoveryError, ValueError, KeyError) as exc:
             self.abort(exc)
 
@@ -162,6 +164,87 @@ class AWSHandler(SourceBase):
                                 f"AWS instance '{instance['InstanceId']}' references undiscovered EKS cluster "
                                 f"'{name}' (account '{account}', region '{region}'); retaining EC2 placement.")
 
+    def access_scope(self, item):
+        fields = item.data.get("custom_fields") or {}
+        metadata = fields.get("aws_metadata") or {}
+        identity = fields.get("aws_resource_id") or ""
+        service = "ec2" if fields.get("aws_instance_id") else fields.get("aws_service")
+        account = fields.get("aws_account_id") or metadata.get("account")
+        region = fields.get("aws_region") or metadata.get("region")
+        resource = None
+        if identity.startswith("arn:"):
+            parts = identity.split(":", 5)
+            if len(parts) == 6:
+                service, region, account, resource = parts[2:]
+                if service == "lambda":
+                    resource = identity
+                elif service == "eks":
+                    resource = resource.removeprefix("cluster/")
+        elif identity.startswith("s3/"):
+            parts = identity.split("/")
+            account = parts[1]
+            if isinstance(item, NBVirtualDisk):
+                resource = parts[2]
+            else:
+                region = parts[2]
+        for parent_key in ("virtual_machine", "cluster"):
+            parent = item.data.get(parent_key)
+            if parent is not None:
+                parent_account, parent_region, parent_service, _ = self.access_scope(parent)
+                account = account or parent_account
+                region = region or parent_region
+                service = service or parent_service
+                break
+        if isinstance(item, (NBIPAddress, NBMACAddress)):
+            parent = item.get_device_vm()
+            if parent is not None:
+                account, region, service, _ = self.access_scope(parent)
+        if account is None:
+            group = item if isinstance(item, NBClusterGroup) else item.data.get("group")
+            name = group.data.get("name", "") if group is not None else ""
+            if name.startswith("AWS "):
+                label = name[4:]
+                account = next((key for key, value in getattr(self.client, "account_names", {}).items()
+                                if label in (value, f"{value} ({key})")), None)
+                if account is None and label.isdigit():
+                    account = label
+        if region is None:
+            site = item.data.get("scope_id") or item.data.get("site")
+            name = site.data.get("name", "") if isinstance(site, NBSite) else ""
+            if name.startswith("AWS "):
+                region = name[4:]
+        return account, region, service or "ec2", resource
+
+    def reconcile_access_tags(self):
+        checks = getattr(self.client, "access_checks", [])
+        if not checks:
+            return
+        prefix = "Sync:AccessDenied:"
+        scopes = {}
+        for check in checks:
+            outcomes = scopes.setdefault(
+                (check.account, check.region, check.service, check.resource), (set(), set()))
+            outcomes[0 if check.denied else 1].add(check.operation)
+        for object_type in self.dependent_netbox_objects:
+            for item in self.inventory.get_all_items(object_type):
+                if object_type in (NBTag, NBCustomField, NBTenant) or "tags" not in item.data_model or not (
+                        item.source is self or self.source_tag in item.get_tags()):
+                    continue
+                account, region, service, resource = self.access_scope(item)
+                denied, succeeded = set(), set()
+                for key in product(
+                        (None, account), (None, region), ("organizations", "sts", "account", service),
+                        (None, resource)):
+                    if key in scopes:
+                        failures, successes = scopes[key]
+                        denied.update(failures)
+                        succeeded.update(successes)
+                for operation in denied:
+                    item.add_tags(f"{prefix}{operation}")
+                for tag in item.get_tags():
+                    if tag.startswith(prefix) and tag[len(prefix):] in succeeded - denied:
+                        item.remove_tags(tag)
+
     def validate_arn(self, arn, service, account, region):
         parts = arn.split(":", 5)
         if len(parts) != 6 or parts[0] != "arn" or parts[2:5] != [service, region, account] or not parts[5]:
@@ -189,12 +272,15 @@ class AWSHandler(SourceBase):
                         (item.source is self or self.source_tag in item.get_tags()):
                     item.set_source(self)
 
-    def retain_inaccessible_objects(self):
+    def retain_source_objects(self):
         # Source-wide retention also protects children and cross-account shared-network dependencies.
         for object_type in self.dependent_netbox_objects:
             for item in self.inventory.get_all_items(object_type):
                 if self.source_tag in item.get_tags():
                     item.set_source(self)
+
+    def retain_inaccessible_objects(self):
+        self.retain_source_objects()
         log.warning(
             f"AWS source '{self.name}': authorization-denied discovery is incomplete. "
             "Retaining all previously managed source objects this run; accessible resources will still be updated.")
@@ -231,18 +317,27 @@ class AWSHandler(SourceBase):
     def service_object(self, object_type, identity, data):
         matches = [item for item in self.inventory.get_all_items(object_type)
                    if (item.data.get("custom_fields") or {}).get("aws_resource_id") == identity]
+        error = None
         if len(matches) > 1:
-            raise ValueError(f"Multiple NetBox {object_type.name} objects match AWS resource '{identity}'")
-        if matches:
+            error = f"Multiple NetBox {object_type.name} objects match AWS resource '{identity}'"
+        elif matches:
             item = matches[0]
             if item.source is not self and self.source_tag not in item.get_tags():
-                raise ValueError(f"AWS resource '{identity}' belongs to another source")
-            item.update(data=data, source=self)
+                error = f"AWS resource '{identity}' belongs to another source"
         else:
             parent = "virtual_machine" if object_type is NBVirtualDisk else "cluster" if object_type is NBVM else "group"
             if any(item.data.get("name") == data["name"] and item.data.get(parent) is data.get(parent)
                    for item in self.inventory.get_all_items(object_type)):
-                raise ValueError(f"NetBox {object_type.name} name collision for AWS resource '{identity}'")
+                error = f"NetBox {object_type.name} name collision for AWS resource '{identity}'"
+        if error is not None:
+            log.error(
+                f"AWS source '{self.name}': {error}. Skipping this resource and any dependent resources. "
+                "Retaining all previously managed source objects this run to prevent pruning skipped resources.")
+            self.retain_source_objects()
+            return None
+        if matches:
+            item.update(data=data, source=self)
+        else:
             item = self.inventory.add_object(object_type, data=data, source=self)
         self.reconcile_tags(item, data["tags"])
         return item
@@ -293,9 +388,13 @@ class AWSHandler(SourceBase):
         identity = f"s3/{account}/{region}"
         cluster = self.service_cluster(
             account, region, site, group, "s3", identity, f"S3 {account}/{region}")
+        if cluster is None:
+            return
         holder = self.logical_vm(
             account, region, site, cluster, "s3", identity, f"S3 inventory {account}/{region}",
             {"kind": "bucket-inventory-holder", "usage_status": "unknown"}, {})
+        if holder is None:
+            return
         for bucket in buckets:
             bucket_id = f"s3/{account}/{bucket['Name']}"
             self.service_object(NBVirtualDisk, bucket_id, {
@@ -533,8 +632,9 @@ class AWSHandler(SourceBase):
                 lambda_cluster = self.service_cluster(
                     account, region, site, group, "lambda", f"lambda/{account}/{region}",
                     f"Lambda {account}/{region}")
-                for function in data["Functions"]:
-                    self.sync_lambda(account, region, site, lambda_cluster, function)
+                if lambda_cluster is not None:
+                    for function in data["Functions"]:
+                        self.sync_lambda(account, region, site, lambda_cluster, function)
             if self.settings.sync_s3 and "s3" not in inaccessible:
                 self.sync_s3(account, region, site, group, data["Buckets"])
             name_counts = {}
@@ -544,13 +644,20 @@ class AWSHandler(SourceBase):
                 key = name.casefold()
                 name_counts[key] = name_counts.get(key, 0) + 1
             for instance in data["instances"]:
+                instance_cluster = eks_clusters.get(
+                    data.get("EKSWorkers", {}).get(instance["InstanceId"]), cluster)
+                if instance_cluster is None:
+                    log.error(
+                        f"AWS source '{self.name}': Skipping instance '{instance['InstanceId']}' "
+                        f"(account '{account}', region '{region}') because its EKS cluster was skipped.")
+                    continue
                 tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
                 vm_name = tags.get("Name", "").strip() or instance["InstanceId"]
                 if name_counts[vm_name.casefold()] > 1:
                     vm_name = f"{vm_name} ({instance['InstanceId']})"
                 self.sync_instance(
                     account, region, instance, data, site,
-                    eks_clusters.get(data.get("EKSWorkers", {}).get(instance["InstanceId"]), cluster),
+                    instance_cluster,
                     api_version, vm_name=vm_name)
 
     def sync_instance(self, account, region, instance, data, site, cluster, api_version, vm_name=None):
