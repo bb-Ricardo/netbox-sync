@@ -33,6 +33,7 @@ def _make_source(inventory):
     src.object_cache = dict()
     src.settings = SimpleNamespace(
         match_host_by_serial=True,
+        disable_host_mac_matching=False,
         match_vm_by_serial=True,
         match_vm_by_mac_address=True,
         match_vm_by_ip_address=True,
