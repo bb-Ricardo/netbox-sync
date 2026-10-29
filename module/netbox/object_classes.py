@@ -1361,6 +1361,8 @@ class NBCustomField(NetBoxObject):
             NBInventoryItem.object_type,
             NBPowerPort.object_type,
             NBClusterGroup.object_type,
+            NBCluster.object_type,
+            NBVirtualDisk.object_type,
             NBVMInterface.object_type,
             NBVM.object_type,
             NBModule.object_type
@@ -1560,7 +1562,6 @@ class NBVRF(NetBoxObject):
     object_type = "ipam.vrf"
     primary_key = "name"
     prune = False
-    read_only = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
@@ -1953,7 +1954,8 @@ class NBCluster(NetBoxObject):
             "scope_id": self.scopes,
             # supports pre4.2.0 clusters with site
             "site": NBSite,
-            "tags": NBTagList
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
 
@@ -2071,6 +2073,7 @@ class NBVMInterface(NetBoxObject):
             "untagged_vlan": NBVLAN,
             "tagged_vlans": NBVLANList,
             "description": 200,
+            "custom_fields": NBCustomField,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
@@ -2173,7 +2176,8 @@ class NBVirtualDisk(NetBoxObject):
             "virtual_machine": NBVM,
             "description": 200,
             "size": int,  # in MB
-            "tags": NBTagList
+            "tags": NBTagList,
+            "custom_fields": NBCustomField
         }
         super().__init__(*args, **kwargs)
 
