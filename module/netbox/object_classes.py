@@ -2423,6 +2423,22 @@ class NBMACAddress(NetBoxObject):
             self.unset_attribute("assigned_object_type")
 
 
+class NBIPAddressList(NBObjectList):
+    member_type = NBIPAddress
+
+    def get_nb_reference(self):
+        """
+            return None if one IP address is unresolvable
+        """
+        return_list = list()
+        for ip_address in self:
+            if ip_address.nb_id == 0:
+                return None
+
+            return_list.append(ip_address.nb_id)
+
+        return return_list
+        
 class NBFHRPGroupItem(NetBoxObject):
     name = "FHRP group"
     api_path = "ipam/fhrp-groups"
@@ -2434,7 +2450,7 @@ class NBFHRPGroupItem(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "group_id": int,
-            "ip_addresses": NBIPAddress,
+            "ip_addresses": NBIPAddressList,
             "description": 200,
             "tags": NBTagList,
             "custom_fields": NBCustomField

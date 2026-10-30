@@ -37,6 +37,7 @@ from module.netbox.object_classes import (
     NBVirtualDisk,
     NBInterface,
     NBIPAddress,
+    NBIPAddressList,
     NBMACAddress,
     NBFHRPGroupItem,
     NBInventoryItem,
