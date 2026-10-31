@@ -46,6 +46,13 @@ def test_a_site_object_survives_resolving(inventory):
     assert cluster.data.get("scope_type") == "dcim.site", "scope type was dropped"
 
 
+def test_unscoped_cluster_has_no_missing_scope_warning(inventory, caplog):
+    cluster = inventory.add_object(NBCluster, data={"name": "global"})
+
+    assert cluster.get_display_name(including_second_key=True) == "global"
+    assert "Unable to determine second key 'scope_id'" not in caplog.text
+
+
 def test_source_scopes_a_cluster_with_the_site_object(vcsim, inventory, load_config, vmware_settings):
     """A dict here is sent to NetBox as is and rejected with 'scope_id: A valid integer is required.'"""
     from module.sources import instantiate_sources
