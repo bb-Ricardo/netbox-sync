@@ -664,8 +664,10 @@ class VMWareConfig(ConfigBase):
                          name, an interface type derived from the adapter model's "<n>G"/"<n>Gb" capability
                          (the first number when several are given) and only falling back to the port speed
                          when the model gives none, the port WWN and the adapter model and driver as
-                         description. Other host bus adapter types (block, PCIe) are ignored, as is an FC
-                         adapter that reports no port WWN. 'host_interface_exclude_filter' applies to the
+                         description. With FC-NVMe enabled ESXi lists each port a second time as an NVMe
+                         adapter, only the SCSI adapter of such a pair becomes an interface. Other host bus
+                         adapter types (block, PCIe) are ignored, as is an FC adapter that reports no port
+                         WWN. 'host_interface_exclude_filter' applies to the
                          adapter names as well. The option is independent of 'skip_host_nics'. Disabled
                          by default.""",
                          default_value=False

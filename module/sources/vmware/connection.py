@@ -936,9 +936,66 @@ class VMWareHandler(SourceBase):
         except (TypeError, ValueError):
             return None
 
+        # pyVmomi reads an unset WWN as 0, which is no valid WWN
+        if port_wwn <= 0:
+            return None
+
         hex_wwn = f"{port_wwn:016x}"
 
         return ":".join(hex_wwn[i:i + 2] for i in range(0, 16, 2)).upper()
+
+    @classmethod
+    def fc_hba_ports(cls, host_bus_adapters, host_name=None):
+        """
+        Return the Fibre Channel HBAs of a host, one per port.
+
+        With FC-NVMe enabled ESXi lists every FC port twice: as a SCSI adapter and as an
+        NVMe adapter (storageProtocol "nvme") with the same PCI address and port WWN.
+        Of such a pair only the SCSI adapter is returned. An NVMe adapter without a SCSI
+        counterpart is kept.
+
+        Parameters
+        ----------
+        host_bus_adapters: list
+            the host's config.storageDevice.hostBusAdapter
+        host_name: str
+            name of the host, only used for logging
+
+        Returns
+        -------
+        list: Fibre Channel HBAs in the order vCenter reports them
+        """
+
+        ports = dict()
+        for hba in host_bus_adapters or list():
+
+            if not isinstance(hba, vim.host.FibreChannelHba):
+                continue
+
+            port_wwn = cls.fc_hba_wwn(grab(hba, "portWorldWideName"))
+
+            # adapters without a WWN are passed on as they are, the caller skips them
+            if port_wwn is None:
+                ports[id(hba)] = hba
+                continue
+
+            # both adapters of an FC-NVMe port share the PCI address and the port WWN
+            port = (port_wwn, grab(hba, "pci"))
+
+            current = ports.get(port)
+            if current is None:
+                ports[port] = hba
+                continue
+
+            if grab(current, "storageProtocol") == "nvme" and grab(hba, "storageProtocol") != "nvme":
+                ports[port], dropped = hba, current
+            else:
+                dropped = hba
+
+            log.debug2(f"FC HBA '{grab(dropped, 'device')}' of host '{host_name}' lists the same port "
+                       f"as '{grab(ports[port], 'device')}' (WWN {port_wwn}). Skipping")
+
+        return list(ports.values())
 
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
@@ -3029,11 +3086,8 @@ class VMWareHandler(SourceBase):
         # collect Fibre Channel host bus adapters as interfaces if enabled
         fc_hba_data_dict = dict()
         if self.settings.sync_host_fc_adapters is True:
-            for hba in grab(obj, "config.storageDevice.hostBusAdapter", fallback=list()):
-
-                # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
-                if not isinstance(hba, vim.host.FibreChannelHba):
-                    continue
+            # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
+            for hba in self.fc_hba_ports(grab(obj, "config.storageDevice.hostBusAdapter", fallback=list()), name):
 
                 hba_device = get_string_or_none(grab(hba, "device"))
                 if hba_device is None:
