@@ -99,14 +99,43 @@ First VM is filtered:
 * VM has a cluster and is it permitted
 * skip VMs with same name and cluster if already parsed
 * does the VM pass the `vm_include_filter` and `vm_exclude_filter`
+* does the VM pass the `vm_include_by_resource_pool_filter` and `vm_exclude_by_resource_pool_filter`
 
 Then all necessary VM data will be collected:<br>
 platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addresses
 
 Primary IPv4/6 will be determined by interface that provides the default route for this VM.
 
+The resource pool filters are applied to the resource pool path (i.e. `Parent/Child`, the
+cluster root pool `Resources` excluded) and to the plain resource pool name of the VM: the VM
+is kept when either matches the include filter and skipped when either matches the exclude
+filter. A VM placed directly in the cluster root pool has an empty pool path and is matched by
+its plain pool name `Resources` only. A VM without a resource pool (a template) passes both
+filters.
+
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
+
+#### 5b. Resolve the tenant of a VM
+
+The tenant of a VM is resolved from different sources. The first match wins:
+
+1. `vm_tenant_relation` matched against the VM name
+2. `vm_tenant_resource_pool_relation` matched against the resource pool path and then
+   against the plain resource pool name of the VM
+3. `vm_tenant_folder_relation` matched against the VM folder path (relative to the
+   datacenter's VM folder) and then against the plain folder name of the VM
+
+   An empty path (a VM in the cluster root pool, or directly in the datacenter's VM folder)
+   is not matched; such a VM is matched by its plain pool name `Resources` or folder name
+   `vm` only.
+4. if `vm_tenant_inherit_from_cluster` is enabled: the tenant resolved via
+   `cluster_tenant_relation` for this cluster or, if that relation matched nothing, the
+   tenant assigned to the cluster in NetBox
+
+A tenant already set on an existing NetBox VM is kept if `overwrite_vm_tenant` is disabled.
+If a tenant was resolved for the VM, its IP addresses inherit it through the `device` step
+of `ip_tenant_inheritance_order`.
 
 #### 6. Sync VMware Tools guest hostname to a custom field
 

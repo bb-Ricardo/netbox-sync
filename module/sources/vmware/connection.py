@@ -9,6 +9,7 @@
 
 import datetime
 import pprint
+import re
 import ssl
 from ipaddress import ip_address, ip_interface
 from urllib.parse import unquote
@@ -98,6 +99,15 @@ class VMWareHandler(SourceBase):
 
     source_type = "vmware"
 
+    # how many levels of resource pools or folders are walked when building an object path,
+    # vCenter itself allows far fewer
+    object_path_max_depth = 20
+
+    # field lengths of the NetBox VM model (see NBVM.data_model), used to warn about
+    # names and descriptions vm_name_regex derives that NetBox would cut
+    vm_name_max_length = 64
+    vm_description_max_length = 200
+
     recursion_level = 0
 
     # internal vars
@@ -110,6 +120,18 @@ class VMWareHandler(SourceBase):
     # used for hosts where nothing better is known. None of these identify real hardware.
     unknown_hardware_identifiers = ["Default string", "NA", "N/A", "None", "Null", "oem", "o.e.m",
                                     "to be filled by o.e.m.", "Unknown", "Generic Vendor", "Generic Model"]
+
+    # NetBox interface types for Fibre Channel HBAs, keyed by the adapter port speed in Gbit
+    fc_hba_interface_types = {
+        1: "1gfc-sfp",
+        2: "2gfc-sfp",
+        4: "4gfc-sfp",
+        8: "8gfc-sfpp",
+        16: "16gfc-sfpp",
+        32: "32gfc-sfp28",
+        64: "64gfc-qsfpp",
+        128: "128gfc-qsfp28"
+    }
 
     def __init__(self, name=None):
 
@@ -166,6 +188,7 @@ class VMWareHandler(SourceBase):
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
         self.object_cache = dict()
+        self.object_path_cache = dict()
         self.parsing_vms_the_first_time = True
         self.objects_to_reevaluate = list()
         self.parsing_objects_to_reevaluate = False
@@ -847,6 +870,75 @@ class VMWareHandler(SourceBase):
 
         return value.lower() in [x.lower() for x in VMWareHandler.unknown_hardware_identifiers]
 
+    @staticmethod
+    def fc_hba_interface_type(speed, model=None):
+        """
+        Determine a NetBox interface type for a Fibre Channel host bus adapter.
+
+        The adapter model string is used first: the first "<n>G"/"<n>Gb" capability in
+        the model is taken, i.e. "QLE2700/QLE2800 32/64G SP/DP Fibre Channel Adapter"
+        yields 32. This keeps the NetBox type stable even when a port loses link and
+        reports speed 0. Only when the model gives no speed the live port speed reported
+        by vCenter is used (1, 2, 4, 8, 16, 32, 64 or 128 Gbit). If no speed can be
+        determined the type "other" is returned.
+
+        Parameters
+        ----------
+        speed: int, str
+            port speed in Gbit as reported by vCenter
+        model: str
+            adapter model string used to derive the speed
+
+        Returns
+        -------
+        str: a NetBox interface type
+        """
+
+        if isinstance(model, str):
+            speed_match = re.search(r"(\d+)(?:/\d+)*Gb?", model)
+            if speed_match is not None:
+                model_speed = int(speed_match.group(1))
+                if model_speed in VMWareHandler.fc_hba_interface_types:
+                    return VMWareHandler.fc_hba_interface_types[model_speed]
+
+        try:
+            speed = int(speed)
+        except (TypeError, ValueError):
+            speed = None
+
+        if speed in VMWareHandler.fc_hba_interface_types:
+            return VMWareHandler.fc_hba_interface_types[speed]
+
+        return "other"
+
+    @staticmethod
+    def fc_hba_wwn(port_wwn):
+        """
+        Convert a port WWN from the decimal notation vCenter reports to the colon
+        separated 16 hex digit notation NetBox expects.
+
+        Parameters
+        ----------
+        port_wwn: int, str
+            port world wide name in decimal notation
+
+        Returns
+        -------
+        str, None: "xx:xx:xx:xx:xx:xx:xx:xx" or None if no WWN was provided
+        """
+
+        if port_wwn is None:
+            return None
+
+        try:
+            port_wwn = int(port_wwn)
+        except (TypeError, ValueError):
+            return None
+
+        hex_wwn = f"{port_wwn:016x}"
+
+        return ":".join(hex_wwn[i:i + 2] for i in range(0, 16, 2)).upper()
+
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
         Return a site name for a NBCluster or NBDevice depending on config options
@@ -1480,7 +1572,8 @@ class VMWareHandler(SourceBase):
             return resolved_name
 
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
-                                   nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None):
+                                   nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None,
+                                   fc_hba_data=None):
         """
         Add/update device/VM object in inventory based on gathered data.
 
@@ -1543,6 +1636,8 @@ class VMWareHandler(SourceBase):
             vmware object to pass on to 'add_update_interface' method to set up reevaluation
         disk_data: list
             data of discs which belong to a VM
+        fc_hba_data: dict
+            data of Fibre Channel host bus adapter interfaces, interface name as key
 
         Returns
         -------
@@ -1640,6 +1735,19 @@ class VMWareHandler(SourceBase):
             if object_type == NBVM and self.settings.overwrite_vm_platform is False and \
                     object_data.get("platform") is not None:
                 del object_data["platform"]
+
+            # keep the tenant which is already set on the existing NetBox VM. When it is the
+            # resolved one anyway the reference stays, so the tenant object keeps its source.
+            existing_tenant = grab(device_vm_object, "data.tenant")
+            if isinstance(existing_tenant, dict):
+                existing_tenant_name = existing_tenant.get("name")
+            else:
+                existing_tenant_name = grab(existing_tenant, "data.name")
+
+            if object_type == NBVM and self.settings.overwrite_vm_tenant is False and \
+                    object_data.get("tenant") is not None and existing_tenant is not None and \
+                    existing_tenant_name != object_data["tenant"].get("name"):
+                del object_data["tenant"]
 
             if object_type == NBDevice and self.settings.overwrite_device_platform is False and \
                     object_data.get("platform") is not None:
@@ -1741,6 +1849,8 @@ class VMWareHandler(SourceBase):
             interface_exclude_filter = self.settings.vm_interface_exclude_filter
         else:
             nic_data = {**pnic_data, **vnic_data}
+            if fc_hba_data:
+                nic_data = {**nic_data, **fc_hba_data}
             interface_exclude_filter = self.settings.host_interface_exclude_filter
 
         # exclude discovered interfaces which match the exclude filter
@@ -1905,6 +2015,309 @@ class VMWareHandler(SourceBase):
             return
 
         return self.object_cache[vm_class_name].get(vm_object_id)
+
+    def add_object_paths_to_cache(self, vm_object, path_data):
+        """
+        Store computed vCenter inventory paths for a managed object so repeated
+        lookups don't have to walk the inventory tree again.
+
+        Parameters
+        ----------
+        vm_object: vim.ManagedEntity
+            vCenter object the paths belong to
+        path_data: dict
+            path name as key and the path itself as value
+        """
+
+        if vm_object is None or not isinstance(path_data, dict):
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = vm_object.__class__.__name__
+            # noinspection PyProtectedMember
+            vm_object_id = vm_object._GetMoId()
+        except Exception:
+            return
+
+        if self.object_path_cache.get(vm_class_name) is None:
+            self.object_path_cache[vm_class_name] = dict()
+
+        if self.object_path_cache[vm_class_name].get(vm_object_id) is None:
+            self.object_path_cache[vm_class_name][vm_object_id] = dict()
+
+        self.object_path_cache[vm_class_name][vm_object_id].update(path_data)
+
+    def get_object_path_from_cache(self, vm_object, path_name):
+        """
+        Return a cached vCenter inventory path of a managed object.
+
+        Parameters
+        ----------
+        vm_object: vim.ManagedEntity
+            vCenter object to look the path up for
+        path_name: str
+            name of the path to look up
+
+        Returns
+        -------
+        str, None: the cached path if present, otherwise None
+        """
+
+        if vm_object is None or path_name is None:
+            return
+
+        # noinspection PyBroadException
+        try:
+            vm_class_name = vm_object.__class__.__name__
+            # noinspection PyProtectedMember
+            vm_object_id = vm_object._GetMoId()
+        except Exception:
+            return
+
+        if self.object_path_cache.get(vm_class_name) is None:
+            return
+
+        object_paths = self.object_path_cache[vm_class_name].get(vm_object_id)
+
+        if object_paths is None:
+            return
+
+        return object_paths.get(path_name)
+
+    def get_resource_pool_path(self, vm):
+        """
+        Return the resource pool path of a VM as "Parent/Child".
+
+        The pool hierarchy is walked up starting at the VM's resource pool until the
+        cluster root resource pool is reached, the pool whose parent is the cluster
+        itself (vCenter names it "Resources"). The root pool itself is excluded from
+        the path. A VM placed directly in the
+        cluster root pool therefore gets an empty path.
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to get the resource pool path for
+
+        Returns
+        -------
+        str, None: resource pool path if the VM has a resource pool assigned,
+                   otherwise None (i.e. for template VMs)
+        """
+
+        if grab(vm, "resourcePool") is None:
+            return None
+
+        cached_path = self.get_object_path_from_cache(vm, "resource_pool_path")
+        if cached_path is not None:
+            return cached_path
+
+        path_parts = list()
+        pool = grab(vm, "resourcePool")
+
+        # walk up the pool hierarchy, the cluster root pool ends the walk: it is the pool whose
+        # parent is the cluster itself rather than another pool (vCenter names it "Resources",
+        # but a child pool may carry that name too)
+        while pool is not None and len(path_parts) < self.object_path_max_depth:
+            if not isinstance(grab(pool, "parent"), vim.ResourcePool):
+                break
+
+            pool_name = get_string_or_none(grab(pool, "name"))
+            if pool_name is None:
+                break
+
+            path_parts.append(pool_name)
+            pool = grab(pool, "parent")
+
+        if pool is not None and isinstance(grab(pool, "parent"), vim.ResourcePool):
+            log.warning(f"Resource pool hierarchy of VM '{get_string_or_none(grab(vm, 'name'))}' is deeper "
+                        f"than {self.object_path_max_depth} levels, the pool path is cut off at the top")
+
+        path = "/".join(reversed(path_parts))
+        log.debug2(f"VM '{get_string_or_none(grab(vm, 'name'))}' has resource pool path '{path}'")
+
+        self.add_object_paths_to_cache(vm, {"resource_pool_path": path})
+
+        return path
+
+    def get_vm_folder_path(self, vm):
+        """
+        Return the VM folder path of a VM as "Dept-A/Prod".
+
+        The folder hierarchy is walked up starting at the VM's parent folder until the
+        datacenter's VM folder is reached, which is excluded from the path. A VM placed
+        directly in the datacenter's VM folder therefore gets an empty path.
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to get the VM folder path for
+
+        Returns
+        -------
+        str, None: VM folder path if the VM is organized in a folder, otherwise None
+        """
+
+        if grab(vm, "parent") is None or not isinstance(grab(vm, "parent"), vim.Folder):
+            return None
+
+        cached_path = self.get_object_path_from_cache(vm, "vm_folder_path")
+        if cached_path is not None:
+            return cached_path
+
+        path_parts = list()
+        folder = grab(vm, "parent")
+
+        # walk up the folder hierarchy, the datacenter's VM folder ends the walk
+        while isinstance(folder, vim.Folder) and len(path_parts) < self.object_path_max_depth:
+
+            # the folder directly below the datacenter is the datacenter's VM folder
+            if isinstance(grab(folder, "parent"), vim.Datacenter):
+                break
+
+            folder_name = get_string_or_none(grab(folder, "name"))
+            if folder_name is None:
+                break
+
+            path_parts.append(folder_name)
+            folder = grab(folder, "parent")
+
+        if isinstance(folder, vim.Folder) and not isinstance(grab(folder, "parent"), vim.Datacenter):
+            log.warning(f"Folder hierarchy of VM '{get_string_or_none(grab(vm, 'name'))}' is deeper than "
+                        f"{self.object_path_max_depth} levels, the folder path is cut off at the top")
+
+        path = "/".join(reversed(path_parts))
+        log.debug2(f"VM '{get_string_or_none(grab(vm, 'name'))}' has VM folder path '{path}'")
+
+        self.add_object_paths_to_cache(vm, {"vm_folder_path": path})
+
+        return path
+
+    def get_vm_tenant_name(self, vm, vm_name, nb_cluster_object, cluster_full_name):
+        """
+        Resolve the NetBox tenant name for a VM based on the config options.
+
+        The tenant is resolved in this order and the first match wins:
+          1. 'vm_tenant_relation' matched against the VM name
+          2. 'vm_tenant_resource_pool_relation' matched against the resource pool path
+             and then against the plain resource pool name
+          3. 'vm_tenant_folder_relation' matched against the VM folder path and then
+             against the plain folder name
+          4. if 'vm_tenant_inherit_from_cluster' is enabled: the tenant resolved via
+             'cluster_tenant_relation' for this cluster, otherwise the tenant assigned
+             to the NetBox cluster object
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to resolve the tenant for
+        vm_name: str
+            name of the virtual machine
+        nb_cluster_object: NBCluster
+            NetBox cluster object this VM belongs to
+        cluster_full_name: str
+            cluster name as "Datacenter-name/Cluster-name"
+
+        Returns
+        -------
+        str, None: tenant name if one was resolved, otherwise None
+        """
+
+        tenant_name = self.get_object_relation(vm_name, "vm_tenant_relation")
+
+        # resolve tenant by resource pool path
+        if tenant_name is None:
+
+            resource_pool_path = self.get_resource_pool_path(vm)
+            if resource_pool_path:
+                tenant_name = self.get_object_relation(resource_pool_path, "vm_tenant_resource_pool_relation")
+
+            if tenant_name is None:
+                resource_pool_name = get_string_or_none(grab(vm, "resourcePool.name"))
+                if resource_pool_name is not None:
+                    tenant_name = self.get_object_relation(resource_pool_name,
+                                                           "vm_tenant_resource_pool_relation")
+
+        # resolve tenant by VM folder path
+        if tenant_name is None:
+
+            vm_folder_path = self.get_vm_folder_path(vm)
+            if vm_folder_path:
+                tenant_name = self.get_object_relation(vm_folder_path, "vm_tenant_folder_relation")
+
+            if tenant_name is None:
+                vm_folder_name = get_string_or_none(grab(vm, "parent.name"))
+                if vm_folder_name is not None:
+                    tenant_name = self.get_object_relation(vm_folder_name, "vm_tenant_folder_relation")
+
+        # inherit the tenant from the cluster if desired
+        if tenant_name is None and self.settings.vm_tenant_inherit_from_cluster is True:
+
+            tenant_name = self.get_object_relation(cluster_full_name, "cluster_tenant_relation")
+
+            if tenant_name is None:
+                cluster_tenant = grab(nb_cluster_object, "data.tenant")
+                if isinstance(cluster_tenant, dict):
+                    tenant_name = cluster_tenant.get("name")
+                else:
+                    tenant_name = grab(cluster_tenant, "data.name")
+
+        return tenant_name
+
+    def vm_passes_resource_pool_filter(self, vm):
+        """
+        Check a VM's resource pool against the 'vm_include_by_resource_pool_filter' and
+        'vm_exclude_by_resource_pool_filter' config options.
+
+        Both filters are applied to the resource pool path and to the plain resource pool
+        name of the VM. The VM passes the include filter when either of the two matches
+        it, and is skipped when either of the two matches the exclude filter. An empty
+        pool path is not filtered against, so a VM placed directly in the cluster root
+        pool is judged by its plain pool name only. A VM without a resource pool (a
+        template) passes the filters.
+
+        Parameters
+        ----------
+        vm: vim.VirtualMachine
+            virtual machine object to check
+
+        Returns
+        -------
+        bool: True if the VM passes both filters, otherwise False
+        """
+
+        include_filter = self.settings.vm_include_by_resource_pool_filter
+        exclude_filter = self.settings.vm_exclude_by_resource_pool_filter
+
+        if include_filter is None and exclude_filter is None:
+            return True
+
+        resource_pool_path = self.get_resource_pool_path(vm)
+        resource_pool_name = get_string_or_none(grab(vm, "resourcePool.name"))
+
+        pool_identifiers = [x for x in dict.fromkeys([resource_pool_path, resource_pool_name])
+                            if x not in [None, ""]]
+
+        if len(pool_identifiers) == 0:
+            return True
+
+        # first includes, the path or the plain name has to match
+        if include_filter is not None and \
+                not any(include_filter.match(x) for x in pool_identifiers):
+            log.debug(f"Resource pool '{pool_identifiers[0]}' did not match include filter "
+                      f"'{include_filter.pattern}'. Skipping")
+            return False
+
+        # second excludes, neither may match
+        if exclude_filter is not None:
+            for pool_identifier in pool_identifiers:
+                if exclude_filter.match(pool_identifier):
+                    log.debug(f"Resource pool '{pool_identifier}' matched exclude filter "
+                              f"'{exclude_filter.pattern}'. Skipping")
+                    return False
+
+        return True
 
     def add_datacenter(self, obj):
         """
@@ -2585,6 +2998,49 @@ class VMWareHandler(SourceBase):
 
             pnic_data_dict[pnic_name] = pnic_data
 
+        # collect Fibre Channel host bus adapters as interfaces if enabled
+        fc_hba_data_dict = dict()
+        if self.settings.sync_host_fc_adapters is True:
+            for hba in grab(obj, "config.storageDevice.hostBusAdapter", fallback=list()):
+
+                # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
+                if not isinstance(hba, vim.host.FibreChannelHba):
+                    continue
+
+                hba_device = get_string_or_none(grab(hba, "device"))
+                if hba_device is None:
+                    continue
+
+                # the WWN is what tells the interface apart from a NIC during matching
+                hba_wwn = self.fc_hba_wwn(grab(hba, "portWorldWideName"))
+                if hba_wwn is None:
+                    log.debug(f"FC HBA '{hba_device}' of host '{name}' reports no port WWN. Skipping")
+                    continue
+
+                hba_model = get_string_or_none(grab(hba, "model"))
+                hba_driver = get_string_or_none(grab(hba, "driver"))
+
+                if hba_model is not None and hba_driver is not None:
+                    hba_description = f"{hba_model} ({hba_driver})"
+                elif hba_model is not None:
+                    hba_description = hba_model
+                else:
+                    hba_description = hba_driver
+
+                fc_hba_data = {
+                    "name": unquote(hba_device),
+                    "device": None,     # will be set once we found the correct device
+                    "type": self.fc_hba_interface_type(grab(hba, "speed"), hba_model),
+                    "enabled": get_string_or_none(grab(hba, "status")) == "online",
+                    "mgmt_only": False,
+                    "wwn": hba_wwn
+                }
+
+                if hba_description is not None:
+                    fc_hba_data["description"] = hba_description
+
+                fc_hba_data_dict[hba_device] = fc_hba_data
+
         host_primary_ip4 = None
         host_primary_ip6 = None
 
@@ -2733,7 +3189,8 @@ class VMWareHandler(SourceBase):
         device_object, interface_objects = \
             self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
                                             vnic_data=vnic_data_dict, nic_ips=vnic_ips,
-                                            p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj)
+                                            p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6, vmware_object=obj,
+                                            fc_hba_data=fc_hba_data_dict)
 
         # add cables to the switch ports which were reported via CDP/LLDP
         if device_object is not None:
@@ -2741,6 +3198,61 @@ class VMWareHandler(SourceBase):
                 self.add_cable_to_neighbor(interface_objects.get(pnic_name), pnic_neighbor, name, pnic_name)
 
         return
+
+    def get_vm_name_and_description(self, name):
+        """
+        Apply the configured VM name handling to a vCenter VM name and return the
+        resulting NetBox name and an optional description.
+
+        'vm_name_regex' is applied before any other name handling. Its named group
+        'name' becomes the NetBox VM name and an optional named group 'description'
+        sets the VM description. If the regex does not match, or its 'name' group
+        takes no part in the match or matches only whitespace, the name is used
+        unchanged. 'strip_vm_domain_name' runs afterwards.
+
+        Parameters
+        ----------
+        name: str
+            VM name as reported by vCenter
+
+        Returns
+        -------
+        tuple: (name, description)
+        """
+
+        vm_description = None
+
+        # apply vm_name_regex before any other name handling
+        if name is not None and self.settings.vm_name_regex is not None:
+            regex_match = self.settings.vm_name_regex.match(name)
+            if regex_match is None:
+                log.debug2(f"VM name '{name}' does not match vm_name_regex. Using the name unchanged.")
+            else:
+                regex_name = regex_match.group("name")
+                vm_description = regex_match.groupdict().get("description")
+
+                # an optional group takes no part in the match and returns None
+                if regex_name is None or regex_name.strip() == "":
+                    log.warning(f"The 'name' group of vm_name_regex matched nothing in VM name '{name}'. "
+                                f"Using the name unchanged.")
+                else:
+                    name = regex_name
+
+                if vm_description is not None and vm_description.strip() == "":
+                    vm_description = None
+
+                if len(name) > self.vm_name_max_length:
+                    log.warning(f"VM name '{name}' derived by vm_name_regex is longer than "
+                                f"{self.vm_name_max_length} characters and will be cut")
+
+                if vm_description is not None and len(vm_description) > self.vm_description_max_length:
+                    log.warning(f"VM description '{vm_description}' derived by vm_name_regex is longer than "
+                                f"{self.vm_description_max_length} characters and will be cut")
+
+        if name is not None and self.settings.strip_vm_domain_name is True:
+            name = name.split(".")[0]
+
+        return name, vm_description
 
     def add_virtual_machine(self, obj):
         """
@@ -2771,8 +3283,7 @@ class VMWareHandler(SourceBase):
 
         name = get_string_or_none(grab(obj, "name"))
 
-        if name is not None and self.settings.strip_vm_domain_name is True:
-            name = name.split(".")[0]
+        name, vm_description = self.get_vm_name_and_description(name)
 
         #
         # Filtering
@@ -2837,8 +3348,12 @@ class VMWareHandler(SourceBase):
         cluster_full_name = f"{group.name}/{cluster_name}"
 
         if name in self.processed_vm_names.get(cluster_full_name, list()) and obj not in self.objects_to_reevaluate:
-            log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
-                        "Make sure to use unique VM names. Skipping")
+            if self.settings.vm_name_regex is not None:
+                log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
+                            "'vm_name_regex' must leave the VM names unique per cluster. Skipping")
+            else:
+                log.warning(f"Virtual machine '{name}' for cluster '{cluster_full_name}' already parsed. "
+                            "Make sure to use unique VM names. Skipping")
             return
 
         # add vm to processed list
@@ -2849,6 +3364,10 @@ class VMWareHandler(SourceBase):
 
         # filter VMs by name
         if self.passes_filter(name, self.settings.vm_include_filter, self.settings.vm_exclude_filter) is False:
+            return
+
+        # filter VMs by resource pool path and resource pool name
+        if self.vm_passes_resource_pool_filter(obj) is False:
             return
 
         #
@@ -2904,8 +3423,8 @@ class VMWareHandler(SourceBase):
         if self.settings.skip_vm_comments is False:
             annotation = get_string_or_none(grab(obj, "config.annotation"))
 
-        # assign vm_tenant_relation
-        tenant_name = self.get_object_relation(name, "vm_tenant_relation")
+        # resolve tenant for this VM
+        tenant_name = self.get_vm_tenant_name(obj, name, nb_cluster_object, cluster_full_name)
 
         # assign vm_tag_relation
         vm_tags = self.get_object_relation(name, "vm_tag_relation")
@@ -2959,6 +3478,10 @@ class VMWareHandler(SourceBase):
             vm_data["platform"] = {"name": platform}
         if annotation is not None:
             vm_data["comments"] = annotation
+        # NetBox got the VM description field with 3.4.0
+        if vm_description is not None and \
+                version.parse(self.inventory.netbox_api_version) >= version.parse("3.4.0"):
+            vm_data["description"] = vm_description
         if tenant_name is not None:
             vm_data["tenant"] = {"name": tenant_name}
         if len(vm_tags) > 0:

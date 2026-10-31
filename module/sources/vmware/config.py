@@ -106,7 +106,20 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_include_filter", str),
                                 ConfigOption("vm_exclude_filter",
                                              str, description="simply include/exclude VMs"),
-                                ConfigOption("vm_include_filter", str)
+                                ConfigOption("vm_include_filter", str),
+                                ConfigOption("vm_exclude_by_resource_pool_filter",
+                                             str,
+                                             description="""This will only exclude VMs from sync based on the resource
+                                             pool they are organized in. A VM matching this filter is skipped entirely,
+                                             the same way a matching 'vm_exclude_filter' skips it. The regex is applied
+                                             to the resource pool path (i.e. "Parent/Child", the cluster root pool
+                                             "Resources" is excluded from the path) and to the plain resource pool name
+                                             of the VM; a VM is skipped when either matches. A VM placed directly in
+                                             the cluster root pool has an empty pool path and is matched by its plain
+                                             pool name "Resources" only. A VM without a resource pool (a template)
+                                             passes the filter. 'vm_include_by_resource_pool_filter' works the same
+                                             way, a VM is kept when its pool path or its plain pool name matches."""),
+                                ConfigOption("vm_include_by_resource_pool_filter", str)
                               ]),
             ConfigOption("vm_exclude_by_tag_filter",
                          str,
@@ -192,6 +205,50 @@ class VMWareConfig(ConfigBase):
                                              config_example="Cluster_NYC.* = Customer A"),
                                 ConfigOption("host_tenant_relation", str, config_example="esxi300.* = Infrastructure"),
                                 ConfigOption("vm_tenant_relation", str, config_example="grafana.* = Infrastructure"),
+                                ConfigOption("vm_tenant_resource_pool_relation",
+                                             str,
+                                             description="""This option defines which tenant is assigned to a VM based on the
+                                             vCenter resource pool it is organized in. This is done with a comma
+                                             separated key = value list.
+                                               key: defines the resource pool path as regex. The path is the resource
+                                                    pool hierarchy up to (excluding) the cluster root pool, i.e.
+                                                    "Parent/Child". The plain resource pool name of the VM is matched
+                                                    as well. A VM placed directly in the cluster root pool has an
+                                                    empty pool path, which is not matched, and the plain pool name
+                                                    "Resources".
+                                               value: defines the NetBox tenant name (use quotes if name contains commas)
+                                             The tenant of a VM is resolved in this order: 'vm_tenant_relation',
+                                             'vm_tenant_resource_pool_relation', 'vm_tenant_folder_relation' and
+                                             finally, if 'vm_tenant_inherit_from_cluster' is enabled, the tenant of
+                                             the cluster. The first match wins.
+                                             """,
+                                             config_example="Customers/.* = Customer A, Sandbox = Test"),
+                                ConfigOption("vm_tenant_folder_relation",
+                                             str,
+                                             description="""This option defines which tenant is assigned to a VM based on the
+                                             vCenter VM folder it is organized in. This is done with a comma
+                                             separated key = value list.
+                                               key: defines the VM folder path as regex. The path is the folder
+                                                    hierarchy relative to the datacenter's VM folder, i.e.
+                                                    "Dept-A/Prod". The plain folder name of the VM is matched as
+                                                    well. A VM placed directly in the datacenter's VM folder has an
+                                                    empty folder path, which is not matched, and the plain folder
+                                                    name "vm".
+                                               value: defines the NetBox tenant name (use quotes if name contains commas)
+                                             The tenant of a VM is resolved in this order: 'vm_tenant_relation',
+                                             'vm_tenant_resource_pool_relation', 'vm_tenant_folder_relation' and
+                                             finally, if 'vm_tenant_inherit_from_cluster' is enabled, the tenant of
+                                             the cluster. The first match wins.
+                                             """,
+                                             config_example="Customers/.* = Customer A, Templates = Infrastructure"),
+                                ConfigOption("vm_tenant_inherit_from_cluster",
+                                             bool,
+                                             description="""define if a VM inherits the tenant of its cluster if no tenant
+                                             could be resolved via 'vm_tenant_relation', 'vm_tenant_resource_pool_relation'
+                                             or 'vm_tenant_folder_relation'. The inherited tenant is the one resolved
+                                             through 'cluster_tenant_relation' for this cluster or, if that relation
+                                             matched nothing, the tenant assigned to the cluster in NetBox.""",
+                                             default_value=False),
                                 ConfigOption("host_platform_relation",
                                              str,
                                              description="""\
@@ -360,6 +417,19 @@ class VMWareConfig(ConfigBase):
                          bool,
                          description="strip domain part from VM name before syncing VM to NetBox",
                          default_value=False),
+            ConfigOption("vm_name_regex",
+                         str,
+                         description="""a regex expression applied to the vCenter VM name before any other
+                         name handling ('strip_vm_domain_name' runs after it). It must contain a named
+                         group 'name'; the match of that group becomes the NetBox VM name. An optional
+                         named group 'description' sets the VM description field (NetBox 3.4 and later)
+                         when it matches something; a description already set in NetBox is kept
+                         otherwise, like comments are. If the regex does not match, or the 'name' group
+                         matches nothing, the name is used unchanged. The resulting name is the one all
+                         other VM options see ('vm_include_filter', 'vm_exclude_filter', the
+                         'vm_*_relation' options, 'vm_exclude_disk_sync') and the one NetBox VMs are
+                         matched by, so it has to stay unique per cluster.""",
+                         config_example="^(?P<name>[^ (]+)(?: \\((?P<description>.*)\\))?$"),
             ConfigOptionGroup(title="tag source",
                               description="""\
                               sync tags assigned to clusters, hosts and VMs in vCenter to NetBox
@@ -498,6 +568,13 @@ class VMWareConfig(ConfigBase):
                          description="""define if the platform of the VM discovered overwrites the VM
                          platform in NetBox.""",
                          default_value=True),
+            ConfigOption("overwrite_vm_tenant",
+                         bool,
+                         description="""define if the tenant resolved for a VM overwrites the tenant of the
+                         VM in NetBox. If disabled, a tenant that is already set on an existing NetBox VM
+                         is kept, even if a different tenant was resolved. A VM without a tenant in NetBox
+                         still gets the resolved tenant.""",
+                         default_value=True),
             ConfigOption("host_management_interface_match",
                          str,
                          description="""set a matching value for ESXi host management interface description
@@ -570,6 +647,19 @@ class VMWareConfig(ConfigBase):
                          disabled by default.""",
                          default_value=False
                          ),
+            ConfigOption("sync_host_fc_adapters",
+                         bool,
+                         description="""Create NetBox interfaces for the Fibre Channel host bus adapters (HBAs)
+                         of an ESXi host. For each FC HBA an interface is created with the adapter's device
+                         name, an interface type derived from the adapter model's "<n>G"/"<n>Gb" capability
+                         (the first number when several are given) and only falling back to the port speed
+                         when the model gives none, the port WWN and the adapter model and driver as
+                         description. Other host bus adapter types (block, PCIe) are ignored, as is an FC
+                         adapter that reports no port WWN. 'host_interface_exclude_filter' applies to the
+                         adapter names as well. The option is independent of 'skip_host_nics'. Disabled
+                         by default.""",
+                         default_value=False
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
@@ -637,6 +727,23 @@ class VMWareConfig(ConfigBase):
                     re_compiled = re.compile(option.value)
                 except Exception as e:
                     log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                option.set_value(re_compiled)
+
+                continue
+
+            if option.key == "vm_name_regex":
+
+                re_compiled = None
+                try:
+                    re_compiled = re.compile(option.value)
+                except Exception as e:
+                    log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                if re_compiled is not None and "name" not in re_compiled.groupindex:
+                    log.error(f"Config option '{option.key}' must contain a named group 'name'.")
                     self.set_validation_failed()
 
                 option.set_value(re_compiled)

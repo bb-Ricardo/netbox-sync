@@ -4,6 +4,7 @@ This is a tool to sync data from different sources to a NetBox instance.
 
 Available source types:
 * VMware vCenter Server
+* AWS EC2, EBS, and network interfaces, with opt-in S3, Lambda, and EKS inventory (see [AWS source](docs/source_aws.md))
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 * [DigitalOcean](docs/source_digitalocean.md)
 
@@ -39,6 +40,10 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * VMWare vCenter >= 6.0
 #### Source: check_redfish (if used)
 * check_redfish >= 1.2.0
+#### Source: AWS (if used)
+* Optional boto3 SDK, AWS read-only credentials, and automatic or explicit region discovery
+* Optional AWS Organizations discovery with collector permissions and a trusted inventory role in each member account
+* Existing VPC-specific NetBox VRFs for IP import; see [AWS setup](docs/source_aws.md)
 
 # Installing
 * here we assume we install in ```/opt```
@@ -297,8 +302,9 @@ Check out the documentations for the different sources
 netbox-sync provides various filtering capabilities to control what objects are synced from sources to NetBox:
 
 1. **General VM filtering**: Use `vm_include_filter` and `vm_exclude_filter` to include or exclude VMs by name.
-2. **Tag-based VM filtering**: Use `vm_exclude_by_tag_filter` to exclude VMs with specific vCenter tags.
-3. **Partial information filtering**:
+2. **Resource pool filtering**: Use `vm_include_by_resource_pool_filter` and `vm_exclude_by_resource_pool_filter` to include or exclude VMs by the resource pool they are organized in.
+3. **Tag-based VM filtering**: Use `vm_exclude_by_tag_filter` to exclude VMs with specific vCenter tags.
+4. **Partial information filtering**:
    - Use `vm_exclude_disk_sync` to exclude disk synchronization for VMs matching specific name patterns.
    - Use `vm_exclude_disk_sync_by_tag` to exclude disk synchronization for VMs with specific vCenter tags.
 
