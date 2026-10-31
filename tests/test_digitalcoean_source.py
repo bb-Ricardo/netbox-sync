@@ -1,4 +1,6 @@
+from configparser import ConfigParser as INIParser
 from ipaddress import ip_interface
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -11,7 +13,9 @@ from module.netbox import (
     NBVirtualDisk,
 )
 from module.netbox.connection import NetBoxHandler
-from module.sources import valid_sources
+from module.sources import instantiate_sources, valid_sources
+from module.sources.aws.config import AWSConfig
+from module.sources.aws.connection import AWSHandler
 from module.sources.digitalocean.config import DigitalOceanConfig
 from module.sources.digitalocean.connection import DigitalOceanHandler
 from module.sources.digitalocean.client import DigitalOceanClient
@@ -85,7 +89,9 @@ def digitalocean(inventory, monkeypatch):
 
 def test_source_registration_and_settings_generation(monkeypatch):
     assert DigitalOceanHandler in valid_sources
+    assert AWSHandler in valid_sources
     assert DigitalOceanConfig in ConfigFileOutput.source_config_list
+    assert AWSConfig in ConfigFileOutput.source_config_list
     assert DigitalOceanHandler.implements("digitalocean")
 
     for file_type in (ConfigFileINI, ConfigFileYAML):
@@ -99,6 +105,33 @@ def test_source_registration_and_settings_generation(monkeypatch):
         assert "sync_databases" in text
         assert "api_token" in text
         assert "region_mapping" in text
+
+
+def test_configured_source_is_instantiated(digitalocean):
+    inventory, _ = digitalocean
+
+    source, = instantiate_sources()
+
+    assert isinstance(source, DigitalOceanHandler)
+    assert source.init_successful
+    assert source.name == "cloud"
+    assert inventory.source_list == [source]
+
+
+def test_settings_example_includes_all_digitalocean_options():
+    parser = INIParser()
+    text = (Path(__file__).parents[1] / "settings-example.ini").read_text()
+    parser.read_string(text)
+    section_name = f"source/{DigitalOceanConfig.source_name_example}"
+
+    assert section_name in parser
+    assert "source/my-aws-example" in parser
+    section = text.split(f"[{section_name}]", 1)[1]
+    for option in DigitalOceanConfig().options:
+        assert any(
+            line.lstrip(";").startswith(f"{option.key} =")
+            for line in section.splitlines()
+        ), option.key
 
 
 @pytest.mark.parametrize("mapping, expected", [
@@ -404,7 +437,7 @@ def test_vm_children_match_resolved_parent_not_duplicate_name(inventory, object_
 
 
 @pytest.mark.parametrize("ownership", ["same-tag", "same-run", "other-tag", "unknown", "mixed-tags", "other-source"])
-def test_ip_conflict_repairs_only_confirmed_same_source(digitalocean, ownership):
+def test_ip_conflict_repairs_only_confirmed_same_source(digitalocean, ownership, caplog):
     inventory, _ = digitalocean
     source = DigitalOceanHandler("cloud")
     vms = [
@@ -437,9 +470,23 @@ def test_ip_conflict_repairs_only_confirmed_same_source(digitalocean, ownership)
         assert ip.source is source
         assert "primary_ip4" in vms[0].unset_items
     else:
-        with pytest.raises(ValueError, match="ownership"):
-            source._sync_ip(ip_interface("203.0.113.1/24"), interfaces[1])
+        assert source._sync_ip(ip_interface("203.0.113.1/24"), interfaces[1]) is None
+        assert "ownership" in caplog.text
         assert ip.data["assigned_object_id"] is interfaces[0]
+        assert vms[0].data["primary_ip4"] is ip
+        assert "primary_ip4" not in vms[0].unset_items
+        if ownership == "mixed-tags":
+            assert ip.source is source
+            assert "Source: another-account" in ip.get_tags()
+            inventory.source_list = [source]
+            inventory.tag_all_the_things(Mock(
+                primary_tag="NetBox-synced", orphaned_tag="NetBox-synced: Orphaned",
+            ))
+            assert "NetBox-synced: Orphaned" not in ip.get_tags()
+        elif ownership == "other-source":
+            assert ip.source is not source
+        else:
+            assert ip.source is None
 
 
 def test_repaired_ip_is_not_orphaned(digitalocean):
@@ -471,22 +518,47 @@ def test_repaired_ip_is_not_orphaned(digitalocean):
 
 
 @pytest.mark.parametrize("second_prefix", [24, 32])
-def test_conflicting_droplet_ip_claims_abort_before_writes(digitalocean, second_prefix):
+def test_conflicting_droplet_ip_claims_skip_and_continue(digitalocean, second_prefix, caplog):
     inventory, client = digitalocean
     droplets = [
         {"id": index, "name": name, "region": "nyc1", "networks": {
             "v4": [{"ip_address": "203.0.113.1", "cidr": prefix, "type": "public"}],
         }}
-        for index, name, prefix in [(1, "first", 24), (2, "second", second_prefix)]
+        for index, name, prefix in [(1, "first", 24), (2, "second", second_prefix), (3, "third", 24)]
     ]
+    droplets[2]["networks"]["v4"][0]["ip_address"] = "203.0.113.2"
     client.get_collection.side_effect = lambda path, key: droplets if path == "droplets" else []
     source = DigitalOceanHandler("cloud")
 
-    with pytest.raises(ValueError, match="multiple interfaces"):
-        source.apply()
+    source.apply()
+    assert "multiple interfaces" in caplog.text
 
     ip = inventory.get_all_items(NBIPAddress)[0]
     assert ip.data["assigned_object_id"].data["virtual_machine"].data["name"] == "first"
+    vms = {vm.data["name"]: vm for vm in inventory.get_all_items(NBVM)}
+    assert "primary_ip4" not in vms["second"].data
+    assert vms["third"].data["primary_ip4"].data["address"] == "203.0.113.2/24"
+
+
+def test_ownership_conflict_continues_other_addresses_and_disks(digitalocean, caplog):
+    inventory, _ = digitalocean
+    source = DigitalOceanHandler("cloud")
+    old_vm = inventory.add_object(NBVM, data={"name": "old"}, read_from_netbox=True)
+    interface = inventory.add_object(NBVMInterface, data={
+        "name": "private", "virtual_machine": old_vm,
+    }, read_from_netbox=True)
+    existing = inventory.add_object(NBIPAddress, data={
+        "id": 1234, "address": "10.10.0.5/24",
+        "assigned_object_type": NBVMInterface.object_type, "assigned_object_id": interface,
+    }, read_from_netbox=True)
+    source.apply()
+    assert "Skipping" in caplog.text
+    assert existing.data["assigned_object_id"] is interface
+    droplet = next(vm for vm in inventory.get_all_items(NBVM) if vm.data["name"] == "web-1")
+    assert droplet.data["primary_ip4"].data["address"] == "203.0.113.10/24"
+    assert droplet.data["primary_ip6"].data["address"] == "2001:db8::5/64"
+    assert len(droplet.get_virtual_disks()) == 2
+    assert len(inventory.get_all_items(NBVM)) == 3
 
 
 def test_api_failure_closes_session_before_inventory_changes(digitalocean):
