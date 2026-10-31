@@ -730,7 +730,11 @@ class NetBoxHandler:
             this_object.resolve_relations()
 
             if last_run is True and getattr(this_object, "deleted", False) is True:
-                self.request(nb_object_sub_class, req_type="DELETE", nb_id=this_object.nb_id)
+                if self.settings.prune_enabled is True:
+                    self.request(nb_object_sub_class, req_type="DELETE", nb_id=this_object.nb_id)
+                else:
+                    log.info(f"{nb_object_sub_class.name} '{this_object.get_display_name()}' is gone from its "
+                             f"source but pruning is disabled. Keeping it in NetBox.")
 
         # add class to resolved dependencies
         self.resolved_dependencies.add(nb_object_sub_class)
@@ -941,6 +945,10 @@ class NetBoxHandler:
         """
         deletes all tags with primary tag in description and the attribute 'tagged_items' returned 0
         """
+
+        if self.settings.prune_enabled is False:
+            log.debug("Pruning disabled. Not deleting unused tags")
+            return
 
         self.query_current_data([NBTag])
 
