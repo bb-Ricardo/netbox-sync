@@ -2412,10 +2412,11 @@ class NBMACAddress(NetBoxObject):
     def remove_interface_association(self):
         o_id = self.data.get("assigned_object_id")
         o_type = self.data.get("assigned_object_type")
-        o_device = self.get_device_vm()
+        o_interface = self.get_interface()
 
-        if grab(o_device, "data.primary_mac_address") is self:
-            o_device.unset_attribute("primary_mac_address")
+        # NetBox refuses to unassign a MAC address which is still the primary MAC of its interface
+        if grab(o_interface, "data.primary_mac_address") is self:
+            o_interface.unset_attribute("primary_mac_address")
 
         if o_id is not None:
             self.unset_attribute("assigned_object_id")
@@ -2423,6 +2424,22 @@ class NBMACAddress(NetBoxObject):
             self.unset_attribute("assigned_object_type")
 
 
+class NBIPAddressList(NBObjectList):
+    member_type = NBIPAddress
+
+    def get_nb_reference(self):
+        """
+            return None if one IP address is unresolvable
+        """
+        return_list = list()
+        for ip_address in self:
+            if ip_address.nb_id == 0:
+                return None
+
+            return_list.append(ip_address.nb_id)
+
+        return return_list
+        
 class NBFHRPGroupItem(NetBoxObject):
     name = "FHRP group"
     api_path = "ipam/fhrp-groups"
@@ -2434,7 +2451,7 @@ class NBFHRPGroupItem(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "group_id": int,
-            "ip_addresses": NBIPAddress,
+            "ip_addresses": NBIPAddressList,
             "description": 200,
             "tags": NBTagList,
             "custom_fields": NBCustomField

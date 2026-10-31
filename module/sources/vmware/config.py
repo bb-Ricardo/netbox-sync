@@ -178,6 +178,8 @@ class VMWareConfig(ConfigBase):
                                              This is done with a comma separated key = value list.
                                              Can be set to "<NONE>" to not assign a scope type.
                                              Note: this does not remove scope types from existing clusters in NetBox.
+                                             Note: cluster scopes require NetBox 4.2 or newer, the option is ignored
+                                             with older versions.
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope type name (use quotes if name contains commas)
                                              """,
@@ -188,6 +190,8 @@ class VMWareConfig(ConfigBase):
                                              The scope id is the NetBox ID of the scope type.
                                              This is done with a comma separated key = value list.
                                              To be used in combination with the 'cluster_scope_type_relation'.
+                                             Note: cluster scopes require NetBox 4.2 or newer, the option is ignored
+                                             with older versions.
                                                key: defines a cluster name as regex
                                                value: defines the NetBox scope id (use quotes if name contains commas)
                                              """,
@@ -553,6 +557,12 @@ class VMWareConfig(ConfigBase):
                          description="""define if the name of the device interface discovered overwrites the
                          interface name in NetBox. The interface will only be matched by identical MAC address""",
                          default_value=True),
+            ConfigOption("overwrite_host_interface_type",
+                         bool,
+                         description="""define if the type of a host interface derived from its link speed
+                         overwrites a physical interface type in NetBox. Set to False if a source which knows the
+                         hardware (i.e. check_redfish) sets the type of the host interfaces""",
+                         default_value=True),
             ConfigOption("overwrite_vm_interface_name",
                          bool,
                          description="""define if the name of the VM interface discovered overwrites the
@@ -654,8 +664,10 @@ class VMWareConfig(ConfigBase):
                          name, an interface type derived from the adapter model's "<n>G"/"<n>Gb" capability
                          (the first number when several are given) and only falling back to the port speed
                          when the model gives none, the port WWN and the adapter model and driver as
-                         description. Other host bus adapter types (block, PCIe) are ignored, as is an FC
-                         adapter that reports no port WWN. 'host_interface_exclude_filter' applies to the
+                         description. With FC-NVMe enabled ESXi lists each port a second time as an NVMe
+                         adapter, only the SCSI adapter of such a pair becomes an interface. Other host bus
+                         adapter types (block, PCIe) are ignored, as is an FC adapter that reports no port
+                         WWN. 'host_interface_exclude_filter' applies to the
                          adapter names as well. The option is independent of 'skip_host_nics'. Disabled
                          by default.""",
                          default_value=False

@@ -13,6 +13,7 @@ on:
       - module/**
       - netbox-sync.py
       - requirements.txt
+      - requirements-aws.txt
   workflow_dispatch:
 
 jobs:

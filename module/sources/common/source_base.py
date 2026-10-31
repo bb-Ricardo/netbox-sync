@@ -188,6 +188,12 @@ class SourceBase:
         current_interfaces_by_wwn = dict()
         current_fc_interface_names = set()
 
+        # netbox-sync cuts names to the data model length when it creates an interface,
+        # compare discovered names the same way
+        interface_class = NBVMInterface if isinstance(device_vm_object, NBVM) else NBInterface
+        max_name_length = interface_class().data_model.get("name")
+        discovered_names_by_cut_name = dict()
+
         return_data = dict()
 
         # grab current data
@@ -244,11 +250,24 @@ class SourceBase:
             if "virtual" not in str(int_type_string):
                 int_type = "physical"
 
+            stored_int_name = int_name
+            if isinstance(max_name_length, int) and isinstance(int_name, str) and len(int_name) > max_name_length:
+                stored_int_name = int_name[0:max_name_length]
+                log.debug(f"Name of interface '{int_name}' exceeds {max_name_length} characters, "
+                          f"comparing it as '{stored_int_name}'")
+
+                colliding_name = discovered_names_by_cut_name.get(stored_int_name)
+                if colliding_name is not None:
+                    log.warning(f"Interfaces '{colliding_name}' and '{int_name}' of "
+                                f"'{device_vm_object.get_display_name()}' share the same first {max_name_length} "
+                                f"characters. Only one of them can exist in NetBox with that name")
+                discovered_names_by_cut_name[stored_int_name] = int_name
+
             # match simply by name
             matching_int = None
-            if int_name in current_object_interface_names:
+            if stored_int_name in current_object_interface_names:
                 log.debug2(f"Found 1:1 name match for NIC '{int_name}'")
-                matching_int = current_object_interfaces.get(int_name)
+                matching_int = current_object_interfaces.get(stored_int_name)
 
             # match by WWN when no interface of that name exists yet
             if matching_int is None and int_wwn is not None:

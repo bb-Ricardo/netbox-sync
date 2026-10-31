@@ -34,6 +34,7 @@ from module.common.misc import grab, dump, get_string_or_none, plural, quoted_sp
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
 from module.netbox import *
+from module.netbox.object_classes import NetBoxMappings
 
 vsphere_automation_sdk_available = True
 try:
@@ -935,9 +936,66 @@ class VMWareHandler(SourceBase):
         except (TypeError, ValueError):
             return None
 
+        # pyVmomi reads an unset WWN as 0, which is no valid WWN
+        if port_wwn <= 0:
+            return None
+
         hex_wwn = f"{port_wwn:016x}"
 
         return ":".join(hex_wwn[i:i + 2] for i in range(0, 16, 2)).upper()
+
+    @classmethod
+    def fc_hba_ports(cls, host_bus_adapters, host_name=None):
+        """
+        Return the Fibre Channel HBAs of a host, one per port.
+
+        With FC-NVMe enabled ESXi lists every FC port twice: as a SCSI adapter and as an
+        NVMe adapter (storageProtocol "nvme") with the same PCI address and port WWN.
+        Of such a pair only the SCSI adapter is returned. An NVMe adapter without a SCSI
+        counterpart is kept.
+
+        Parameters
+        ----------
+        host_bus_adapters: list
+            the host's config.storageDevice.hostBusAdapter
+        host_name: str
+            name of the host, only used for logging
+
+        Returns
+        -------
+        list: Fibre Channel HBAs in the order vCenter reports them
+        """
+
+        ports = dict()
+        for hba in host_bus_adapters or list():
+
+            if not isinstance(hba, vim.host.FibreChannelHba):
+                continue
+
+            port_wwn = cls.fc_hba_wwn(grab(hba, "portWorldWideName"))
+
+            # adapters without a WWN are passed on as they are, the caller skips them
+            if port_wwn is None:
+                ports[id(hba)] = hba
+                continue
+
+            # both adapters of an FC-NVMe port share the PCI address and the port WWN
+            port = (port_wwn, grab(hba, "pci"))
+
+            current = ports.get(port)
+            if current is None:
+                ports[port] = hba
+                continue
+
+            if grab(current, "storageProtocol") == "nvme" and grab(hba, "storageProtocol") != "nvme":
+                ports[port], dropped = hba, current
+            else:
+                dropped = hba
+
+            log.debug2(f"FC HBA '{grab(dropped, 'device')}' of host '{host_name}' lists the same port "
+                       f"as '{grab(ports[port], 'device')}' (WWN {port_wwn}). Skipping")
+
+        return list(ports.values())
 
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
@@ -1894,6 +1952,16 @@ class VMWareHandler(SourceBase):
                 if object_type == NBVM and self.settings.overwrite_vm_interface_name is False:
                     del int_data["name"]
 
+                # vCenter derives the pNIC type from the current link speed only. Keep a physical type
+                # set by a source which knows the hardware (i.e. check_redfish) if configured.
+                if object_type == NBDevice and self.settings.overwrite_host_interface_type is False:
+                    current_type = grab(nic_object_dict.get(int_name), "data.type")
+                    # NetBox returns choice fields as {"value": ..., "label": ...}
+                    if isinstance(current_type, dict):
+                        current_type = current_type.get("value")
+                    if current_type not in [None, "virtual", "bridge", "lag", "other"]:
+                        int_data.pop("type", None)
+
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
                                                                        int_data, nic_ips.get(int_name, list()),
@@ -2441,10 +2509,27 @@ class VMWareHandler(SourceBase):
         if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
             # set the scope type and id if they are defined
             if scope_type is not None:
-                data["scope_type"] = scope_type
-                data["scope_id"] = scope_id
-                log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
-                          f"and scope id '{scope_id}'.")
+                # the configured scope id is a NetBox id, the cluster needs the object it points to
+                scope_object = None
+                scope_classes = [NBSite, NBSiteGroup, NBLocation, NBRegion]
+                scope_class = NetBoxMappings().get(scope_type)
+                if scope_class not in scope_classes:
+                    log.error(f"Unsupported scope type '{scope_type}' for cluster '{full_cluster_name}', must be "
+                              f"one of: {', '.join(NetBoxMappings().scopes_object_types(scope_classes))}")
+                elif scope_id is None or not str(scope_id).strip().isdecimal():
+                    log.error(f"Invalid scope id '{scope_id}' for cluster '{full_cluster_name}', "
+                              f"must be the NetBox id of a {scope_class.name}")
+                else:
+                    scope_object = self.inventory.get_by_id(scope_class, nb_id=int(scope_id))
+                    if scope_object is None:
+                        log.error(f"Unable to find {scope_class.name} with id '{scope_id}' in NetBox "
+                                  f"for cluster '{full_cluster_name}'")
+
+                if scope_object is not None:
+                    data["scope_type"] = scope_type
+                    data["scope_id"] = scope_object
+                    log.debug(f"Cluster '{full_cluster_name}' (or {name}) has scope type '{scope_type}' "
+                              f"and scope id '{scope_id}'.")
             elif site_name is not None:
                 # NetBox wants the id of the scoped object, so the site has to be a real
                 # object here. A plain dict is sent as is and rejected with
@@ -3001,11 +3086,8 @@ class VMWareHandler(SourceBase):
         # collect Fibre Channel host bus adapters as interfaces if enabled
         fc_hba_data_dict = dict()
         if self.settings.sync_host_fc_adapters is True:
-            for hba in grab(obj, "config.storageDevice.hostBusAdapter", fallback=list()):
-
-                # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
-                if not isinstance(hba, vim.host.FibreChannelHba):
-                    continue
+            # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
+            for hba in self.fc_hba_ports(grab(obj, "config.storageDevice.hostBusAdapter", fallback=list()), name):
 
                 hba_device = get_string_or_none(grab(hba, "device"))
                 if hba_device is None:
