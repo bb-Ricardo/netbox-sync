@@ -5,4 +5,5 @@
 !README.md
 !netbox-sync.py
 !requirements.txt
+!requirements-aws.txt
 !settings-example.ini
