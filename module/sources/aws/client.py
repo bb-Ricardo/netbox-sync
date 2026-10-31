@@ -19,16 +19,20 @@ continues - see tolerate_access_denied() and docs/source_aws.md.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from typing import Optional
 
 try:
     import boto3
     from botocore.config import Config
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import BotoCoreError, ClientError
 except ImportError:  # pragma: no cover - exercised via monkeypatching boto3 = None
     boto3 = None
     Config = None
     ClientError = Exception
+
+    class BotoCoreError(Exception):
+        pass
 
 from module.common.logging import get_logger
 
@@ -56,6 +60,18 @@ class AWSDiscoveryError(Exception):
     """A fatal AWS discovery failure. The caller must not write to NetBox."""
 
 
+def fatal_on_sdk_error(func):
+    """Turn an SDK level failure (no route to the endpoint, timeout, missing credentials, ...)
+    into the AWSDiscoveryError the handler knows how to deal with."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except BotoCoreError as exc:
+            raise AWSDiscoveryError(f"Incomplete AWS discovery: {exc}") from exc
+    return wrapper
+
+
 @dataclass(frozen=True)
 class AWSAccessCheck:
     account: Optional[str]
@@ -79,7 +95,10 @@ class AWSClient:
                 "the 'boto3' package is required for the AWS source; "
                 "install it with 'pip install -r requirements-aws.txt'"
             )
-        self.session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        try:
+            self.session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        except BotoCoreError as exc:
+            raise AWSDiscoveryError(f"Unable to initialize AWS credentials: {exc}") from exc
         self.access_denied = []
         self.access_checks = []
         self.account_names = {}
@@ -207,6 +226,7 @@ class AWSClient:
 
     # -- single-account discovery --------------------------------------------
 
+    @fatal_on_sdk_error
     def discover(self, regions, account=None, discovery_region=None, services=()):
         # Starts a fresh access_denied/access_checks run so a prior denial does
         # not linger forever once access is restored. Member clients created by
@@ -482,6 +502,7 @@ class AWSClient:
 
     # -- organization ---------------------------------------------------------
 
+    @fatal_on_sdk_error
     def discover_organization(self, regions, role_name, expected_account=None, discovery_region=None,
                                include_management=False, external_id=None, account_ids=None, services=()):
         self.access_denied = []
