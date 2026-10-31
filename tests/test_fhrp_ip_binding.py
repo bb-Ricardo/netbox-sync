@@ -23,6 +23,7 @@ import pytest
 from module.netbox.inventory import NetBoxInventory
 from module.netbox.object_classes import (
     NBSite, NBClusterType, NBCluster, NBVM, NBVMInterface, NBIPAddress, NBVRF,
+    NBFHRPGroupItem, NBIPAddressList,
 )
 from module.sources.common.source_base import SourceBase
 
@@ -147,6 +148,24 @@ def test_fhrp_match_is_scoped_to_same_vrf(inventory):
     ip_objects = _sync_one(src, vm, nic, "10.0.0.5/24")
 
     assert regular in ip_objects, "regular IP was suppressed by an FHRP IP in a different VRF"
+
+
+def test_fhrp_group_ip_addresses_list_resolves(inventory, caplog):
+    # NetBox returns FHRP group 'ip_addresses' as a list; resolving it must not
+    # log "Problems resolving relation 'ip_addresses'".
+    ip = inventory.add_object(NBIPAddress, data={"id": 9429, "address": "10.68.33.134/26"},
+                              read_from_netbox=True)
+    group = inventory.add_object(NBFHRPGroupItem, data={
+        "id": 1, "group_id": 0,
+        "ip_addresses": [{"id": 9429, "address": "10.68.33.134/26"}],
+    }, read_from_netbox=True)
+    inventory.loaded_types.update({NBIPAddress, NBFHRPGroupItem})
+
+    group.resolve_relations()
+
+    assert isinstance(group.data["ip_addresses"], NBIPAddressList)
+    assert list(group.data["ip_addresses"]) == [ip]
+    assert "Problems resolving relation" not in caplog.text
 
 
 def test_regular_ip_binds_when_flag_disabled(inventory):
