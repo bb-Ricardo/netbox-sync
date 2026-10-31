@@ -23,9 +23,11 @@ from typing import Optional
 
 try:
     import boto3
+    from botocore.config import Config
     from botocore.exceptions import ClientError
 except ImportError:  # pragma: no cover - exercised via monkeypatching boto3 = None
     boto3 = None
+    Config = None
     ClientError = Exception
 
 from module.common.logging import get_logger
@@ -42,6 +44,12 @@ AUTH_ERROR_CODES = {
 }
 
 MAX_ITEMS_PER_PAGE = 20
+
+# Every client retries throttled and transient failures with backoff and gives up on an
+# unreachable endpoint after 10 seconds instead of the botocore default of 60.
+BOTO_CONFIG = Config(
+    retries={"mode": "standard", "max_attempts": 5}, connect_timeout=10, read_timeout=60
+) if Config is not None else None
 
 
 class AWSDiscoveryError(Exception):
@@ -168,7 +176,7 @@ class AWSClient:
         return regions[0]
 
     def _get_identity(self, bootstrap_region, account, sts=None):
-        sts = sts or self.session.client("sts", region_name=bootstrap_region)
+        sts = sts or self.session.client("sts", region_name=bootstrap_region, config=BOTO_CONFIG)
         identity_account = None
         with self.tolerate_access_denied(None, None, "account"):
             response = sts.get_caller_identity()
@@ -183,7 +191,7 @@ class AWSClient:
         return identity_account
 
     def _enabled_regions(self, bootstrap_region, account):
-        ec2 = self.session.client("ec2", region_name=bootstrap_region)
+        ec2 = self.session.client("ec2", region_name=bootstrap_region, config=BOTO_CONFIG)
         enabled = set()
         denied_scope = (account, None, "ec2")
         with self.tolerate_access_denied(*denied_scope):
@@ -221,7 +229,7 @@ class AWSClient:
         return identity_account, snapshot
 
     def _discover_region(self, region, account, services):
-        ec2 = self.session.client("ec2", region_name=region)
+        ec2 = self.session.client("ec2", region_name=region, config=BOTO_CONFIG)
         data = {
             "instances": [], "InstanceTypes": {}, "NetworkInterfaces": {},
             "Volumes": {}, "Subnets": {}, "Vpcs": {},
@@ -248,7 +256,7 @@ class AWSClient:
         if "s3" in services:
             buckets = self._tolerated_list(self.discover_s3, account, region, "s3", ec2.meta.region_name
                                             if False else None,
-                                            args=(self.session.client("s3", region_name=region), region, account))
+                                            args=(self.session.client("s3", region_name=region, config=BOTO_CONFIG), region, account))
             if buckets is None:
                 inaccessible.append("s3")
                 data["Buckets"] = []
@@ -256,7 +264,7 @@ class AWSClient:
                 data["Buckets"] = buckets
         if "lambda" in services:
             functions = self._tolerated_list(self.discover_lambda, account, region, "lambda", None,
-                                             args=(self.session.client("lambda", region_name=region), region, account))
+                                             args=(self.session.client("lambda", region_name=region, config=BOTO_CONFIG), region, account))
             if functions is None:
                 inaccessible.append("lambda")
                 data["Functions"] = []
@@ -264,7 +272,7 @@ class AWSClient:
                 data["Functions"] = functions
         if "eks" in services:
             clusters = self._tolerated_list(self.discover_eks, account, region, "eks", None,
-                                            args=(self.session.client("eks", region_name=region), region, account))
+                                            args=(self.session.client("eks", region_name=region, config=BOTO_CONFIG), region, account))
             if clusters is None:
                 inaccessible.append("eks")
                 data["EKSClusters"] = []
@@ -479,12 +487,12 @@ class AWSClient:
         self.access_denied = []
         self.access_checks = []
         bootstrap_region = self._bootstrap_region(regions, discovery_region)
-        sts = self.session.client("sts", region_name=bootstrap_region)
+        sts = self.session.client("sts", region_name=bootstrap_region, config=BOTO_CONFIG)
         management_account = self._get_identity(bootstrap_region, expected_account, sts=sts)
         if management_account is None:
             return {}
 
-        organizations = self.session.client("organizations", region_name=bootstrap_region)
+        organizations = self.session.client("organizations", region_name=bootstrap_region, config=BOTO_CONFIG)
         org_info = None
         with self.tolerate_access_denied(management_account, None, "organizations"):
             org_info = organizations.describe_organization()["Organization"]
