@@ -79,7 +79,9 @@ class NetBoxConfig(ConfigBase):
             ConfigOption("prune_enabled",
                          bool,
                          description="""Whether items which were created by this program but
-                         can't be found in any source anymore will be deleted or not
+                         can't be found in any source anymore will be deleted or not.
+                         With pruning disabled no DELETE request is sent to NetBox at all,
+                         i.e. virtual disks which are gone from the source stay in NetBox
                          """,
                          default_value=False),
 
