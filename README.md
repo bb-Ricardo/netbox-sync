@@ -6,6 +6,7 @@ Available source types:
 * VMware vCenter Server
 * AWS EC2, EBS, and network interfaces, with opt-in S3, Lambda, and EKS inventory (see [AWS source](docs/source_aws.md))
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
+* [DigitalOcean](docs/source_digitalocean.md)
 
 **IMPORTANT: READ INSTRUCTIONS CAREFULLY BEFORE RUNNING THIS PROGRAM**
 
