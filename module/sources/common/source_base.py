@@ -518,7 +518,8 @@ class SourceBase:
 
         # skip handling of IPs for VMs with not installed/running guest tools
         skip_ip_handling = False
-        if type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
+        if type(device_object) == NBVM and vmware_object is not None and \
+                grab(vmware_object, 'guest.toolsRunningStatus') != "guestToolsRunning":
             log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
             skip_ip_handling = True
 
