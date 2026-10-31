@@ -1895,6 +1895,16 @@ class VMWareHandler(SourceBase):
                 if object_type == NBVM and self.settings.overwrite_vm_interface_name is False:
                     del int_data["name"]
 
+                # vCenter derives the pNIC type from the current link speed only. Keep a physical type
+                # set by a source which knows the hardware (i.e. check_redfish) if configured.
+                if object_type == NBDevice and self.settings.overwrite_host_interface_type is False:
+                    current_type = grab(nic_object_dict.get(int_name), "data.type")
+                    # NetBox returns choice fields as {"value": ..., "label": ...}
+                    if isinstance(current_type, dict):
+                        current_type = current_type.get("value")
+                    if current_type not in [None, "virtual", "bridge", "lag", "other"]:
+                        int_data.pop("type", None)
+
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
                                                                        int_data, nic_ips.get(int_name, list()),

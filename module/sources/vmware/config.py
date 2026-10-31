@@ -557,6 +557,12 @@ class VMWareConfig(ConfigBase):
                          description="""define if the name of the device interface discovered overwrites the
                          interface name in NetBox. The interface will only be matched by identical MAC address""",
                          default_value=True),
+            ConfigOption("overwrite_host_interface_type",
+                         bool,
+                         description="""define if the type of a host interface derived from its link speed
+                         overwrites a physical interface type in NetBox. Set to False if a source which knows the
+                         hardware (i.e. check_redfish) sets the type of the host interfaces""",
+                         default_value=True),
             ConfigOption("overwrite_vm_interface_name",
                          bool,
                          description="""define if the name of the VM interface discovered overwrites the
