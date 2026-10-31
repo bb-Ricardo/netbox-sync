@@ -50,6 +50,14 @@ class SourceBase:
     def finish(self):
         pass
 
+    def object_synced_by_other_source(self, nb_object):
+        """Check the current source or stored tags for ownership by another configured source."""
+        if nb_object.source is not None:
+            return nb_object.source is not self
+
+        other_source_tags = [x.source_tag for x in self.inventory.source_list if x is not self]
+        return len(set(nb_object.get_tags()).intersection(other_source_tags)) > 0
+
     def ip_is_primary_ip_of_object(self, ip_object, device_vm_object) -> bool:
         """
         Check if a NBIPAddress object is currently set as primary IPv4 or IPv6
@@ -510,7 +518,8 @@ class SourceBase:
 
         # skip handling of IPs for VMs with not installed/running guest tools
         skip_ip_handling = False
-        if type(device_object) == NBVM and grab(vmware_object,'guest.toolsRunningStatus') != "guestToolsRunning":
+        if type(device_object) == NBVM and vmware_object is not None and \
+                grab(vmware_object, 'guest.toolsRunningStatus') != "guestToolsRunning":
             log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
             skip_ip_handling = True
 
