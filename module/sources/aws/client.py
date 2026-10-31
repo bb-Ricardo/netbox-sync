@@ -19,14 +19,20 @@ continues - see tolerate_access_denied() and docs/source_aws.md.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from typing import Optional
 
 try:
     import boto3
-    from botocore.exceptions import ClientError
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError, ClientError
 except ImportError:  # pragma: no cover - exercised via monkeypatching boto3 = None
     boto3 = None
+    Config = None
     ClientError = Exception
+
+    class BotoCoreError(Exception):
+        pass
 
 from module.common.logging import get_logger
 
@@ -43,9 +49,27 @@ AUTH_ERROR_CODES = {
 
 MAX_ITEMS_PER_PAGE = 20
 
+# Every client retries throttled and transient failures with backoff and gives up on an
+# unreachable endpoint after 10 seconds instead of the botocore default of 60.
+BOTO_CONFIG = Config(
+    retries={"mode": "standard", "max_attempts": 5}, connect_timeout=10, read_timeout=60
+) if Config is not None else None
+
 
 class AWSDiscoveryError(Exception):
     """A fatal AWS discovery failure. The caller must not write to NetBox."""
+
+
+def fatal_on_sdk_error(func):
+    """Turn an SDK level failure (no route to the endpoint, timeout, missing credentials, ...)
+    into the AWSDiscoveryError the handler knows how to deal with."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except BotoCoreError as exc:
+            raise AWSDiscoveryError(f"Incomplete AWS discovery: {exc}") from exc
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -71,7 +95,10 @@ class AWSClient:
                 "the 'boto3' package is required for the AWS source; "
                 "install it with 'pip install -r requirements-aws.txt'"
             )
-        self.session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        try:
+            self.session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+        except BotoCoreError as exc:
+            raise AWSDiscoveryError(f"Unable to initialize AWS credentials: {exc}") from exc
         self.access_denied = []
         self.access_checks = []
         self.account_names = {}
@@ -168,7 +195,7 @@ class AWSClient:
         return regions[0]
 
     def _get_identity(self, bootstrap_region, account, sts=None):
-        sts = sts or self.session.client("sts", region_name=bootstrap_region)
+        sts = sts or self.session.client("sts", region_name=bootstrap_region, config=BOTO_CONFIG)
         identity_account = None
         with self.tolerate_access_denied(None, None, "account"):
             response = sts.get_caller_identity()
@@ -183,7 +210,7 @@ class AWSClient:
         return identity_account
 
     def _enabled_regions(self, bootstrap_region, account):
-        ec2 = self.session.client("ec2", region_name=bootstrap_region)
+        ec2 = self.session.client("ec2", region_name=bootstrap_region, config=BOTO_CONFIG)
         enabled = set()
         denied_scope = (account, None, "ec2")
         with self.tolerate_access_denied(*denied_scope):
@@ -199,6 +226,7 @@ class AWSClient:
 
     # -- single-account discovery --------------------------------------------
 
+    @fatal_on_sdk_error
     def discover(self, regions, account=None, discovery_region=None, services=()):
         # Starts a fresh access_denied/access_checks run so a prior denial does
         # not linger forever once access is restored. Member clients created by
@@ -221,7 +249,7 @@ class AWSClient:
         return identity_account, snapshot
 
     def _discover_region(self, region, account, services):
-        ec2 = self.session.client("ec2", region_name=region)
+        ec2 = self.session.client("ec2", region_name=region, config=BOTO_CONFIG)
         data = {
             "instances": [], "InstanceTypes": {}, "NetworkInterfaces": {},
             "Volumes": {}, "Subnets": {}, "Vpcs": {},
@@ -248,7 +276,7 @@ class AWSClient:
         if "s3" in services:
             buckets = self._tolerated_list(self.discover_s3, account, region, "s3", ec2.meta.region_name
                                             if False else None,
-                                            args=(self.session.client("s3", region_name=region), region, account))
+                                            args=(self.session.client("s3", region_name=region, config=BOTO_CONFIG), region, account))
             if buckets is None:
                 inaccessible.append("s3")
                 data["Buckets"] = []
@@ -256,7 +284,7 @@ class AWSClient:
                 data["Buckets"] = buckets
         if "lambda" in services:
             functions = self._tolerated_list(self.discover_lambda, account, region, "lambda", None,
-                                             args=(self.session.client("lambda", region_name=region), region, account))
+                                             args=(self.session.client("lambda", region_name=region, config=BOTO_CONFIG), region, account))
             if functions is None:
                 inaccessible.append("lambda")
                 data["Functions"] = []
@@ -264,7 +292,7 @@ class AWSClient:
                 data["Functions"] = functions
         if "eks" in services:
             clusters = self._tolerated_list(self.discover_eks, account, region, "eks", None,
-                                            args=(self.session.client("eks", region_name=region), region, account))
+                                            args=(self.session.client("eks", region_name=region, config=BOTO_CONFIG), region, account))
             if clusters is None:
                 inaccessible.append("eks")
                 data["EKSClusters"] = []
@@ -474,17 +502,18 @@ class AWSClient:
 
     # -- organization ---------------------------------------------------------
 
+    @fatal_on_sdk_error
     def discover_organization(self, regions, role_name, expected_account=None, discovery_region=None,
                                include_management=False, external_id=None, account_ids=None, services=()):
         self.access_denied = []
         self.access_checks = []
         bootstrap_region = self._bootstrap_region(regions, discovery_region)
-        sts = self.session.client("sts", region_name=bootstrap_region)
+        sts = self.session.client("sts", region_name=bootstrap_region, config=BOTO_CONFIG)
         management_account = self._get_identity(bootstrap_region, expected_account, sts=sts)
         if management_account is None:
             return {}
 
-        organizations = self.session.client("organizations", region_name=bootstrap_region)
+        organizations = self.session.client("organizations", region_name=bootstrap_region, config=BOTO_CONFIG)
         org_info = None
         with self.tolerate_access_denied(management_account, None, "organizations"):
             org_info = organizations.describe_organization()["Organization"]
