@@ -57,15 +57,7 @@ class NetBoxInterfaceType:
         "200gbase-x-qsfp56": 200_000,
         "200gbase-x-cfp2":   200_000,
         "400gbase-x-qsfpdd": 400_000,
-        "400gbase-x-osfp":   400_000,
-        "1gfc-sfp":          1,
-        "2gfc-sfp":          2,
-        "4gfc-sfp":          4,
-        "8gfc-sfpp":         8,
-        "16gfc-sfpp":        16,
-        "32gfc-sfp28":       32,
-        "64gfc-qsfpp":       64,
-        "128gfc-qsfp28":     128
+        "400gbase-x-osfp":   400_000
     }
 
     # assign common types for an interface speed value
@@ -698,21 +690,21 @@ class NetBoxObject:
                 # object custom fields which get merged into the update from the current
                 # data, and comparing reduced to unreduced values would report a change
                 # on every run.
-                def reduce_custom_fields_for_write(custom_field_data: dict) -> dict:
+                def reduce_object_custom_fields_to_ids(custom_field_data: dict) -> dict:
 
                     reduced_data = dict(custom_field_data)
                     for f_name, f_value in custom_field_data.items():
                         # Check for custom field type
                         custom_field = self.inventory.get_by_data(NBCustomField, data={"name": f_name})
                         if custom_field is None:
-                            field_type = None
-                        else:
-                            field_type = grab(custom_field, "data.type")
+                            continue
 
-                            # custom fields read from the NetBox API report the type as
-                            # a dict like {"value": "multiobject", "label": "Multiple objects"}
-                            if isinstance(field_type, dict):
-                                field_type = field_type.get("value")
+                        field_type = grab(custom_field, "data.type")
+
+                        # custom fields read from the NetBox API report the type as
+                        # a dict like {"value": "multiobject", "label": "Multiple objects"}
+                        if isinstance(field_type, dict):
+                            field_type = field_type.get("value")
 
                         # Handle object type custom fields - need only ID
                         if field_type == "object" and isinstance(f_value, dict) and \
@@ -729,41 +721,11 @@ class NetBoxObject:
                             if ids:
                                 reduced_data[f_name] = ids
 
-                        # Handle selection custom fields - need only the raw choice value.
-                        # The NetBox API returns a selection on read as
-                        # {"value": "business-hours", "label": "Business Hours"} but on
-                        # write (POST/PATCH) it expects the bare value; sending the dict
-                        # back is rejected as an invalid choice (issue #598). Reducing it
-                        # here also keeps change detection stable, so an unmanaged selection
-                        # field that is merged in from the current NetBox data is not
-                        # reported as changed on every run.
-                        elif field_type == "select" and isinstance(f_value, dict) and \
-                                "value" in f_value:
-                            reduced_data[f_name] = f_value.get("value")
-
-                        # Handle multi-selection custom fields - need a list of raw values.
-                        # On read NetBox returns a list of {"value", "label"} dicts.
-                        elif field_type in ("multiselect", "multi-select") and isinstance(f_value, list):
-                            values = [item.get("value") if isinstance(item, dict) and "value" in item else item
-                                      for item in f_value]
-                            reduced_data[f_name] = values
-
-                        # Fallback for a custom field that is not in the inventory, so
-                        # its type is unknown: a dict consisting of exactly the "value"
-                        # and "label" keys is how NetBox represents a selection choice on
-                        # read, so reduce it to its bare value too. The reporter of #598
-                        # noted the offending field was one netbox-sync does not manage;
-                        # object custom fields read as {"id","url","display",...} have
-                        # more keys and are left untouched by this exact-key check.
-                        elif field_type is None and isinstance(f_value, dict) and \
-                                set(f_value.keys()) == {"value", "label"}:
-                            reduced_data[f_name] = f_value.get("value")
-
                     return reduced_data
 
-                current_value = reduce_custom_fields_for_write(current_value)
+                current_value = reduce_object_custom_fields_to_ids(current_value)
                 current_value_str = str(current_value)
-                new_value = {**current_value, **reduce_custom_fields_for_write(new_value)}
+                new_value = {**current_value, **reduce_object_custom_fields_to_ids(new_value)}
                 new_value_str = str(new_value)
             elif isinstance(new_value, (NetBoxObject, NBObjectList)):
                 new_value_str = str(new_value.get_display_name())
@@ -872,6 +834,9 @@ class NetBoxObject:
             elif isinstance(secondary_key_value, dict):
                 read_from_netbox = True if secondary_key_value.get("id", 0) != 0 else False
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
+
+            if secondary_key_value is None and include_secondary_key_if_present:
+                return my_name
 
             if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False:
                 log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
@@ -1562,6 +1527,7 @@ class NBVRF(NetBoxObject):
     object_type = "ipam.vrf"
     primary_key = "name"
     prune = False
+    read_only = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
@@ -1935,6 +1901,7 @@ class NBCluster(NetBoxObject):
     object_type = "virtualization.cluster"
     primary_key = "name"
     secondary_key = "scope_id"
+    include_secondary_key_if_present = True
     prune = False
 
     def __init__(self, *args, **kwargs):
@@ -2032,7 +1999,6 @@ class NBVM(NetBoxObject):
             "memory": int,
             "disk": int,
             "comments": str,
-            "description": 200,
             "primary_ip4": NBIPAddress,
             "primary_ip6": NBIPAddress,
             "site": NBSite,
@@ -2073,7 +2039,6 @@ class NBVMInterface(NetBoxObject):
             "untagged_vlan": NBVLAN,
             "tagged_vlans": NBVLANList,
             "description": 200,
-            "custom_fields": NBCustomField,
             "tags": NBTagList
         }
         super().__init__(*args, **kwargs)
@@ -2412,11 +2377,10 @@ class NBMACAddress(NetBoxObject):
     def remove_interface_association(self):
         o_id = self.data.get("assigned_object_id")
         o_type = self.data.get("assigned_object_type")
-        o_interface = self.get_interface()
+        o_device = self.get_device_vm()
 
-        # NetBox refuses to unassign a MAC address which is still the primary MAC of its interface
-        if grab(o_interface, "data.primary_mac_address") is self:
-            o_interface.unset_attribute("primary_mac_address")
+        if grab(o_device, "data.primary_mac_address") is self:
+            o_device.unset_attribute("primary_mac_address")
 
         if o_id is not None:
             self.unset_attribute("assigned_object_id")
@@ -2424,22 +2388,6 @@ class NBMACAddress(NetBoxObject):
             self.unset_attribute("assigned_object_type")
 
 
-class NBIPAddressList(NBObjectList):
-    member_type = NBIPAddress
-
-    def get_nb_reference(self):
-        """
-            return None if one IP address is unresolvable
-        """
-        return_list = list()
-        for ip_address in self:
-            if ip_address.nb_id == 0:
-                return None
-
-            return_list.append(ip_address.nb_id)
-
-        return return_list
-        
 class NBFHRPGroupItem(NetBoxObject):
     name = "FHRP group"
     api_path = "ipam/fhrp-groups"
@@ -2451,7 +2399,7 @@ class NBFHRPGroupItem(NetBoxObject):
     def __init__(self, *args, **kwargs):
         self.data_model = {
             "group_id": int,
-            "ip_addresses": NBIPAddressList,
+            "ip_addresses": NBIPAddress,
             "description": 200,
             "tags": NBTagList,
             "custom_fields": NBCustomField
