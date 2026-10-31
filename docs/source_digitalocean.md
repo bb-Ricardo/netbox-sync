@@ -96,10 +96,15 @@ dry run for interface, disk, and primary-IP changes before enabling writes.
 
 IP assignments can be repaired automatically when the existing IP belongs to
 the current source, either through this run's ownership or its persisted
-`Source: <source name>` tag. Conflicting source ownership or uncertain ownership
-stops the run before the normal NetBox write/prune phase instead of silently
-skipping a discovered IP. Two interfaces claiming the same IP in one source run
-also cause an explicit error. Source section names must remain stable for
+`Source: <source name>` tag. Conflicting or uncertain ownership is logged and
+the assignment is skipped without stopping the run or changing the existing
+assignment. Other addresses, droplets, disks, and databases continue syncing.
+Skipped IPs are not selected as the discovered VM's primary IP. An existing IP
+tagged for this source is retained for the run, preventing the skipped assignment
+from causing orphaning/pruning; ownership tags are preserved.
+Two interfaces claiming the same IP in one source run also produce an error log:
+the first assignment is kept and subsequent conflicting assignments are skipped.
+Source section names must remain stable for
 persisted ownership tags to match. If an earlier run already removed an IP's
 source tag or marked it orphaned, verify its owner and restore the correct tag
 or repair its assignment manually before retrying.
