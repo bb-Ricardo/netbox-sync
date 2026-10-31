@@ -50,6 +50,14 @@ class SourceBase:
     def finish(self):
         pass
 
+    def object_synced_by_other_source(self, nb_object):
+        """Check the current source or stored tags for ownership by another configured source."""
+        if nb_object.source is not None:
+            return nb_object.source is not self
+
+        other_source_tags = [x.source_tag for x in self.inventory.source_list if x is not self]
+        return len(set(nb_object.get_tags()).intersection(other_source_tags)) > 0
+
     def ip_is_primary_ip_of_object(self, ip_object, device_vm_object) -> bool:
         """
         Check if a NBIPAddress object is currently set as primary IPv4 or IPv6
