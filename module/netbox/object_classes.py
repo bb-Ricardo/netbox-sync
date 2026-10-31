@@ -2412,10 +2412,11 @@ class NBMACAddress(NetBoxObject):
     def remove_interface_association(self):
         o_id = self.data.get("assigned_object_id")
         o_type = self.data.get("assigned_object_type")
-        o_device = self.get_device_vm()
+        o_interface = self.get_interface()
 
-        if grab(o_device, "data.primary_mac_address") is self:
-            o_device.unset_attribute("primary_mac_address")
+        # NetBox refuses to unassign a MAC address which is still the primary MAC of its interface
+        if grab(o_interface, "data.primary_mac_address") is self:
+            o_interface.unset_attribute("primary_mac_address")
 
         if o_id is not None:
             self.unset_attribute("assigned_object_id")
