@@ -862,7 +862,6 @@ class NetBoxObject:
                 [enforce_secondary_key, including_second_key, include_secondary_key_if_present]:
 
             secondary_key_value = this_data_set.get(secondary_key)
-            org_secondary_key_value = str(secondary_key_value)
             read_from_netbox = False
 
             if isinstance(secondary_key_value, NetBoxObject):
@@ -872,6 +871,11 @@ class NetBoxObject:
             elif isinstance(secondary_key_value, dict):
                 read_from_netbox = True if secondary_key_value.get("id", 0) != 0 else False
                 secondary_key_value = self.get_display_name(data=secondary_key_value)
+
+            org_secondary_key_value = str(secondary_key_value)
+
+            if secondary_key_value is None and include_secondary_key_if_present:
+                return my_name
 
             if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False:
                 log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
@@ -1935,6 +1939,7 @@ class NBCluster(NetBoxObject):
     object_type = "virtualization.cluster"
     primary_key = "name"
     secondary_key = "scope_id"
+    include_secondary_key_if_present = True
     prune = False
 
     def __init__(self, *args, **kwargs):

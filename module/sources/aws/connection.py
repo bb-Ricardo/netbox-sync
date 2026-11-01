@@ -324,8 +324,26 @@ class AWSHandler(SourceBase):
         return f"{name[:limit - 13]}-{suffix}"
 
     def service_object(self, object_type, identity, data):
-        matches = [item for item in self.inventory.get_all_items(object_type)
+        items = self.inventory.get_all_items(object_type)
+        matches = [item for item in items
                    if (item.data.get("custom_fields") or {}).get("aws_resource_id") == identity]
+        parent = "virtual_machine" if object_type is NBVirtualDisk else "cluster" if object_type is NBVM else "group"
+        if not matches:
+            name_matches = [item for item in items
+                            if item.data.get("name") == data["name"] and
+                            item.data.get(parent) is data.get(parent)]
+            if len(name_matches) == 1:
+                candidate = name_matches[0]
+                fields = candidate.data.get("custom_fields") or {}
+                candidate_identity = fields.get("aws_resource_id")
+                candidate_service = fields.get("aws_service")
+                identity_missing = candidate_identity is None or (
+                    isinstance(candidate_identity, str) and not candidate_identity.strip())
+                service = (data.get("custom_fields") or {}).get("aws_service")
+                service_matches = candidate_service in (None, "", service)
+                source_managed = candidate.source is self or self.source_tag in candidate.get_tags()
+                if identity_missing and service_matches and source_managed:
+                    matches = [candidate]
         if len(matches) > 1:
             raise ValueError(f"Multiple NetBox {object_type.name} objects match AWS resource '{identity}'")
         if matches:
@@ -334,9 +352,8 @@ class AWSHandler(SourceBase):
                 raise ValueError(f"AWS resource '{identity}' belongs to another source")
             item.update(data=data, source=self)
         else:
-            parent = "virtual_machine" if object_type is NBVirtualDisk else "cluster" if object_type is NBVM else "group"
             if any(item.data.get("name") == data["name"] and item.data.get(parent) is data.get(parent)
-                   for item in self.inventory.get_all_items(object_type)):
+                   for item in items):
                 raise ValueError(f"NetBox {object_type.name} name collision for AWS resource '{identity}'")
             item = self.inventory.add_object(object_type, data=data, source=self)
         self.reconcile_tags(item, data["tags"])

@@ -265,10 +265,13 @@ def test_s3_conflict_skips_dependencies_but_continues(make_source, inventory, ca
                 "name": "inventory-bucket", "virtual_machine": holder, "size": 0,
             })
     source.apply()
-    assert "name collision" in caplog.text
+    assert ("name collision" in caplog.text) == (stage == "bucket")
     buckets = [disk.data["name"] for disk in inventory.get_all_items(NBVirtualDisk)
                if disk.data.get("custom_fields", {}).get("aws_service") == "s3"]
-    assert buckets == (["second"] if stage == "bucket" else [])
+    assert buckets == (["second"] if stage == "bucket" else ["inventory-bucket", "second"])
+    assert cluster.data["custom_fields"]["aws_resource_id"] == identity
+    if stage == "holder":
+        assert holder.data["custom_fields"]["aws_resource_id"] == identity
     assert any(vm.data.get("custom_fields", {}).get("aws_instance_id") == INSTANCE
                for vm in inventory.get_all_items(NBVM))
 
@@ -293,6 +296,56 @@ def test_eks_conflict_skips_workers_and_continues_next_region(make_source, inven
                  for vm in inventory.get_all_items(NBVM)]
     assert INSTANCE not in instances
     assert "i-next-region" in instances
+
+
+@pytest.mark.parametrize("fields", [
+    {},
+    {"aws_resource_id": "", "aws_service": ""},
+])
+def test_eks_cluster_with_missing_identity_fields_is_reconciled(make_source, inventory, fields, caplog):
+    source = make_source("sync_eks = True\nsync_private_ips = False", data=service_data())
+    group = inventory.add_object(NBClusterGroup, data={"name": f"AWS {ACCOUNT}"})
+    cluster = inventory.add_object(NBCluster, data={
+        "name": f"EKS {ACCOUNT}/{REGION}/inventory-cluster",
+        "group": group,
+        "custom_fields": fields,
+    })
+    cluster.add_tags(source.source_tag)
+
+    source.apply()
+
+    assert not any("Skipping EKS cluster 'inventory-cluster'" in message
+                   for message in caplog.messages)
+    assert len([item for item in inventory.get_all_items(NBCluster)
+                if item.data.get("name") == cluster.data["name"]]) == 1
+    assert cluster.data["custom_fields"]["aws_resource_id"] == CLUSTER_ARN
+    assert cluster.data["custom_fields"]["aws_service"] == "eks"
+    worker = next(vm for vm in inventory.get_all_items(NBVM)
+                  if vm.data.get("custom_fields", {}).get("aws_instance_id") == INSTANCE)
+    assert worker.data["cluster"] is cluster
+
+
+@pytest.mark.parametrize("fields", [
+    {"aws_resource_id": f"arn:aws:eks:{REGION}:{ACCOUNT}:cluster/another-cluster", "aws_service": "eks"},
+    {"aws_resource_id": "", "aws_service": "lambda"},
+])
+def test_eks_cluster_does_not_adopt_conflicting_identity_fields(make_source, inventory, fields, caplog):
+    source = make_source("sync_eks = True\nsync_private_ips = False", data=service_data())
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": f"AWS {ACCOUNT}"})
+    cluster = inventory.add_object(NBCluster, data={
+        "name": f"EKS {ACCOUNT}/{REGION}/inventory-cluster",
+        "group": group,
+        "custom_fields": fields,
+    })
+    cluster.add_tags(source.source_tag)
+
+    source.apply()
+
+    assert "Skipping EKS cluster 'inventory-cluster'" in caplog.text
+    assert cluster.data["custom_fields"] == fields
+    assert not any(vm.data.get("custom_fields", {}).get("aws_instance_id") == INSTANCE
+                   for vm in inventory.get_all_items(NBVM))
 
 
 def test_lambda_function_conflict_continues_next_function(make_source, inventory, caplog):

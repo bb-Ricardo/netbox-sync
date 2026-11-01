@@ -13,10 +13,11 @@ id of the scoped object), and a scope read back from NetBox as an id has to reso
 that object again, otherwise every run reports a change.
 """
 import logging
+from datetime import datetime
 
 import pytest
 
-from module.netbox.object_classes import NBCluster, NBClusterType, NBSite, NBSiteGroup
+from module.netbox.object_classes import NBCluster, NBClusterType, NBVM, NBSite, NBSiteGroup
 
 
 def test_cluster_scope_is_resolved_from_an_id(inventory):
@@ -44,6 +45,23 @@ def test_a_site_object_survives_resolving(inventory):
 
     assert cluster.data.get("scope_id") is site
     assert cluster.data.get("scope_type") == "dcim.site", "scope type was dropped"
+
+
+def test_unscoped_cluster_has_no_missing_scope_warning(inventory, caplog):
+    cluster = inventory.add_object(NBCluster, data={"name": "global"})
+
+    assert cluster.get_display_name(including_second_key=True) == "global"
+    assert "Unable to determine second key 'scope_id'" not in caplog.text
+
+
+def test_vm_lookup_does_not_serialize_cluster_metadata(inventory):
+    cluster = inventory.add_object(NBCluster, data={
+        "name": "eks-cluster",
+        "custom_fields": {"aws_metadata": {"createdAt": datetime(2026, 10, 23)}},
+    })
+    vm = inventory.add_object(NBVM, data={"name": "worker", "cluster": cluster})
+
+    assert inventory.get_by_data(NBVM, data={"name": "worker", "cluster": cluster}) is vm
 
 
 def test_source_scopes_a_cluster_with_the_site_object(vcsim, inventory, load_config, vmware_settings):
