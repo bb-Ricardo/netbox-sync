@@ -11,6 +11,7 @@ import os
 import glob
 import hashlib
 import json
+from ipaddress import ip_interface
 
 from packaging import version
 
@@ -29,6 +30,15 @@ MODULE_BAY_NAME_HASH_LENGTH = 8
 
 log = get_logger()
 
+
+
+def is_ip_address(value) -> bool:
+    """True if value parses as an IP address, with or without a prefix length."""
+    try:
+        ip_interface(value)
+    except ValueError:
+        return False
+    return True
 
 class CheckRedfish(SourceBase):
     """
@@ -985,8 +995,10 @@ class CheckRedfish(SourceBase):
             nic_ips[port_name] = list()
             if self.settings.skip_os_reported_ips is True and mgmt_only is False:
                 continue
-            nic_ips_reported[port_name] = len(grab(nic_port, "ipv4_addresses", fallback=list())) + \
-                len(grab(nic_port, "ipv6_addresses", fallback=list()))
+            nic_ips_reported[port_name] = len([
+                address for address in [*grab(nic_port, "ipv4_addresses", fallback=list()),
+                                        *grab(nic_port, "ipv6_addresses", fallback=list())]
+                if is_ip_address(address)])
 
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
                 if self.settings.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:

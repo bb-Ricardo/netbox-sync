@@ -121,3 +121,26 @@ def test_stale_ip_is_kept_when_os_reported_ips_are_skipped(check_redfish_source)
     run(context, [REPORTED], permitted="0.0.0.0/0")
 
     assert "assigned_object_id" not in stale.unset_items
+
+
+@pytest.mark.parametrize("reported", [[None], ["not-an-ip"], [None, "N/A"]])
+def test_stale_ip_is_kept_when_no_reported_entry_is_an_address(check_redfish_source, reported):
+    """An entry which is not an IP address is not a discovery, so it must not trigger pruning."""
+
+    context = check_redfish_source()
+    _, stale = seed_interface_with_stale_ip(context)
+
+    run(context, reported, permitted="0.0.0.0/0")
+
+    assert "assigned_object_id" not in stale.unset_items
+
+
+def test_stale_ip_is_removed_when_an_excluded_address_is_reported_with_junk(check_redfish_source):
+    """A valid address next to an invalid entry still counts, even when permitted_subnets excludes it."""
+
+    context = check_redfish_source()
+    _, stale = seed_interface_with_stale_ip(context)
+
+    run(context, [None, REPORTED], permitted=f"!{REPORTED_SUBNET}, 0.0.0.0/0")
+
+    assert "assigned_object_id" in stale.unset_items
