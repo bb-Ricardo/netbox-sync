@@ -54,6 +54,14 @@ class CheckRedfishConfig(ConfigBase):
                          is then stored in the 'system_serial' custom field""",
                          default_value=False),
 
+            ConfigOption("collect_hardware_asset_tag",
+                         bool,
+                         description="""define if the asset tag reported by the BMC (system asset tag,
+                         falling back to the chassis asset tag) is set as the NetBox device asset tag.
+                         Placeholder values are ignored, as is an asset tag which another device in
+                         NetBox already has, since asset tags are unique in NetBox""",
+                         default_value=False),
+
             ConfigOption("model_components_as_modules",
                          bool,
                          description="""model discovered hardware components (CPUs, memory, drives,
