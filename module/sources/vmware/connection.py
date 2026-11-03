@@ -3246,9 +3246,11 @@ class VMWareHandler(SourceBase):
             if vnic_ips.get(vnic_name) is None:
                 vnic_ips[vnic_name] = list()
 
-            int_v4 = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
+            vnic_ipv4 = grab(vnic, "spec.ip.ipAddress")
+            int_v4 = "{}/{}".format(vnic_ipv4, grab(vnic, "spec.ip.subnetMask"))
 
-            if self.settings.permitted_subnets.permitted(int_v4, interface_name=vnic_name) is True:
+            # a vmk without IPv4 (VxRail hosts' vmk0) reports an empty address: nothing to add
+            if vnic_ipv4 and self.settings.permitted_subnets.permitted(int_v4, interface_name=vnic_name) is True:
                 vnic_ips[vnic_name].append(int_v4)
 
                 if vnic_is_primary is True and host_primary_ip4 is None:
