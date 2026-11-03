@@ -2233,6 +2233,12 @@ class NBIPAddress(NetBoxObject):
             if grab(previous_ip_device_vm, "data.primary_ip6") is self:
                 is_primary_ipv6_of_previous_device = True
 
+            # a new assignment replaces a removal queued earlier in this run (the IP moved to
+            # another interface); otherwise the IP would be unassigned first and reassigned after
+            for attribute_name in ["assigned_object_id", "assigned_object_type"]:
+                if attribute_name in self.unset_items:
+                    self.unset_items.remove(attribute_name)
+
             if not isinstance(assigned_object, NetBoxObject):
 
                 data["assigned_object_id"] = \
