@@ -1326,11 +1326,19 @@ class VMWareHandler(SourceBase):
                 log.error(f"Unable to retrieve vCenter tags for '{obj.name}': {e}")
                 return
 
+            # vCenter tags and categories by id: most objects share a few hundred tags, so each
+            # is fetched once per run (per source) instead of once per object it's attached to
+            tag_cache = self.__dict__.setdefault("_tag_cache", dict())
+            tag_category_name_cache = self.__dict__.setdefault("_tag_category_name_cache", dict())
+
             for tag_id in object_tag_ids:
 
                 # noinspection PyBroadException
                 try:
-                    tag = self.tag_session.tagging.Tag.get(tag_id)  # store the object
+                    tag = tag_cache.get(tag_id)
+                    if tag is None:
+                        tag = self.tag_session.tagging.Tag.get(tag_id)  # store the object
+                        tag_cache[tag_id] = tag
                     tag_name = tag.name
                     tag_description = tag.description
                 except Exception as e:
@@ -1341,7 +1349,10 @@ class VMWareHandler(SourceBase):
                 if bool(self.settings.tag_name_include_category) is True:
                     # noinspection PyBroadException
                     try:
-                        category_name = self.tag_session.tagging.Category.get(tag.category_id).name
+                        category_name = tag_category_name_cache.get(tag.category_id)
+                        if category_name is None:
+                            category_name = self.tag_session.tagging.Category.get(tag.category_id).name
+                            tag_category_name_cache[tag.category_id] = category_name
                     except Exception as e:
                         log.debug(f"Unable to retrieve category of vCenter tag '{tag_name}': {e}")
 
