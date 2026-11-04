@@ -1070,7 +1070,13 @@ class SourceBase:
         return_data = vlan_data
         vlan_object_by_site = None
         vlan_object_by_group = None
+        vlan_object_global_group = None
         vlan_object_global = None
+
+        # VLAN groups without a scope that the settings name as global (vlan_global_groups): their
+        # VLANs are matched like VLANs with neither site nor group, and before those
+        global_groups = {str(name).lower() for name in
+                         (getattr(getattr(self, "settings", None), "vlan_global_groups", None) or [])}
 
         for vlan in self.inventory.get_all_items(NBVLAN):
 
@@ -1089,6 +1095,10 @@ class SourceBase:
                         vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
                     vlan_object_by_group = vlan
                     break
+                if isinstance(vlan_group, NetBoxObject) and \
+                        str(grab(vlan_group, "data.name")).lower() in global_groups and \
+                        grab(vlan_group, "data.scope_id") is None and grab(vlan, "data.site") is None:
+                    vlan_object_global_group = vlan
 
             if grab(vlan, "data.site") is None and grab(vlan, "data.group") is None:
                 vlan_object_global = vlan
@@ -1109,6 +1119,11 @@ class SourceBase:
             log.debug2(f"Found a {return_data.name} object which matches the {vlan_group_object.name} "
                        f"'{vlan_group_object.get_display_name()}'{scope_details}: %s" %
                        vlan_object_by_group.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_global_group, NetBoxObject):
+            return_data = vlan_object_global_group
+            log.debug2(f"Found a matching {return_data.name} object in a global VLAN group: %s" %
+                       vlan_object_global_group.get_display_name(including_second_key=True))
 
         elif isinstance(vlan_object_global, NetBoxObject):
             return_data = vlan_object_global
