@@ -133,3 +133,34 @@ def test_option_is_unset_by_default_and_parses_a_list(load_config):
     handler = VMWareConfig()
     handler.source_name = "vc"
     assert handler.parse(do_log=False).vlan_global_groups == ["ANU", "Campus, Labs"]
+
+
+def test_first_listed_global_group_wins(inventory):
+    site = _site(inventory)
+    in_a = _vlan(inventory, "in-a", group=_group(inventory, "A"))
+    in_b = _vlan(inventory, "in-b", group=_group(inventory, "B"))
+
+    assert _lookup(_source(inventory, ["A", "B"]), site) is in_a
+    assert _lookup(_source(inventory, ["B", "A"]), site) is in_b
+
+
+def test_first_listed_global_group_wins_whatever_netbox_returns_first(inventory):
+    site = _site(inventory)
+    in_b = _vlan(inventory, "in-b", group=_group(inventory, "B"))
+    in_a = _vlan(inventory, "in-a", group=_group(inventory, "A"))
+
+    assert _lookup(_source(inventory, ["A", "B"]), site) is in_a
+    assert _lookup(_source(inventory, ["B", "A"]), site) is in_b
+
+
+def test_a_group_whose_scope_is_not_in_the_inventory_is_not_global(inventory):
+    """The scope resolves to None if its object is not in the inventory, the scope type stays."""
+
+    site = _site(inventory)
+    group = inventory.add_object(NBVLANGroup, data={"name": "ANU", "slug": "anu", "scope_type": "dcim.site",
+                                                    "scope_id": 4711}, read_from_netbox=True)
+    group.resolve_relations()
+    assert group.data["scope_id"] is None and group.data["scope_type"] == "dcim.site"
+    _vlan(inventory, "ITS-Automation", group=group)
+
+    assert isinstance(_lookup(_source(inventory, ["ANU"]), site), dict)

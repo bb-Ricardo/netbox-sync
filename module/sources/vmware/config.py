@@ -552,7 +552,7 @@ class VMWareConfig(ConfigBase):
                                                A discovered VLAN then reuses the VLAN with the same ID from one of these
                                                groups instead of creating its own. Matching order: a VLAN of the site, a
                                                VLAN in a group scoped to the site or cluster, a VLAN in one of these
-                                               groups, a VLAN with neither site nor group.
+                                               groups (the group listed first wins), a VLAN with neither site nor group.
                                                """,
                                                config_example="IPAM VLANs, Campus")
                               ]),
