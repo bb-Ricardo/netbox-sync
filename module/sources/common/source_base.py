@@ -646,8 +646,11 @@ class SourceBase:
                                 f"possible VRF '{possible_ip_vrf_str}'")
                     continue
 
-                # IP address is not assigned to any interface
-                if not isinstance(current_ip_nic, (NBInterface, NBVMInterface)):
+                # IP address is not assigned to any interface, or the interface it is assigned to
+                # stopped reporting it in this run and its removal is queued (it moved, e.g. a
+                # failover address): either way it is free to be assigned here
+                if not isinstance(current_ip_nic, (NBInterface, NBVMInterface)) or \
+                        "assigned_object_id" in ip.unset_items:
                     this_ip_object = ip
                     break
 
