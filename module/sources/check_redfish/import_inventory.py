@@ -377,6 +377,8 @@ class CheckRedfish(SourceBase):
         if self.settings.collect_hardware_asset_tag is True:
             asset_tag = self.get_asset_tag()
             if asset_tag is not None:
+                # compare what NBDevice.update() will send, it cuts the value to the length NetBox allows
+                asset_tag = asset_tag[:self.device_object.data_model["asset_tag"]]
                 # NetBox rejects an asset tag which another device already has, and with it the whole update
                 other_device = self.inventory.get_by_data(NBDevice, data={"asset_tag": asset_tag})
                 if other_device is not None and other_device is not self.device_object:

@@ -104,3 +104,32 @@ def test_own_asset_tag_is_kept(check_redfish_source):
 
     assert device.data["asset_tag"] == ASSET_TAG
     assert "asset_tag" not in device.updated_items
+
+
+def test_long_asset_tag_of_another_device_is_not_set(check_redfish_source, caplog):
+    """NBDevice cuts the asset tag to the 50 characters NetBox allows, so the duplicate
+    check has to compare the cut value, or NetBox rejects the whole update."""
+
+    long_asset_tag = "A" * 50 + "-0123456789"
+    context = check_redfish_source(collect_hardware_asset_tag=True)
+    context.inventory.add_object(NBDevice, data={"name": "other", "asset_tag": long_asset_tag},
+                                 source=context.source)
+
+    device = run_update_device(context, system(system_asset_tag=long_asset_tag))
+
+    assert device.data.get("asset_tag") is None
+    assert device.data["serial"] == "CZJ0000001"
+    assert "is already used by device 'other'" in caplog.text
+
+
+def test_long_own_asset_tag_is_kept(check_redfish_source):
+    """The device which already has the cut asset tag is not a conflict with itself."""
+
+    long_asset_tag = "A" * 50 + "-0123456789"
+    context = check_redfish_source(collect_hardware_asset_tag=True)
+    context.device.data["asset_tag"] = long_asset_tag[:50]
+
+    device = run_update_device(context, system(system_asset_tag=long_asset_tag))
+
+    assert device.data["asset_tag"] == long_asset_tag[:50]
+    assert "asset_tag" not in device.updated_items
