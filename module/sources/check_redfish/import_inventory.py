@@ -38,6 +38,10 @@ class CheckRedfish(SourceBase):
     # minimum check_redfish inventory version
     minimum_check_redfish_version = "2.0.0"
 
+    # values a BMC reports in place of an asset tag which was never set
+    unset_asset_tags = ["Default string", "NA", "N/A", "None", "Null", "Unknown", "Not Specified",
+                        "To be filled by O.E.M."]
+
     dependent_netbox_objects = [
         NBTag,
         NBManufacturer,
@@ -282,6 +286,25 @@ class CheckRedfish(SourceBase):
 
         return get_string_or_none(grab(self.inventory_file_content, "inventory.chassis.0.sku"))
 
+    def get_asset_tag(self):
+        """
+        Return the asset tag of the system, falling back to the one of the chassis. Placeholder
+        values which a BMC reports for an asset tag that was never set are ignored.
+
+        Returns
+        -------
+        (str, None): the asset tag
+        """
+
+        unset_asset_tags = [x.lower() for x in self.unset_asset_tags]
+
+        for path in ["inventory.system.0.asset_tag", "inventory.chassis.0.asset_tag"]:
+            asset_tag = get_string_or_none(grab(self.inventory_file_content, path))
+            if asset_tag is not None and asset_tag.lower() not in unset_asset_tags:
+                return asset_tag
+
+        return None
+
     def update_device(self):
 
         system = grab(self.inventory_file_content, "inventory.system.0")
@@ -350,6 +373,19 @@ class CheckRedfish(SourceBase):
 
         if serial is not None:
             device_data["serial"] = serial
+
+        if self.settings.collect_hardware_asset_tag is True:
+            asset_tag = self.get_asset_tag()
+            if asset_tag is not None:
+                # compare what NBDevice.update() will send, it cuts the value to the length NetBox allows
+                asset_tag = asset_tag[:self.device_object.data_model["asset_tag"]]
+                # NetBox rejects an asset tag which another device already has, and with it the whole update
+                other_device = self.inventory.get_by_data(NBDevice, data={"asset_tag": asset_tag})
+                if other_device is not None and other_device is not self.device_object:
+                    log.warning(f"Asset tag '{asset_tag}' of '{self.device_object.get_display_name()}' is already "
+                                f"used by device '{other_device.get_display_name()}'. Not setting the asset tag.")
+                else:
+                    device_data["asset_tag"] = asset_tag
 
         self.device_object.update(data=device_data, source=self)
 
