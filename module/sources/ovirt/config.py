@@ -247,27 +247,7 @@ class OVirtConfig(ConfigBase):
             ConfigOption("set_vm_name_to_uuid",
                          bool,
                          description="Set the name in Netbox to the VM UUID instead of name",
-                         default_value=False),
-
-            # removed settings
-            ConfigOption("netbox_host_device_role",
-                         str,
-                         deprecation_message="You need to switch to 'host_role_relation'.",
-                         removed=True),
-            ConfigOption("netbox_vm_device_role",
-                         str,
-                         deprecation_message="You need to switch to 'vm_role_relation'.",
-                         removed=True),
-            ConfigOption("sync_tags",
-                         bool,
-                         deprecation_message="You need to switch to 'host_tag_relation', " +
-                                             "'vm_tag_relation' or 'cluster_tag_relation'",
-                         removed=True),
-            ConfigOption("sync_parent_tags",
-                         bool,
-                         deprecation_message="You need to switch to 'host_tag_relation', " +
-                                             "'vm_tag_relation' or 'cluster_tag_relation'",
-                         removed=True)
+                         default_value=False)
         ]
 
         super().__init__()

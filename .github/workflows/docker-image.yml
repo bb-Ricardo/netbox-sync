@@ -14,6 +14,7 @@ on:
       - netbox-sync.py
       - requirements.txt
       - requirements-aws.txt
+      - requirements-ovirt.txt
   workflow_dispatch:
 
 jobs:
