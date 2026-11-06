@@ -230,6 +230,8 @@ def check_redfish_source(inventory):
         source.name = "test"
         source.source_tag = "Source: test"
         source.settings = check_redfish_settings(**overrides)
+        # the per inventory file state __init__ would have set up
+        source.reset_inventory_state()
 
         source.add_necessary_base_objects()
         # the primary tag is normally registered by the NetBox handler, not by the source

@@ -420,7 +420,9 @@ class SourceBase:
         vmware_object: vim.HostSystem | vim.VirtualMachine
             object to add to list of objects to reevaluate
         keep_undiscovered_ips: bool
-            if True, keep the existing IPs of an interface the source discovered no IPs for
+            if True the source reported no addresses at all for this interface, so its
+            existing IPs are kept. The caller decides this before filtering its own
+            discovery, because an address it dropped is still one it saw
 
         Returns
         -------
@@ -791,8 +793,8 @@ class SourceBase:
 
             ip_address_objects.append(this_ip_object)
 
-        # keyed on what the source reported, not on what survived parsing: an unusable address
-        # is still a statement that the interface was seen
+        # the caller states whether it discovered anything; interface_ips is only its
+        # surviving subset, so it cannot answer that on its own
         skip_ip_removal = keep_undiscovered_ips is True and len(interface_ips or list()) == 0
 
         # guest tools which report as running but hand back no interface at all are broken
