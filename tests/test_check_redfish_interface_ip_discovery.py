@@ -19,7 +19,7 @@ REPORTED = "198.51.100.7/24"
 REPORTED_SUBNET = "198.51.100.0/24"
 
 
-def nic_inventory(ipv4_addresses):
+def nic_inventory(ipv4_addresses, ipv6_addresses=()):
     """One adapter with one port, reporting the given addresses."""
 
     return {"inventory": {
@@ -31,7 +31,7 @@ def nic_inventory(ipv4_addresses):
             {"id": "NIC.Integrated.1-1", "name": "Integrated NIC 1 Port 1",
              "adapter_id": "NIC.Integrated.1", "addresses": [MAC], "link_status": "Up",
              "health_status": "OK", "operation_status": "Enabled", "manager_ids": [],
-             "ipv4_addresses": ipv4_addresses, "ipv6_addresses": [],
+             "ipv4_addresses": ipv4_addresses, "ipv6_addresses": list(ipv6_addresses),
              "link_speed": 10000, "hostname": None, "port_id": "1"}],
     }}
 
@@ -50,13 +50,13 @@ def seed_interface_with_stale_ip(context, name="NIC.Integrated.1-1"):
     return interface, ip
 
 
-def run(context, ipv4_addresses, permitted):
+def run(context, ipv4_addresses, permitted, ipv6_addresses=()):
     subnets = PermittedSubnets(permitted)
     # a subnet string that fails to parse would silently permit everything and let these
     # tests pass for the wrong reason
     assert subnets.validation_failed is False
     context.source.settings.permitted_subnets = subnets
-    context.source.inventory_file_content = nic_inventory(ipv4_addresses)
+    context.source.inventory_file_content = nic_inventory(ipv4_addresses, ipv6_addresses)
     context.source.update_network_adapter()
     context.source.update_network_interface()
 
@@ -142,5 +142,36 @@ def test_stale_ip_is_removed_when_an_excluded_address_is_reported_with_junk(chec
     _, stale = seed_interface_with_stale_ip(context)
 
     run(context, [None, REPORTED], permitted=f"!{REPORTED_SUBNET}, 0.0.0.0/0")
+
+    assert "assigned_object_id" in stale.unset_items
+
+
+@pytest.mark.parametrize("ipv4, ipv6", [
+    ([], ["fe80::a8bb:ccff:fedd:ee01/64"]),
+    (["169.254.10.10/16"], []),
+    (["127.0.0.1/8"], ["::1/128"]),
+])
+@pytest.mark.parametrize("permitted", ["0.0.0.0/0, ::/0", "10.0.0.0/8, fd00::/8"])
+def test_stale_ip_is_kept_when_only_link_local_or_loopback_is_reported(check_redfish_source,
+                                                                       ipv4, ipv6, permitted):
+    """permitted_subnets drops link-local and loopback whatever it is set to, so a port that
+    reports only those (e.g. a bridge member with its fe80 address) was not seen either."""
+
+    context = check_redfish_source()
+    _, stale = seed_interface_with_stale_ip(context)
+
+    run(context, ipv4, permitted=permitted, ipv6_addresses=ipv6)
+
+    assert "assigned_object_id" not in stale.unset_items
+
+
+def test_stale_ip_is_removed_when_an_excluded_address_is_reported_with_link_local(check_redfish_source):
+    """A link-local address next to an excluded one does not hide the excluded one."""
+
+    context = check_redfish_source()
+    _, stale = seed_interface_with_stale_ip(context)
+
+    run(context, [REPORTED], permitted=f"!{REPORTED_SUBNET}, 0.0.0.0/0, ::/0",
+        ipv6_addresses=["fe80::a8bb:ccff:fedd:ee01/64"])
 
     assert "assigned_object_id" in stale.unset_items

@@ -31,14 +31,15 @@ MODULE_BAY_NAME_HASH_LENGTH = 8
 log = get_logger()
 
 
-
-def is_ip_address(value) -> bool:
-    """True if value parses as an IP address, with or without a prefix length."""
+def is_syncable_ip_address(value) -> bool:
+    """True if value parses as an IP address, with or without a prefix length, and is not
+    link-local or loopback: PermittedSubnets drops those whatever permitted_subnets says."""
     try:
-        ip_interface(value)
+        address = ip_interface(value).ip
     except ValueError:
         return False
-    return True
+    return not (address.is_link_local or address.is_loopback)
+
 
 class CheckRedfish(SourceBase):
     """
@@ -998,7 +999,7 @@ class CheckRedfish(SourceBase):
             nic_ips_reported[port_name] = len([
                 address for address in [*grab(nic_port, "ipv4_addresses", fallback=list()),
                                         *grab(nic_port, "ipv6_addresses", fallback=list())]
-                if is_ip_address(address)])
+                if is_syncable_ip_address(address)])
 
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
                 if self.settings.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:
