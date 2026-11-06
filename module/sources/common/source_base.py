@@ -1046,7 +1046,9 @@ class SourceBase:
         This function will try to find a matching VLAN object based on 'vlan_data'
         Will return matching objects in following order:
             * exact match: VLAN ID and site or VLAN Group which matches site or cluster
-            * global match: VLAN ID matches but the VLAN has no site assigned
+            * global group match: VLAN ID matches and the VLAN is in a VLAN group without a scope
+              which 'vlan_global_groups' names, the group listed first wins
+            * global match: VLAN ID matches but the VLAN has neither site nor group assigned
         If nothing matches the input data from 'vlan_data' will be returned
 
         Parameters
@@ -1091,7 +1093,16 @@ class SourceBase:
         return_data = vlan_data
         vlan_object_by_site = None
         vlan_object_by_group = None
+        vlan_object_global_group = None
+        vlan_object_global_group_rank = None
         vlan_object_global = None
+
+        # VLAN groups without a scope that the settings name as global (vlan_global_groups): their
+        # VLANs are matched like VLANs with neither site nor group, and before those. The position
+        # in the list ranks the groups, so for a VLAN ID in several of them the first one wins
+        global_groups = dict()
+        for rank, name in enumerate(getattr(self.settings, "vlan_global_groups", None) or []):
+            global_groups.setdefault(str(name).lower(), rank)
 
         for vlan in self.inventory.get_all_items(NBVLAN):
 
@@ -1110,6 +1121,14 @@ class SourceBase:
                         vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
                     vlan_object_by_group = vlan
                     break
+                # a scope whose object is not in the inventory resolves to None as well
+                if isinstance(vlan_group, NetBoxObject) and grab(vlan, "data.site") is None and \
+                        not grab(vlan_group, "data.scope_type") and grab(vlan_group, "data.scope_id") is None:
+                    rank = global_groups.get(str(grab(vlan_group, "data.name")).lower())
+                    if rank is not None and \
+                            (vlan_object_global_group_rank is None or rank < vlan_object_global_group_rank):
+                        vlan_object_global_group = vlan
+                        vlan_object_global_group_rank = rank
 
             if grab(vlan, "data.site") is None and grab(vlan, "data.group") is None:
                 vlan_object_global = vlan
@@ -1130,6 +1149,11 @@ class SourceBase:
             log.debug2(f"Found a {return_data.name} object which matches the {vlan_group_object.name} "
                        f"'{vlan_group_object.get_display_name()}'{scope_details}: %s" %
                        vlan_object_by_group.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_global_group, NetBoxObject):
+            return_data = vlan_object_global_group
+            log.debug2(f"Found a matching {return_data.name} object in a global VLAN group: %s" %
+                       vlan_object_global_group.get_display_name(including_second_key=True))
 
         elif isinstance(vlan_object_global, NetBoxObject):
             return_data = vlan_object_global
