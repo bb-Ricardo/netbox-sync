@@ -862,7 +862,8 @@ class NetBoxObject:
                 [enforce_secondary_key, including_second_key, include_secondary_key_if_present]:
 
             secondary_key_value = this_data_set.get(secondary_key)
-            org_secondary_key_value = str(secondary_key_value)
+            # only for the warning below, str() of an object would dump all of its data to JSON
+            org_secondary_key_value = secondary_key_value
             read_from_netbox = False
 
             if isinstance(secondary_key_value, NetBoxObject):
@@ -875,7 +876,7 @@ class NetBoxObject:
 
             if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False:
                 log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
-                            f"got: {org_secondary_key_value}")
+                            f"got: {org_secondary_key_value!r}")
                 log.warning("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
             my_name = f"{my_name} ({secondary_key_value})"
