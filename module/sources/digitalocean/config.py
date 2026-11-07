@@ -49,6 +49,14 @@ class DigitalOceanConfig(ConfigBase):
                             "DigitalOcean region name and slug."
             ),
             ConfigOption(
+                "private_ip_vrf",
+                str,
+                config_example="DigitalOcean Netops-Team",
+                description="Optional NetBox VRF name for private network addresses. Reuses or creates the VRF. "
+                            "Public addresses remain global. Unset keeps all addresses global; existing "
+                            "global IP records are not migrated."
+            ),
+            ConfigOption(
                 "sync_volumes",
                 bool,
                 default_value=True,
@@ -65,6 +73,14 @@ class DigitalOceanConfig(ConfigBase):
         super().__init__()
 
     def validate_options(self):
+        vrf_option = self.get_option_by_name("private_ip_vrf")
+        if vrf_option.value is not None:
+            name = vrf_option.value
+            if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
+                log.error("Config option 'private_ip_vrf' must be a non-empty VRF name of at most 100 characters.")
+                self.set_validation_failed()
+            else:
+                vrf_option.set_value(name.strip())
         option = self.get_option_by_name("region_mapping")
         mapping = {}
         if option.value is not None:
