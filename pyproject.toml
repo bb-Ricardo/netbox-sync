@@ -33,6 +33,9 @@ dependencies = [
 aws = [
     "boto3>=1.40,<2",
 ]
+ovirt = [
+    "ovirt-engine-sdk-python==4.6.3",
+]
 test = [
     "pytest>=9.1.1",
 ]

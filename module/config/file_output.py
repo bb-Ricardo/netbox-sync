@@ -17,6 +17,7 @@ from module.netbox.config import NetBoxConfig
 from module.sources.vmware.config import VMWareConfig
 from module.sources.check_redfish.config import CheckRedfishConfig
 from module.sources.hetzner.config import HetznerConfig
+from module.sources.ovirt.config import OVirtConfig
 from module.sources.aws.config import AWSConfig
 from module.sources.digitalocean.config import DigitalOceanConfig
 from module.common.logging import get_logger
@@ -39,7 +40,8 @@ class ConfigFileOutput(DescriptionFormatterMixin):
         CheckRedfishConfig,
         HetznerConfig,
         AWSConfig,
-        DigitalOceanConfig
+        DigitalOceanConfig,
+        OVirtConfig
     ]
 
     header = f"Welcome to the {__description__} configuration file."

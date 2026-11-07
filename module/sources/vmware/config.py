@@ -544,7 +544,17 @@ class VMWareConfig(ConfigBase):
                                                Fist match wins.  Only newly discovered VLANs which are not present in
                                                NetBox will be assigned a VLAN group.
                                                """,
-                                               config_example="1023-1042 = VLAN Group 1, Tokio/2342 = VLAN Group 2")
+                                               config_example="1023-1042 = VLAN Group 1, Tokio/2342 = VLAN Group 2"),
+                                  ConfigOption("vlan_global_groups",
+                                               str,
+                                               description="""a comma separated list of VLAN groups without a scope whose
+                                               VLANs are valid everywhere, e.g. a group another tool fills from an IPAM.
+                                               A discovered VLAN then reuses the VLAN with the same ID from one of these
+                                               groups instead of creating its own. Matching order: a VLAN of the site, a
+                                               VLAN in a group scoped to the site or cluster, a VLAN in one of these
+                                               groups (the group listed first wins), a VLAN with neither site nor group.
+                                               """,
+                                               config_example="IPAM VLANs, Campus")
                               ]),
 
             ConfigOption("track_vm_host",
@@ -897,7 +907,7 @@ class VMWareConfig(ConfigBase):
 
                 option.set_value(value_list)
 
-            if option.key == "custom_attribute_exclude":
+            if option.key in ["custom_attribute_exclude", "vlan_global_groups"]:
 
                 option.set_value(quoted_split(option.value))
 
