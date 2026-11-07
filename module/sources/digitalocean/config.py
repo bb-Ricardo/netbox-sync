@@ -51,7 +51,7 @@ class DigitalOceanConfig(ConfigBase):
             ConfigOption(
                 "private_ip_vrf",
                 str,
-                config_example="DigitalOcean Netops-Team",
+                config_example="DigitalOcean Team-A",
                 description="Optional NetBox VRF name for private network addresses. Reuses or creates the VRF. "
                             "Public addresses remain global. Unset keeps all addresses global; existing "
                             "global IP records are not migrated."

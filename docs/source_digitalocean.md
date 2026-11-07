@@ -27,7 +27,7 @@ region_mapping = fra1=Germany, nyc1=United States
 sync_volumes = True
 sync_databases = True
 ; Optional isolation for overlapping private addresses across teams:
-;private_ip_vrf = DigitalOcean Netops-Team
+;private_ip_vrf = DigitalOcean Team-A
 ```
 
 `api_token` is required. `sync_volumes` and `sync_databases` default to `True`.
@@ -84,15 +84,15 @@ and are not pruned.
 Use distinct names for isolated teams, for example:
 
 ```ini
-[source/Netops-Team]
+[source/team-a]
 type = digitalocean
-api_token = REPLACE_WITH_NETOPS_READ_ONLY_TOKEN
-private_ip_vrf = DigitalOcean Netops-Team
+api_token = REPLACE_WITH_TEAM_A_READ_ONLY_TOKEN
+private_ip_vrf = DigitalOcean Team-A
 
-[source/Sangoma-Team]
+[source/team-b]
 type = digitalocean
-api_token = REPLACE_WITH_SANGOMA_READ_ONLY_TOKEN
-private_ip_vrf = DigitalOcean Sangoma-Team
+api_token = REPLACE_WITH_TEAM_B_READ_ONLY_TOKEN
+private_ip_vrf = DigitalOcean Team-B
 ```
 
 Both teams can then have `10.108.0.6` in the same region without sharing an
