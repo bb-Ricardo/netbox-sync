@@ -35,7 +35,21 @@ class DigitalOceanClient:
                 params=params,
                 timeout=self.timeout,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                detail = str(exc)
+                try:
+                    error_payload = response.json()
+                except requests.exceptions.JSONDecodeError:
+                    detail = f"{detail} (error response is not JSON)"
+                else:
+                    if isinstance(error_payload, dict):
+                        detail = error_payload.get("message") or detail
+                raise requests.HTTPError(
+                    f"DigitalOcean API '{path}' returned HTTP {response.status_code}: {detail}",
+                    response=response,
+                ) from exc
             payload = response.json()
             if not isinstance(payload, dict):
                 raise ValueError(f"DigitalOcean response for '{path}' is not a JSON object.")
