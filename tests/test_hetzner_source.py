@@ -50,6 +50,8 @@ def hetzner_api(monkeypatch):
 
     def request(session, method, url, headers=None, **kwargs):
         project = projects.get(headers["Authorization"].removeprefix("Bearer "))
+        if isinstance(project, Exception):
+            raise project
         if project is None:
             status, body = 401, {"error": {"code": "unauthorized", "message": "unable to authenticate"}}
         else:
@@ -83,3 +85,35 @@ def test_volume_size_follows_netbox_disk_unit(hetzner_api, hetzner_sources, inve
         sizes[api_version] = [disk.data["size"] for disk in inventory.get_all_items(NBVirtualDisk)]
 
     assert sizes == {"3.7.0": [10], "4.0.11": [10], "4.1.0": [10240], "4.3.0": [10240]}
+
+
+@pytest.mark.parametrize("failure", ["unauthorized", "unreachable"])
+def test_unusable_api_skips_source_and_keeps_the_others(hetzner_api, hetzner_sources, inventory, caplog, failure):
+    hetzner_api[TOKEN] = hetzner_project()
+    if failure == "unreachable":
+        hetzner_api["other-token"] = requests.ConnectionError("Failed to resolve 'api.hetzner.cloud'")
+
+    sources = hetzner_sources(("good", TOKEN), ("broken", "other-token"))
+
+    assert [source.name for source in sources] == ["good"]
+    # an enabled source which failed to initialize makes netbox-sync disable pruning
+    broken, = [source for source in inventory.source_list if source.name == "broken"]
+    assert broken.settings.enabled is True and broken.init_successful is False
+    reason = {"unauthorized": "unable to authenticate (unauthorized)",
+              "unreachable": "Failed to resolve 'api.hetzner.cloud'"}[failure]
+    assert any(record.levelname == "ERROR" and "'broken'" in record.getMessage() and reason in record.getMessage()
+               for record in caplog.records)
+
+
+def test_api_error_during_apply_exits_cleanly(hetzner_api, hetzner_sources, caplog):
+    project = hetzner_project()
+    project["/volumes/7"] = (503, {"error": {"code": "unavailable", "message": "service unavailable"}})
+    hetzner_api[TOKEN] = project
+    source, = hetzner_sources(("test", TOKEN))
+
+    with pytest.raises(SystemExit) as exit_info:
+        source.apply()
+
+    assert exit_info.value.code == 1
+    assert ("Hetzner source 'test': service unavailable (unavailable). "
+            "No NetBox writes or pruning will be performed.") in caplog.text
