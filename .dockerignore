@@ -6,4 +6,5 @@
 !netbox-sync.py
 !requirements.txt
 !requirements-aws.txt
+!requirements-ovirt.txt
 !settings-example.ini
