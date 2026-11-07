@@ -7,6 +7,8 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
+from packaging import version
+
 from module.netbox.inventory import NBVirtualDisk
 
 
@@ -23,12 +25,16 @@ def sync_vm_disks(handler, vm, server):
     for volume in server.volumes:
 
         disk_name = f"{server.name}-{volume.name}"[:60]
-        size_mb = int(volume.size) * 1024  # Hetzner size = GB
+
+        # Hetzner reports volume sizes in GB, NetBox stores virtual disk sizes in GB before 4.1.0 and in MB since
+        disk_size = int(volume.size)
+        if version.parse(inventory.netbox_api_version) >= version.parse("4.1.0"):
+            disk_size *= 1024
 
         disk_data = {
             "name": disk_name,
             "virtual_machine": vm,   # object, не id
-            "size": size_mb,
+            "size": disk_size,
         }
 
         existing_disk = None
