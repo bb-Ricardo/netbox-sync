@@ -57,6 +57,10 @@ class DigitalOceanHandler(SourceBase):
 
         self.init_successful = True
 
+    def _abort(self, message):
+        log.error(message)
+        do_error_exit(message)
+
     def apply(self):
         self._ip_claims = {}
         client = DigitalOceanClient(self.settings.api_token)
@@ -69,11 +73,14 @@ class DigitalOceanHandler(SourceBase):
             volumes = client.get_collection("volumes", "volumes") if self.settings.sync_volumes else []
             databases = client.get_collection("databases", "databases") if self.settings.sync_databases else []
         except (requests.RequestException, ValueError) as exc:
-            do_error_exit(f"DigitalOcean discovery failed for source '{self.name}': {exc}")
+            self._abort(f"DigitalOcean discovery failed for source '{self.name}': {exc}")
         finally:
             client.close()
 
         self._regions_by_slug = {region["slug"]: region for region in regions}
+        self._current_resource_ids = {
+            str(resource["id"]) for resource in (*droplets, *databases) if resource.get("id") is not None
+        }
         self.log.info(
             f"Connected to DigitalOcean, found {len(droplets)} droplets, "
             f"{len(volumes)} volumes and {len(databases)} database clusters"
@@ -280,19 +287,33 @@ class DigitalOceanHandler(SourceBase):
                     f"orphaned={NetBoxHandler.orphaned_tag in vm.get_tags()})"
                     for vm in candidates
                 )
-                do_error_exit(
+                self._abort(
                     f"Multiple DigitalOcean VMs match resource ID '{identity}' for source '{self.name}': "
                     f"{details}. Resolve the duplicate records in NetBox before retrying."
                 )
         vm = candidates[0] if candidates else self.inventory.get_by_data(NBVM, data=data)
         if not candidates and vm is not None:
             existing_id = (vm.data.get("custom_fields") or {}).get("digitalocean_resource_id")
-            if existing_id is not None and existing_id != identity:
+            if existing_id is not None and existing_id != identity and existing_id in self._current_resource_ids:
                 vm = None
+        data["name"] = self._unused_vm_name(data["name"], cluster, vm, identity)
         if vm is None:
             return self.inventory.add_object(NBVM, data=data, source=self)
         vm.update(data=data, source=self)
         return vm
+
+    def _unused_vm_name(self, name, cluster, vm, identity):
+        """Add the resource ID if another VM in the cluster still uses the name, e.g. one of a deleted resource."""
+        if identity is None:
+            return name
+        suffix = f" ({identity})"
+        if name.endswith(suffix):
+            return name
+        for other in self.inventory.get_all_items(NBVM):
+            if other is not vm and other.data.get("cluster") is cluster and \
+                    str(other.data.get("name", "")).casefold() == name.casefold():
+                return name[:64 - len(suffix)] + suffix
+        return name
 
     @staticmethod
     def _droplet_platform(image):
@@ -366,7 +387,7 @@ class DigitalOceanHandler(SourceBase):
             return None
         candidates = [vrf for vrf in self.inventory.get_all_items(NBVRF) if vrf.data.get("name") == name]
         if len(candidates) > 1:
-            do_error_exit(f"Multiple NetBox VRFs match private_ip_vrf '{name}' for source '{self.name}'.")
+            self._abort(f"Multiple NetBox VRFs match private_ip_vrf '{name}' for source '{self.name}'.")
         if candidates:
             vrf = candidates[0]
             if self.source_tag in vrf.get_tags():
@@ -395,11 +416,19 @@ class DigitalOceanHandler(SourceBase):
             if ip_interface(item.data["address"]).ip == ip_obj.ip and item.data.get("vrf") is vrf
         ]
         if len(candidates) > 1:
-            vrf_name = vrf.get_display_name() if vrf is not None else "global"
-            do_error_exit(
-                f"Multiple NetBox IPs match '{ip_obj.ip}' in VRF '{vrf_name}' for source '{self.name}': "
-                f"{[item.nb_id for item in candidates]}. Resolve the duplicate records before retrying."
-            )
+            assigned = [item for item in candidates if item.data.get("assigned_object_id") is interface]
+            if len(assigned) != 1:
+                vrf_name = vrf.get_display_name() if vrf is not None else "global"
+                hint = ""
+                if vrf is None and ip_obj.ip.is_private:
+                    hint = " Set 'private_ip_vrf' to keep DigitalOcean private addresses apart."
+                log.error(
+                    f"Multiple NetBox IPs match '{ip_obj.ip}' in VRF '{vrf_name}' for source '{self.name}': "
+                    f"{[item.nb_id for item in candidates]}. Skipping assignment to "
+                    f"'{interface.get_display_name()}'; resolve the duplicate records.{hint}"
+                )
+                return None
+            candidates = assigned
         existing = candidates[0] if candidates else None
         if existing is not None:
             assigned_object = existing.data.get("assigned_object_id")

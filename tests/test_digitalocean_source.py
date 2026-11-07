@@ -385,7 +385,7 @@ def test_same_named_droplets_in_different_clusters_keep_their_children(digitaloc
     droplets = [
         {
             "id": index,
-            "name": "prod-netops-FE-2",
+            "name": "prod-web-FE-2",
             "status": status,
             "region": {"slug": slug, "name": region_name},
             "disk": 25,
@@ -805,6 +805,50 @@ def test_resource_id_matches_before_name_and_cluster(digitalocean, resource_type
     assert vm.get_virtual_disks() == children
 
 
+@pytest.mark.parametrize("resource_type", ["droplet", "database"])
+def test_recreated_resource_reuses_vm_of_deleted_one(digitalocean, resource_type):
+    inventory, client = digitalocean
+    payload = {path: client.get_collection(path, path) for path in ("droplets", "volumes", "databases", "regions")}
+    client.get_collection.side_effect = lambda path, key: payload[path]
+    source = DigitalOceanHandler("cloud")
+    source.apply()
+    vms = inventory.get_all_items(NBVM)
+    vm = next(vm for vm in vms if vm.data["custom_fields"]["digitalocean_resource_type"] == resource_type)
+    name = vm.data["name"]
+    persist_inventory(inventory)
+    collection = "droplets" if resource_type == "droplet" else "databases"
+    payload[collection][0]["id"] = 789 if resource_type == "droplet" else "new-database-uuid"
+    source.apply()
+    assert inventory.get_all_items(NBVM) == vms
+    assert vm.data["name"] == name
+    assert vm.data["custom_fields"]["digitalocean_resource_id"] == str(payload[collection][0]["id"])
+    assert vm.data["serial"] == str(payload[collection][0]["id"])
+
+
+def test_rename_to_name_of_deleted_resource_keeps_names_unique(digitalocean):
+    inventory, client = digitalocean
+    payload = {path: client.get_collection(path, path) for path in ("droplets", "volumes", "databases", "regions")}
+    second = deepcopy(payload["droplets"][0])
+    second.update(id=456, name="web-2", volume_ids=[], networks={})
+    payload["droplets"].append(second)
+    client.get_collection.side_effect = lambda path, key: payload[path]
+    source = DigitalOceanHandler("cloud")
+    source.apply()
+    first_vm, second_vm = (next(vm for vm in inventory.get_all_items(NBVM) if vm.data["name"] == name)
+                           for name in ("web-1", "web-2"))
+    persist_inventory(inventory)
+    payload["droplets"] = [payload["droplets"][0]]
+    payload["droplets"][0]["name"] = "web-2"
+    for _ in range(2):
+        source.apply()
+        assert first_vm.data["name"] == "web-2 (123)"
+        assert second_vm.data["name"] == "web-2"
+        persist_inventory(inventory)
+    inventory.base_structure[NBVM.name].remove(second_vm)
+    source.apply()
+    assert first_vm.data["name"] == "web-2"
+
+
 def test_vm_without_resource_id_is_adopted_by_name_and_cluster(digitalocean):
     inventory, _ = digitalocean
     source = DigitalOceanHandler("cloud")
@@ -837,7 +881,7 @@ def test_orphaned_duplicate_resource_id_does_not_block_current_vm(digitalocean, 
     source.apply()
     current = inventory.get_all_items(NBVM)[0]
     stale = inventory.add_object(NBVM, data={
-        **current.data, "id": 9001, "name": "prod-nfstatus2-server",
+        **current.data, "id": 9001, "name": "prod-status-server",
         "primary_ip4": None, "primary_ip6": None,
     }, read_from_netbox=True)
     stale.add_tags(NetBoxHandler.orphaned_tag)
@@ -854,7 +898,7 @@ def test_orphaned_duplicate_resource_id_does_not_block_current_vm(digitalocean, 
     assert stale.data["custom_fields"] == stale_data
     assert NetBoxHandler.orphaned_tag in stale.get_tags()
     assert "9001" in caplog.text
-    assert "prod-nfstatus2-server" in caplog.text
+    assert "prod-status-server" in caplog.text
     assert current.data["primary_ip4"].data["assigned_object_id"].data["virtual_machine"] is current
 
 
@@ -904,7 +948,8 @@ def test_managed_region_keeps_source_tag_on_next_run(digitalocean):
 
 
 @pytest.mark.parametrize("status, message", [(401, "Unable to authenticate you"), (429, "API rate limit exceeded")])
-def test_api_http_error_exits_cleanly_with_provider_message(digitalocean, status, message, capsys, monkeypatch):
+def test_api_http_error_exits_cleanly_with_provider_message(digitalocean, status, message, capsys, caplog,
+                                                             monkeypatch):
     inventory, _ = digitalocean
     response = requests.Response()
     response.status_code = status
@@ -920,6 +965,7 @@ def test_api_http_error_exits_cleanly_with_provider_message(digitalocean, status
     error = capsys.readouterr().err
     assert message in error
     assert str(status) in error
+    assert message in caplog.text
     session.close.assert_called_once()
     assert not inventory.get_all_items(NBCluster)
     assert not inventory.get_all_items(NBVM)
@@ -964,8 +1010,8 @@ def test_overlapping_team_private_ips_are_isolated_without_migrating_global_ip(d
     second = DigitalOceanHandler("cloud")
     second.name = "other-team"
     second.set_source_tag()
-    first.settings.private_ip_vrf = "DigitalOcean Netops-Team"
-    second.settings.private_ip_vrf = "DigitalOcean Sangoma-Team"
+    first.settings.private_ip_vrf = "DigitalOcean Team-A"
+    second.settings.private_ip_vrf = "DigitalOcean Team-B"
     existing_vrf = inventory.add_object(
         NBVRF, data={"name": first.settings.private_ip_vrf}, read_from_netbox=True,
     )
@@ -977,7 +1023,7 @@ def test_overlapping_team_private_ips_are_isolated_without_migrating_global_ip(d
         "address": "10.108.0.6/20", "assigned_object_type": NBVMInterface.object_type,
         "assigned_object_id": old_interface,
     }, read_from_netbox=True)
-    vms = [inventory.add_object(NBVM, data={"name": name}) for name in ("NetOps-Monitoring", "my-sangoma-portal1")]
+    vms = [inventory.add_object(NBVM, data={"name": name}) for name in ("team-a-monitoring", "team-b-portal1")]
     droplet = {"networks": {
         "v4": [{"ip_address": "10.108.0.6", "cidr": 20, "type": "private"}],
         "v6": [{"ip_address": "2001:db8::6", "cidr": 64, "type": "private"}],
@@ -1035,16 +1081,49 @@ def test_ip_prefix_change_matches_same_address_and_vrf(digitalocean):
     assert len(inventory.get_all_items(NBIPAddress)) == 1
 
 
-def test_duplicate_ip_in_one_vrf_exits_cleanly(digitalocean, capsys):
+def test_duplicate_ip_in_one_vrf_is_skipped(digitalocean, caplog):
     inventory, _ = digitalocean
     source = DigitalOceanHandler("cloud")
+    source._ip_claims = {}
     vm = inventory.add_object(NBVM, data={"name": "test"})
     interface = inventory.add_object(NBVMInterface, data={"name": "private", "virtual_machine": vm})
-    for index in (1, 2):
+    duplicates = [
         inventory.add_object(NBIPAddress, data={"id": index, "address": "10.108.0.6/20"}, read_from_netbox=True)
-    with pytest.raises(SystemExit):
-        source._sync_ip(ip_interface("10.108.0.6/20"), interface)
-    assert "Multiple NetBox IPs" in capsys.readouterr().err
+        for index in (1, 2)
+    ]
+    assert source._sync_ip(ip_interface("10.108.0.6/20"), interface) is None
+    assert "Multiple NetBox IPs match '10.108.0.6'" in caplog.text
+    assert "private_ip_vrf" in caplog.text
+    assert len(inventory.get_all_items(NBIPAddress)) == 2
+    assert all(ip.data.get("assigned_object_id") is None for ip in duplicates)
+
+
+def test_duplicate_ip_uses_the_one_on_the_interface(digitalocean, caplog):
+    inventory, _ = digitalocean
+    source = DigitalOceanHandler("cloud")
+    source._ip_claims = {}
+    vm = inventory.add_object(NBVM, data={"name": "test"})
+    interface = inventory.add_object(NBVMInterface, data={"name": "public", "virtual_machine": vm})
+    inventory.add_object(NBIPAddress, data={"id": 1, "address": "198.51.100.7/32", "role": "anycast"},
+                         read_from_netbox=True)
+    own = inventory.add_object(NBIPAddress, data={
+        "id": 2, "address": "198.51.100.7/24", "assigned_object_type": "virtualization.vminterface",
+        "assigned_object_id": interface,
+    }, read_from_netbox=True)
+    assert source._sync_ip(ip_interface("198.51.100.7/24"), interface) is own
+    assert "Multiple NetBox IPs" not in caplog.text
+    assert len(inventory.get_all_items(NBIPAddress)) == 2
+
+
+def test_duplicate_global_ip_does_not_stop_the_run(digitalocean, caplog):
+    inventory, _ = digitalocean
+    for index in (1, 2):
+        inventory.add_object(NBIPAddress, data={"id": index, "address": "10.10.0.5/24"}, read_from_netbox=True)
+    DigitalOceanHandler("cloud").apply()
+    assert "Multiple NetBox IPs match '10.10.0.5'" in caplog.text
+    vm = next(vm for vm in inventory.get_all_items(NBVM) if vm.data["name"] == "web-1")
+    assert vm.data["primary_ip4"].data["address"] == "203.0.113.10/24"
+    assert len(vm.get_virtual_disks()) == 2
 
 
 def test_ip_claims_are_scoped_by_vrf_including_global(digitalocean, caplog):
