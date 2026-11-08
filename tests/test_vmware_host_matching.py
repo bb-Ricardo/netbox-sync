@@ -8,11 +8,12 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 """
-ESXi hosts are matched by serial number and asset tag before MAC addresses.
+ESXi hosts are matched by MAC address before serial number and asset tag.
 
 With MAC address pooling (e.g. Cisco UCS) the same MAC can be used by blades in
-different sites, so matching by MAC first could attach a host to a device in the
-wrong site. 'disable_host_mac_matching' turns the MAC fallback off for hosts.
+different sites, so matching by MAC could attach a host to a device in the wrong
+site. 'disable_host_mac_matching' turns MAC matching off for hosts, they are then
+matched by serial number and asset tag.
 """
 from types import SimpleNamespace
 
@@ -91,13 +92,26 @@ def _setup_pooled_macs(inventory):
     return blade_a, blade_b
 
 
-def test_serial_wins_over_pooled_mac(inventory):
+def test_serial_wins_over_pooled_mac_with_mac_matching_disabled(inventory):
     # a renamed blade in site2 shares a pooled MAC with a blade in site1, the serial must win
     blade_a, blade_b = _setup_pooled_macs(inventory)
 
-    matched = _match_host(_make_source(inventory), "esxi-b-new", "site2", serial="SN-B", mac=POOLED_MAC)
+    matched = _match_host(_make_source(inventory, disable_host_mac_matching=True), "esxi-b-new", "site2",
+                          serial="SN-B", mac=POOLED_MAC)
 
     assert matched is blade_b
+    assert blade_a.data.get("name") == "esxi-a"
+
+
+def test_mac_beats_placeholder_serial_by_default(inventory):
+    # blades whose BIOS reports a placeholder serial all share it, so by default the MAC decides
+    placeholder = "To be filled by O.E.M."
+    blade_a = _existing_host(inventory, "esxi-a", "site1", serial=placeholder, mac="00:25:B5:00:00:AA")
+    blade_b = _existing_host(inventory, "esxi-b", "site1", serial=placeholder, mac="00:25:B5:00:00:BB")
+
+    _match_host(_make_source(inventory), "esxi-b-renamed", "site1", serial=placeholder, mac="00:25:B5:00:00:BB")
+
+    assert blade_b.data.get("name") == "esxi-b-renamed"
     assert blade_a.data.get("name") == "esxi-a"
 
 
