@@ -7,7 +7,11 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
+from hcloud import HCloudException
+from requests.exceptions import RequestException
+
 from module.common.logging import get_logger
+from module.common.misc import do_error_exit
 from module.sources.common.source_base import SourceBase
 from module.sources.hetzner.client import HetznerClient
 from module.sources.hetzner.config import HetznerConfig
@@ -66,6 +70,15 @@ class HetznerHandler(SourceBase):
             log.info(f"Source '{name}' is currently disabled. Skipping")
             return
 
+        self.client = HetznerClient(token=self.settings.api_token)
+
+        try:
+            self.client.check_connection()
+        except (HCloudException, RequestException) as e:
+            log.error(f"Unable to connect to the Hetzner Cloud API for source '{name}': {e}")
+            log.info(f"Source '{name}' is currently unavailable. Skipping")
+            return
+
         self.init_successful = True
 
     @classmethod
@@ -74,13 +87,16 @@ class HetznerHandler(SourceBase):
 
     def apply(self):
 
-        token = self.settings.api_token
+        try:
+            self.sync_servers()
+        except (HCloudException, RequestException) as e:
+            # pruning is already decided and part of this source may be in the inventory,
+            # so stop the whole run instead of writing a partial sync to NetBox
+            message = f"Hetzner source '{self.name}': {e}. No NetBox writes or pruning will be performed."
+            log.error(message)
+            do_error_exit(message)
 
-        if not token:
-            self.log.error("Hetzner api_token not defined in settings.ini")
-            return
-
-        self.client = HetznerClient(token=token)
+    def sync_servers(self):
 
         servers = self.client.get_servers()
 

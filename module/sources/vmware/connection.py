@@ -1326,11 +1326,19 @@ class VMWareHandler(SourceBase):
                 log.error(f"Unable to retrieve vCenter tags for '{obj.name}': {e}")
                 return
 
+            # vCenter tags and categories by id: most objects share a few hundred tags, so each
+            # is fetched once per run (per source) instead of once per object it's attached to
+            tag_cache = self.__dict__.setdefault("_tag_cache", dict())
+            tag_category_name_cache = self.__dict__.setdefault("_tag_category_name_cache", dict())
+
             for tag_id in object_tag_ids:
 
                 # noinspection PyBroadException
                 try:
-                    tag = self.tag_session.tagging.Tag.get(tag_id)  # store the object
+                    tag = tag_cache.get(tag_id)
+                    if tag is None:
+                        tag = self.tag_session.tagging.Tag.get(tag_id)  # store the object
+                        tag_cache[tag_id] = tag
                     tag_name = tag.name
                     tag_description = tag.description
                 except Exception as e:
@@ -1341,7 +1349,10 @@ class VMWareHandler(SourceBase):
                 if bool(self.settings.tag_name_include_category) is True:
                     # noinspection PyBroadException
                     try:
-                        category_name = self.tag_session.tagging.Category.get(tag.category_id).name
+                        category_name = tag_category_name_cache.get(tag.category_id)
+                        if category_name is None:
+                            category_name = self.tag_session.tagging.Category.get(tag.category_id).name
+                            tag_category_name_cache[tag.category_id] = category_name
                     except Exception as e:
                         log.debug(f"Unable to retrieve category of vCenter tag '{tag_name}': {e}")
 
@@ -2425,29 +2436,6 @@ class VMWareHandler(SourceBase):
 
         self.add_object_to_cache(obj, self.inventory.add_update_object(NBClusterGroup, data=object_data, source=self))
 
-    def object_synced_by_other_source(self, nb_object):
-        """
-        Check if a NetBox object is maintained by a different configured source. During
-        this run that is the source which touched the object, for objects read from NetBox
-        the source tags decide.
-
-        Parameters
-        ----------
-        nb_object: NetBoxObject
-            object to check
-
-        Returns
-        -------
-        bool: True if another configured source synced this object
-        """
-
-        if nb_object.source is not None:
-            return nb_object.source is not self
-
-        other_source_tags = [x.source_tag for x in self.inventory.source_list if x is not self]
-
-        return len(set(nb_object.get_tags()).intersection(other_source_tags)) > 0
-
     def add_cluster(self, obj):
         """
         Add a vCenter cluster as a NBCluster to NetBox. Cluster name is checked against
@@ -3246,9 +3234,11 @@ class VMWareHandler(SourceBase):
             if vnic_ips.get(vnic_name) is None:
                 vnic_ips[vnic_name] = list()
 
-            int_v4 = "{}/{}".format(grab(vnic, "spec.ip.ipAddress"), grab(vnic, "spec.ip.subnetMask"))
+            vnic_ipv4 = grab(vnic, "spec.ip.ipAddress")
+            int_v4 = "{}/{}".format(vnic_ipv4, grab(vnic, "spec.ip.subnetMask"))
 
-            if self.settings.permitted_subnets.permitted(int_v4, interface_name=vnic_name) is True:
+            # a vmk without IPv4 (VxRail hosts' vmk0) reports an empty address: nothing to add
+            if vnic_ipv4 and self.settings.permitted_subnets.permitted(int_v4, interface_name=vnic_name) is True:
                 vnic_ips[vnic_name].append(int_v4)
 
                 if vnic_is_primary is True and host_primary_ip4 is None:

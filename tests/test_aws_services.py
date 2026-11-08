@@ -8,7 +8,9 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import copy
+import json
 from contextlib import ExitStack
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import pytest
@@ -101,6 +103,32 @@ def test_services_import_and_repeat(make_source, inventory, version):
     assert field.data.get("object_types", field.data.get("content_types")) == [
         NBVM.object_type, NBCluster.object_type, NBVirtualDisk.object_type,
     ]
+
+
+def test_eks_timestamps_are_stored_as_json(make_source, inventory):
+    # boto3 parses EKS timestamps into datetime objects in the local timezone
+    local = timezone(timedelta(hours=2))
+    data = service_data()
+    eks = data["EKSClusters"][0]
+    eks["createdAt"] = datetime(2026, 10, 23, 14, 0, 0, 123000, tzinfo=local)
+    eks["nodegroups"][0]["modifiedAt"] = datetime(2026, 10, 24, 2, 0, tzinfo=local)
+    eks["fargateProfiles"][0]["createdAt"] = datetime(2026, 10, 24, 2, 0, tzinfo=local)
+    # with S3 the bucket holder VM exists before the EKS worker is looked up by name
+    source = make_source("sync_s3 = True\nsync_eks = True\nsync_private_ips = False", data=data)
+    source.apply()
+
+    cluster = next(item for item in inventory.get_all_items(NBCluster)
+                   if item.data.get("custom_fields", {}).get("aws_service") == "eks")
+    metadata = cluster.data["custom_fields"]["aws_metadata"]
+    assert metadata["createdAt"] == "2026-10-23T12:00:00.123000+00:00"
+    assert metadata["nodegroups"][0]["modifiedAt"] == "2026-10-24T00:00:00+00:00"
+    assert metadata["fargateProfiles"][0]["createdAt"] == "2026-10-24T00:00:00+00:00"
+
+    # the request body sent to NetBox, read back on the next run
+    cluster.data["custom_fields"] = json.loads(json.dumps(cluster.data["custom_fields"], allow_nan=False))
+    cluster.updated_items = []
+    source.apply()
+    assert "custom_fields" not in cluster.updated_items
 
 
 def test_s3_requires_supported_netbox_before_discovery(make_source, inventory, caplog):

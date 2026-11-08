@@ -15,5 +15,11 @@ class HetznerClient:
     def __init__(self, token):
         self.client = Client(token=token)
 
+    def check_connection(self):
+        """
+        Fails if the API can't be reached or doesn't accept the token
+        """
+        self.client.servers.get_list(per_page=1)
+
     def get_servers(self):
         return self.client.servers.get_all()
