@@ -1648,7 +1648,7 @@ class VMWareHandler(SourceBase):
 
         Try to find object first based on the object data, interface MAC addresses and primary IPs.
             1. try to find by name and cluster/site
-            2. try to find by mac addresses interfaces
+            2. try to find by mac addresses interfaces (ESXi host: unless 'disable_host_mac_matching' is set)
             3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
             4. try to find by primary IP
 
@@ -1742,6 +1742,10 @@ class VMWareHandler(SourceBase):
         elif object_type == NBVM and self.settings.match_vm_by_mac_address is False:
 
             log.debug2("Matching VMs by MAC address is disabled via 'match_vm_by_mac_address'. Skipping.")
+
+        elif object_type == NBDevice and self.settings.disable_host_mac_matching is True:
+
+            log.debug2("Matching hosts by MAC address is disabled via 'disable_host_mac_matching'. Skipping.")
 
         else:
 

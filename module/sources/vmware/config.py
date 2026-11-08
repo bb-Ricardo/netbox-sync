@@ -300,6 +300,14 @@ class VMWareConfig(ConfigBase):
                          with blade centers if VMWare does not report the blades serial number properly.""",
                          default_value=True),
 
+            ConfigOption("disable_host_mac_matching",
+                         bool,
+                         description="""Don't match hosts by physical NIC MAC address. Useful with MAC address
+                         pooling (e.g. Cisco UCS) where the same MAC can be used by hosts in different sites.
+                         Hosts are then matched by name and site, serial number (if 'match_host_by_serial')
+                         and asset tag. VM matching is controlled by 'match_vm_by_mac_address'.""",
+                         default_value=False),
+
             ConfigOption("match_vm_by_serial",
                          bool,
                          description="""Fall back to matching VMs by serial number (BIOS UUID) if no name+cluster
