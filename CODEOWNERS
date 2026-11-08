@@ -4,3 +4,5 @@
 
 /module/sources/hetzner/ @SerhiiZahuba
 /docs/source_hetzner.md @SerhiiZahuba
+/module/sources/ovirt/ @ekrichbaum
+/docs/source_ovirt.md @ekrichbaum

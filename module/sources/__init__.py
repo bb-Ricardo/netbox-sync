@@ -11,7 +11,9 @@
 from module.sources.vmware.connection import VMWareHandler
 from module.sources.hetzner.connection import HetznerHandler
 from module.sources.openstack.connection import OpenStackHandler
+from module.sources.ovirt.connection import OVirtHandler
 from module.sources.aws.connection import AWSHandler
+from module.sources.digitalocean.connection import DigitalOceanHandler
 from module.sources.check_redfish.import_inventory import CheckRedfish
 
 from module.common.logging import get_logger
@@ -21,7 +23,7 @@ from module.config.base import ConfigOptions
 from module.config import source_config_section_name
 
 # list of valid sources
-valid_sources = [VMWareHandler, CheckRedfish, HetznerHandler, AWSHandler, OpenStackHandler]
+valid_sources = [VMWareHandler, CheckRedfish, HetznerHandler, AWSHandler, OpenStackHandler, DigitalOceanHandler, OVirtHandler]
 
 
 def validate_source(source_class_object=None, state="pre"):

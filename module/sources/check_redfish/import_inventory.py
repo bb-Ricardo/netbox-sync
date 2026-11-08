@@ -11,6 +11,7 @@ import os
 import glob
 import hashlib
 import json
+from ipaddress import ip_interface
 
 from packaging import version
 
@@ -28,6 +29,16 @@ MODULE_BAY_NAME_MAX_LENGTH = 64
 MODULE_BAY_NAME_HASH_LENGTH = 8
 
 log = get_logger()
+
+
+def is_syncable_ip_address(value) -> bool:
+    """True if value parses as an IP address, with or without a prefix length, and is not
+    link-local or loopback: PermittedSubnets drops those whatever permitted_subnets says."""
+    try:
+        address = ip_interface(value).ip
+    except ValueError:
+        return False
+    return not (address.is_link_local or address.is_loopback)
 
 
 class CheckRedfish(SourceBase):
@@ -874,6 +885,8 @@ class CheckRedfish(SourceBase):
 
         port_data_dict = dict()
         nic_ips = dict()
+        # addresses redfish reported per port, counted before permitted_subnets filtering
+        nic_ips_reported = dict()
         discovered_int_list = list()
 
         for nic_port in grab(self.inventory_file_content, "inventory.network_port", fallback=list()):
@@ -983,6 +996,10 @@ class CheckRedfish(SourceBase):
             nic_ips[port_name] = list()
             if self.settings.skip_os_reported_ips is True and mgmt_only is False:
                 continue
+            nic_ips_reported[port_name] = len([
+                address for address in [*grab(nic_port, "ipv4_addresses", fallback=list()),
+                                        *grab(nic_port, "ipv6_addresses", fallback=list())]
+                if is_syncable_ip_address(address)])
 
             for ipv4_address in grab(nic_port, "ipv4_addresses", fallback=list()):
                 if self.settings.permitted_subnets.permitted(ipv4_address, interface_name=port_name) is False:
@@ -1042,9 +1059,12 @@ class CheckRedfish(SourceBase):
 
                 port_data = data_to_update
 
-            # redfish only reliably reports the BMC IP, never the host NIC / bond / bridge IPs
+            # redfish reports no host NIC / bond / bridge address, so an interface it said
+            # nothing about keeps the IPs it has. An address it did report but the operator
+            # excluded still counts as having seen the interface.
             self.add_update_interface(nic_object, self.device_object, port_data,
-                                      nic_ips.get(port_name, list()), keep_undiscovered_ips=True)
+                                      nic_ips.get(port_name, list()),
+                                      keep_undiscovered_ips=nic_ips_reported.get(port_name, 0) == 0)
 
     def update_manager(self):
 

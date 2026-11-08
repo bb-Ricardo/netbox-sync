@@ -35,6 +35,8 @@ aws = [
 ]
 openstack = [
     "openstacksdk>=4.0,<5",
+ovirt = [
+    "ovirt-engine-sdk-python==4.6.3",
 ]
 test = [
     "pytest>=9.1.1",

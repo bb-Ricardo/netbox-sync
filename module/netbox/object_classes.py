@@ -862,7 +862,8 @@ class NetBoxObject:
                 [enforce_secondary_key, including_second_key, include_secondary_key_if_present]:
 
             secondary_key_value = this_data_set.get(secondary_key)
-            org_secondary_key_value = str(secondary_key_value)
+            # only for the warning below, str() of an object would dump all of its data to JSON
+            org_secondary_key_value = secondary_key_value
             read_from_netbox = False
 
             if isinstance(secondary_key_value, NetBoxObject):
@@ -875,7 +876,7 @@ class NetBoxObject:
 
             if secondary_key_value is None and read_from_netbox is False and include_secondary_key_if_present is False:
                 log.warning(f"Unable to determine second key '{secondary_key}' for {self.name} '{my_name}', "
-                            f"got: {org_secondary_key_value}")
+                            f"got: {org_secondary_key_value!r}")
                 log.warning("This could cause serious errors and lead to wrongly assigned object relations!!!")
 
             my_name = f"{my_name} ({secondary_key_value})"
@@ -1510,7 +1511,6 @@ class NBRegion(NetBoxObject):
     object_type = "dcim.region"
     primary_key = "name"
     prune = False
-    read_only = True
 
     def __init__(self, *args, **kwargs):
         self.data_model = {
@@ -2232,6 +2232,12 @@ class NBIPAddress(NetBoxObject):
                 is_primary_ipv4_of_previous_device = True
             if grab(previous_ip_device_vm, "data.primary_ip6") is self:
                 is_primary_ipv6_of_previous_device = True
+
+            # a new assignment replaces a removal queued earlier in this run (the IP moved to
+            # another interface); otherwise the IP would be unassigned first and reassigned after
+            for attribute_name in ["assigned_object_id", "assigned_object_type"]:
+                if attribute_name in self.unset_items:
+                    self.unset_items.remove(attribute_name)
 
             if not isinstance(assigned_object, NetBoxObject):
 

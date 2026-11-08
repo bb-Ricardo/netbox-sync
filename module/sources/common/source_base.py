@@ -31,6 +31,24 @@ class SourceBase:
     init_successful = False
     name = None
 
+    def ip_address_objects_for(self, address: str) -> list:
+        """
+        Return the inventory's IP address objects for an address (without prefix length), in
+        inventory order. The inventory only ever appends, so the index catches up with the
+        objects added since the last call instead of scanning every IP address per lookup.
+        """
+        all_ips = self.inventory.get_all_items(NBIPAddress)
+        index = self.__dict__.setdefault("_ip_index", dict())
+        indexed = self.__dict__.get("_ip_index_size", 0)
+        if indexed > len(all_ips):  # a different inventory list: start over
+            index.clear()
+            indexed = 0
+        for ip in all_ips[indexed:]:
+            key = grab(ip, "data.address", fallback="").split("/")[0]
+            index.setdefault(key, list()).append(ip)
+        self._ip_index_size = len(all_ips)
+        return index.get(address, list())
+
     def set_source_tag(self):
         self.source_tag = f"Source: {self.name}"
 
@@ -49,6 +67,14 @@ class SourceBase:
     # stub function to implement a finish call for each source
     def finish(self):
         pass
+
+    def object_synced_by_other_source(self, nb_object):
+        """Check the current source or stored tags for ownership by another configured source."""
+        if nb_object.source is not None:
+            return nb_object.source is not self
+
+        other_source_tags = [x.source_tag for x in self.inventory.source_list if x is not self]
+        return len(set(nb_object.get_tags()).intersection(other_source_tags)) > 0
 
     def ip_is_primary_ip_of_object(self, ip_object, device_vm_object) -> bool:
         """
@@ -402,7 +428,9 @@ class SourceBase:
         vmware_object: vim.HostSystem | vim.VirtualMachine
             object to add to list of objects to reevaluate
         keep_undiscovered_ips: bool
-            if True, keep the existing IPs of an interface the source discovered no IPs for
+            if True the source reported no addresses at all for this interface, so its
+            existing IPs are kept. The caller decides this before filtering its own
+            discovery, because an address it dropped is still one it saw
 
         Returns
         -------
@@ -589,13 +617,13 @@ class SourceBase:
 
             # If skip_fhrp_group_ips is set and this address is already assigned to an FHRP
             # group in NetBox, leave it on the FHRP group instead of rebinding it to this
-            # interface (issue #445). The whole inventory is scanned for a match on this
-            # address, so the outcome does not depend on inventory order, and only a
+            # interface (issue #445). Every object for this address in the inventory is
+            # checked, so the outcome does not depend on inventory order, and only a
             # candidate in the same VRF counts, so an unrelated FHRP-group IP does not cause
             # this address to be skipped and every regular IP to be unbound (issue #476).
             if self.settings.skip_fhrp_group_ips:
                 skip_fhrp_ip = False
-                for ip in self.inventory.get_all_items(NBIPAddress):
+                for ip in self.ip_address_objects_for(ip_object.ip.compressed):
                     if grab(ip, "data.assigned_object_type", fallback="") != "ipam.fhrpgroup":
                         continue
                     if not grab(ip, "data.address", fallback="").startswith(f"{ip_object.ip.compressed}/"):
@@ -613,11 +641,11 @@ class SourceBase:
             this_ip_object = None
             skip_this_ip = False
             non_unique_ip_role = None
-            for ip in self.inventory.get_all_items(NBIPAddress):
+            for ip in self.ip_address_objects_for(ip_object.ip.compressed):
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
 
-                # not a matching address
+                # not a matching address (anymore)
                 if not ip_address_string.startswith(f"{ip_object.ip.compressed}/"):
                     continue
 
@@ -647,8 +675,11 @@ class SourceBase:
                                 f"possible VRF '{possible_ip_vrf_str}'")
                     continue
 
-                # IP address is not assigned to any interface
-                if not isinstance(current_ip_nic, (NBInterface, NBVMInterface)):
+                # IP address is not assigned to any interface, or the interface it is assigned to
+                # stopped reporting it in this run and its removal is queued (it moved, e.g. a
+                # failover address): either way it is free to be assigned here
+                if not isinstance(current_ip_nic, (NBInterface, NBVMInterface)) or \
+                        "assigned_object_id" in ip.unset_items:
                     this_ip_object = ip
                     break
 
@@ -771,8 +802,8 @@ class SourceBase:
 
             ip_address_objects.append(this_ip_object)
 
-        # keyed on what the source reported, not on what survived parsing: an unusable address
-        # is still a statement that the interface was seen
+        # the caller states whether it discovered anything; interface_ips is only its
+        # surviving subset, so it cannot answer that on its own
         skip_ip_removal = keep_undiscovered_ips is True and len(interface_ips or list()) == 0
 
         # guest tools which report as running but hand back no interface at all are broken
@@ -1026,7 +1057,9 @@ class SourceBase:
         This function will try to find a matching VLAN object based on 'vlan_data'
         Will return matching objects in following order:
             * exact match: VLAN ID and site or VLAN Group which matches site or cluster
-            * global match: VLAN ID matches but the VLAN has no site assigned
+            * global group match: VLAN ID matches and the VLAN is in a VLAN group without a scope
+              which 'vlan_global_groups' names, the group listed first wins
+            * global match: VLAN ID matches but the VLAN has neither site nor group assigned
         If nothing matches the input data from 'vlan_data' will be returned
 
         Parameters
@@ -1071,7 +1104,16 @@ class SourceBase:
         return_data = vlan_data
         vlan_object_by_site = None
         vlan_object_by_group = None
+        vlan_object_global_group = None
+        vlan_object_global_group_rank = None
         vlan_object_global = None
+
+        # VLAN groups without a scope that the settings name as global (vlan_global_groups): their
+        # VLANs are matched like VLANs with neither site nor group, and before those. The position
+        # in the list ranks the groups, so for a VLAN ID in several of them the first one wins
+        global_groups = dict()
+        for rank, name in enumerate(getattr(self.settings, "vlan_global_groups", None) or []):
+            global_groups.setdefault(str(name).lower(), rank)
 
         for vlan in self.inventory.get_all_items(NBVLAN):
 
@@ -1090,6 +1132,14 @@ class SourceBase:
                         vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
                     vlan_object_by_group = vlan
                     break
+                # a scope whose object is not in the inventory resolves to None as well
+                if isinstance(vlan_group, NetBoxObject) and grab(vlan, "data.site") is None and \
+                        not grab(vlan_group, "data.scope_type") and grab(vlan_group, "data.scope_id") is None:
+                    rank = global_groups.get(str(grab(vlan_group, "data.name")).lower())
+                    if rank is not None and \
+                            (vlan_object_global_group_rank is None or rank < vlan_object_global_group_rank):
+                        vlan_object_global_group = vlan
+                        vlan_object_global_group_rank = rank
 
             if grab(vlan, "data.site") is None and grab(vlan, "data.group") is None:
                 vlan_object_global = vlan
@@ -1110,6 +1160,11 @@ class SourceBase:
             log.debug2(f"Found a {return_data.name} object which matches the {vlan_group_object.name} "
                        f"'{vlan_group_object.get_display_name()}'{scope_details}: %s" %
                        vlan_object_by_group.get_display_name(including_second_key=True))
+
+        elif isinstance(vlan_object_global_group, NetBoxObject):
+            return_data = vlan_object_global_group
+            log.debug2(f"Found a matching {return_data.name} object in a global VLAN group: %s" %
+                       vlan_object_global_group.get_display_name(including_second_key=True))
 
         elif isinstance(vlan_object_global, NetBoxObject):
             return_data = vlan_object_global

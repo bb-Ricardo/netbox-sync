@@ -128,6 +128,14 @@ class NetBoxInventory:
 
         # try to find by primary/secondary key
         elif data.get(object_type.primary_key) is not None:
+            if object_type in (NBVMInterface, NBVirtualDisk) and isinstance(data.get("virtual_machine"), NBVM):
+                # VM names are only unique within a cluster; use the resolved parent object.
+                for this_object in self.get_all_items(object_type):
+                    if this_object.data.get("virtual_machine") is data["virtual_machine"] and \
+                            str(this_object.data.get(object_type.primary_key)).lower() == \
+                            str(data[object_type.primary_key]).lower():
+                        return this_object
+                return None
             object_name_to_find = None
             for this_object in self.get_all_items(object_type):
 
