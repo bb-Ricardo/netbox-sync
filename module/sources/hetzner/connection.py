@@ -24,6 +24,7 @@ log = get_logger()
 
 from module.netbox.inventory import (
     NetBoxInventory,
+    NBTag,
     NBVM,
     NBSite,
     NBCluster,
@@ -42,6 +43,7 @@ class HetznerHandler(SourceBase):
     settings = HetznerConfig()
 
     dependent_netbox_objects = [
+        NBTag,
         NBVM,
         NBCluster,
         NBSite,
