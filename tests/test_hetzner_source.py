@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 import pytest
 import requests
 
-from module.netbox import NBVirtualDisk
+from module.netbox import NBCluster, NBSite, NBVirtualDisk
 from module.sources import instantiate_sources
 
 TOKEN = "test-only"
@@ -117,3 +117,23 @@ def test_api_error_during_apply_exits_cleanly(hetzner_api, hetzner_sources, capl
     assert exit_info.value.code == 1
     assert ("Hetzner source 'test': service unavailable (unavailable). "
             "No NetBox writes or pruning will be performed.") in caplog.text
+
+
+@pytest.mark.parametrize("api_version, placement", [
+    ("4.1.0", ["site"]),
+    ("4.2.0", ["scope_type", "scope_id"]),
+    ("4.4.0", ["scope_type", "scope_id"]),
+])
+def test_cluster_is_placed_at_the_site(hetzner_api, hetzner_sources, inventory, caplog, api_version, placement):
+    # NetBox 4.2 replaced the site of a cluster with a scope, and it rejects a scope_id without a scope_type
+    inventory.netbox_api_version = api_version
+    hetzner_api[TOKEN] = hetzner_project()
+    source, = hetzner_sources(("test", TOKEN))
+
+    source.apply()
+
+    cluster, = inventory.get_all_items(NBCluster)
+    site, = inventory.get_all_items(NBSite)
+    assert [key for key in ("site", "scope_type", "scope_id") if key in cluster.data] == placement
+    assert cluster.get_site_name() == site.data["name"]
+    assert "Invalid data type" not in caplog.text

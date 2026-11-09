@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 from hcloud import HCloudException
+from packaging import version
 from requests.exceptions import RequestException
 
 from module.common.logging import get_logger
@@ -120,14 +121,21 @@ class HetznerHandler(SourceBase):
 
         cluster_name = f"Hetzner: {self.name}"
 
+        cluster_data = {
+            "name": cluster_name,
+            "type": cluster_type,
+        }
+
+        # clusters are scoped since NetBox 4.2, before they had a site
+        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+            cluster_data["scope_type"] = "dcim.site"
+            cluster_data["scope_id"] = site
+        else:
+            cluster_data["site"] = site
+
         cluster = self.inventory.add_update_object(
             NBCluster,
-            data={
-                "name": cluster_name,
-                "type": cluster_type,
-                "scope_type": 17,
-                "scope_id": site,
-            },
+            data=cluster_data,
             source=self,
         )
 
