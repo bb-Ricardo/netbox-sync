@@ -7,13 +7,18 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
+import copy
 import json
+import types
 from urllib.parse import urlsplit
 
 import pytest
 import requests
 
-from module.netbox import NBVirtualDisk
+from module.netbox import (
+    NetBoxObject, NBCluster, NBClusterType, NBIPAddress, NBSite, NBTag, NBVirtualDisk, NBVM, NBVMInterface,
+)
+from module.netbox.connection import NetBoxHandler
 from module.sources import instantiate_sources
 
 TOKEN = "test-only"
@@ -117,3 +122,91 @@ def test_api_error_during_apply_exits_cleanly(hetzner_api, hetzner_sources, capl
     assert exit_info.value.code == 1
     assert ("Hetzner source 'test': service unavailable (unavailable). "
             "No NetBox writes or pruning will be performed.") in caplog.text
+
+
+@pytest.mark.parametrize("api_version, placement", [
+    ("4.1.0", ["site"]),
+    ("4.2.0", ["scope_type", "scope_id"]),
+    ("4.4.0", ["scope_type", "scope_id"]),
+])
+def test_cluster_is_placed_at_the_site(hetzner_api, hetzner_sources, inventory, caplog, api_version, placement):
+    # NetBox 4.2 replaced the site of a cluster with a scope, and it rejects a scope_id without a scope_type
+    inventory.netbox_api_version = api_version
+    hetzner_api[TOKEN] = hetzner_project()
+    source, = hetzner_sources(("test", TOKEN))
+
+    source.apply()
+
+    cluster, = inventory.get_all_items(NBCluster)
+    site, = inventory.get_all_items(NBSite)
+    assert [key for key in ("site", "scope_type", "scope_id") if key in cluster.data] == placement
+    assert cluster.get_site_name() == site.data["name"]
+    assert "Invalid data type" not in caplog.text
+
+
+def netbox_after_first_run():
+    """What a first run of the source 'test' left in NetBox, in the shape the NetBox API returns it."""
+    tag_names = [NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag, "Source: test"]
+    tags = {name: {"id": nb_id, "name": name, "slug": NetBoxObject.format_slug(name)}
+            for nb_id, name in enumerate(tag_names, start=1)}
+    synced = [tags[NetBoxHandler.primary_tag], tags["Source: test"]]
+    return {
+        NBTag: list(tags.values()),
+        NBSite: [{"id": 1, "name": "cloud", "slug": "cloud", "tags": synced}],
+        NBClusterType: [{"id": 1, "name": "cloud", "slug": "cloud", "tags": synced}],
+        NBCluster: [{"id": 1, "name": "Hetzner: test", "type": {"id": 1}, "scope_type": "dcim.site", "scope_id": 1,
+                     "tags": synced}],
+        NBVM: [{"id": 1, "name": "srv1", "status": {"value": "active"}, "cluster": {"id": 1}, "site": {"id": 1},
+                "tags": synced}],
+        NBVMInterface: [{"id": 1, "name": "eth0", "virtual_machine": {"id": 1}, "enabled": True, "tags": synced}],
+        NBIPAddress: [{"id": 1, "address": "203.0.113.10/32", "assigned_object_type": "virtualization.vminterface",
+                       "assigned_object_id": 1, "tags": synced}],
+        NBVirtualDisk: [{"id": 1, "name": "srv1-data", "virtual_machine": {"id": 1}, "size": 10240, "tags": synced}],
+    }
+
+
+@pytest.fixture
+def second_run(hetzner_api, hetzner_sources, inventory, tmp_path):
+    """
+    Runs the source against what the first run left in NetBox, the way netbox-sync does it:
+    only the object types the source depends on are read from NetBox.
+    """
+    def run(project):
+        hetzner_api[TOKEN] = project
+        source, = hetzner_sources(("test", TOKEN))
+        netbox = object.__new__(NetBoxHandler)
+        netbox.inventory = inventory
+        netbox.settings = types.SimpleNamespace(use_caching=False, prune_enabled=True, orphaned_vm_status=None,
+                                                ignore_unknown_source_object_pruning=False)
+        netbox.cache_directory = str(tmp_path)
+        netbox.resolved_dependencies = set()
+        netbox.request = lambda object_class, **kwargs: {
+            "results": copy.deepcopy(netbox_after_first_run().get(object_class, []))}
+
+        netbox.query_current_data(source.dependent_netbox_objects)
+        inventory.resolve_relations()
+        source.apply()
+        inventory.tag_all_the_things(netbox)
+
+    return run
+
+
+def test_second_run_changes_nothing(second_run, inventory):
+    second_run(hetzner_project())
+
+    changes = [f"{this_object.name} '{this_object.get_display_name()}': {this_object.updated_items or 'new'}"
+               for object_type in NetBoxObject.__subclasses__() for this_object in inventory.get_all_items(object_type)
+               if this_object.is_new or this_object.updated_items]
+    assert changes == []
+
+
+def test_server_gone_from_hetzner_is_tagged_orphaned(second_run, inventory):
+    project = hetzner_project()
+    project["/servers"][1]["servers"] = []
+
+    second_run(project)
+
+    orphaned = [this_object.name for object_type in (NBVM, NBVMInterface, NBIPAddress, NBVirtualDisk)
+                for this_object in inventory.get_all_items(object_type)
+                if NetBoxHandler.orphaned_tag in this_object.get_tags()]
+    assert orphaned == [NBVM.name, NBVMInterface.name, NBIPAddress.name, NBVirtualDisk.name]
