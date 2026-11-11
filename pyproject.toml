@@ -33,6 +33,9 @@ dependencies = [
 aws = [
     "boto3>=1.40,<2",
 ]
+openstack = [
+    "openstacksdk>=4.0,<5",
+]
 ovirt = [
     "ovirt-engine-sdk-python==4.6.3",
 ]
