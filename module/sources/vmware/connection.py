@@ -1957,6 +1957,12 @@ class VMWareHandler(SourceBase):
             except ValueError:
                 log.error(f"Primary IPv6 ({p_ipv6}) does not appear to be a valid IP address (needs included suffix).")
 
+        # A VM in a cluster without a site has no site itself. Look its VLANs up in the site of the
+        # host it runs on, otherwise the VLANs the host carries get created again without a site.
+        vlan_lookup_site = None
+        if object_type == NBVM and grab(device_vm_object, "data.site") is None:
+            vlan_lookup_site = grab(self.get_object_from_cache(grab(vmware_object, "runtime.host")), "data.site")
+
         interface_objects = dict()
 
         for int_name, int_data in nic_data.items():
@@ -1980,7 +1986,8 @@ class VMWareHandler(SourceBase):
             # add/update interface with retrieved data
             nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
                                                                        int_data, nic_ips.get(int_name, list()),
-                                                                       vmware_object=vmware_object)
+                                                                       vmware_object=vmware_object,
+                                                                       vlan_lookup_site=vlan_lookup_site)
 
             interface_objects[int_name] = nic_object
 

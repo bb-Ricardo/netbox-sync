@@ -113,6 +113,12 @@ filter. A VM placed directly in the cluster root pool has an empty pool path and
 its plain pool name `Resources` only. A VM without a resource pool (a template) passes both
 filters.
 
+The VLAN of a VM interface is looked up in the site of the VM. A VM in a cluster without a site
+(no `cluster_site_relation`, or `<NONE>` for a cluster spanning sites) has no site, its VLANs are
+looked up in the site of the host it runs on instead. That way the VM uses the VLAN the host
+already synced for its uplinks. If that site has no VLAN with this ID, VLAN groups and VLANs
+without a site are tried as before, and a new VLAN is created without a site.
+
 Interfaces that VMware Tools reports inside the guest without a virtual network card behind
 them (named `vNIC Dummy-XXXX`, i.e. dummy interfaces carrying anycast addresses) are only
 synced with `sync_vm_dummy_interfaces = True`, or for the VMs whose name matches
