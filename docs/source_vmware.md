@@ -113,6 +113,11 @@ filter. A VM placed directly in the cluster root pool has an empty pool path and
 its plain pool name `Resources` only. A VM without a resource pool (a template) passes both
 filters.
 
+Interfaces that VMware Tools reports inside the guest without a virtual network card behind
+them (named `vNIC Dummy-XXXX`, i.e. dummy interfaces carrying anycast addresses) are only
+synced with `sync_vm_dummy_interfaces = True`, or for the VMs whose name matches
+`vm_dummy_interfaces_include_filter`. Dummy interfaces without an IP address are skipped.
+
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
 

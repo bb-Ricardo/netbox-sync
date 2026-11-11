@@ -517,6 +517,13 @@ class VMWareConfig(ConfigBase):
                          which are only visible inside the VM and are exposed through VM guest tools.
                          Dummy interfaces without an IP address will be skipped.""",
                          default_value=False),
+            ConfigOption("vm_dummy_interfaces_include_filter",
+                         str,
+                         description="""defines a regex expression of VM names whose "dummy/virtual" interfaces
+                         are synced while 'sync_vm_dummy_interfaces' is disabled. The filter is matched against
+                         the VM name the same way 'vm_include_filter' is. If 'sync_vm_dummy_interfaces' is
+                         enabled, the dummy interfaces of all VMs are synced and this filter has no effect.""",
+                         config_example="ns[0-9]+\\.example\\.com$"),
             ConfigOptionGroup(title="VLAN syncing",
                               description="""\
                               These options control if VLANs are sync to NetBox or if some VLANs are excluded from sync.
