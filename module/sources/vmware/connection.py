@@ -3817,7 +3817,9 @@ class VMWareHandler(SourceBase):
             nic_data[int_full_name] = vm_nic_data
 
         # find dummy guest NIC interfaces
-        if self.settings.sync_vm_dummy_interfaces is True:
+        dummy_interfaces_filter = self.settings.vm_dummy_interfaces_include_filter
+        if self.settings.sync_vm_dummy_interfaces is True or \
+                (dummy_interfaces_filter is not None and dummy_interfaces_filter.match(name)):
             for guest_nic in grab(obj, "guest.net", fallback=list()):
 
                 # get matching guest NIC MAC
