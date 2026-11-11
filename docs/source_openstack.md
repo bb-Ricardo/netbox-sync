@@ -1,0 +1,234 @@
+# Source: vmware
+
+## Setup
+You need to have a source section in your `settings.ini` file with following type:
+```ini
+type = vmware
+```
+All options for this source are described in the [settings-example.ini](../settings-example.ini) file.
+
+If you have multiple vCenter instances just add another source with the same type in the **same** file.
+
+***IMPORTANT:*** For VMware source you should define the var `cluster_site_relation` which maps a vCenter cluster to an
+exiting Site in NetBox. If undefined a placeholder site will be created.
+
+### vCenter user
+You need a user account with "Read-only" role on vCenter root scope.
+The "Propagate to children" setting must also be checked.
+
+## Adding objects from a vCenter to NetBox
+
+To match new/updated objects to existing objects in NetBox a few different steps are taken to find the correct object.
+
+You might be interested in this [description](common_concepts.md). This describes how discovered
+IP addresses and interfaces will be added to NetBox.
+
+### Add/update device/VM object in inventory based on gathered data
+
+Try to find object first based on the object data, interface MAC addresses and primary IPs.
+1. try to find by name and cluster/site
+2. try to find by mac addresses interfaces
+3. try to find by serial number (1st) or asset tag (2nd)
+4. try to find by primary IP
+
+### Finding hosts and VMs from discovered data
+
+#### 1. try to find exact name match including cluster/site
+
+If this NetBox object (device, vm) matches, the found object will be used.
+
+#### 2. Try to find a NetBox object based on list of MAC addresses
+
+Iterate over all NetBox interfaces of an object (device, vm) and compare MAC address with list
+of MAC addresses discovered for this object. If a match was found, count for every object (device, vm)
+how many MAC addresses are matching.
+
+If exactly one NetBox object (device, vm) with matching interface MACs was found then this one will be used.
+
+If two or more NetBox object (device, vm) with matching MACs were found, compare the two
+NetBox object (device, vm) with the highest amount of matching interfaces. If the ratio of matching interface
+MAC addresses exceeds 2.0 then the top matching NetBox object (device, vm) is chosen as desired object.
+
+If the ratio is below 2.0 then None will be chosen. The probability is too low that
+this one is the correct one.
+
+#### 3. Try to find a NetBox object based on the primary IP (v4 or v6) address
+
+If an exact matching NetBox object (device, vm) was found the object will be used
+immediately without checking the other primary IP address (if defined).
+
+### Objects read and parsed from vCenter
+
+#### 1. Add a vCenter datacenter as a Cluster Group to NetBox
+Simple, nothing special going on here
+
+#### 2. Add a vCenter cluster as a Cluster to NetBox.
+
+Cluster name is checked against `cluster_include_filter` and `cluster_exclude_filter config` setting.
+
+#### 3. Parse distributed virtual port group
+This is done to extract name and VLAN IDs from each port group
+
+#### 4. Parse a vCenter (ESXi) host
+
+First host is filtered:
+* host has a cluster and this cluster is permitted
+* skip host with same name and site, we already parsed it (use unique host names)
+* does the host pass the `host_include_filter` and `host_exclude_filter`
+
+Then all necessary host data will be collected:<br>
+host model, manufacturer, serial, physical interfaces, virtual interfaces,
+virtual switches, proxy switches, host port groups, interface VLANs, IP addresses
+
+Primary IPv4/6 will be determined by
+1. if the interface port group name contains "management" or "mngt"
+2. interface with this IP is the default route of this host
+
+#### 5. Parse a vCenter VM
+
+Iterate over all VMs twice!
+
+To handle VMs with the same name in a cluster we first iterate over all VMs and look only at the
+active (online) ones and parse these first. Then we iterate a second time to catch the rest (also offline).
+
+This has been implemented to support migration scenarios where you create/copy the same
+machine with a different setup like a new version or something. This way NetBox will be
+updated primarily with the actual active VM data.
+
+First VM is filtered:
+* VM has a cluster and is it permitted
+* skip VMs with same name and cluster if already parsed
+* does the VM pass the `vm_include_filter` and `vm_exclude_filter`
+* does the VM pass the `vm_include_by_resource_pool_filter` and `vm_exclude_by_resource_pool_filter`
+
+Then all necessary VM data will be collected:<br>
+platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addresses
+
+Primary IPv4/6 will be determined by interface that provides the default route for this VM.
+
+The resource pool filters are applied to the resource pool path (i.e. `Parent/Child`, the
+cluster root pool `Resources` excluded) and to the plain resource pool name of the VM: the VM
+is kept when either matches the include filter and skipped when either matches the exclude
+filter. A VM placed directly in the cluster root pool has an empty pool path and is matched by
+its plain pool name `Resources` only. A VM without a resource pool (a template) passes both
+filters.
+
+**Note:**<br>
+IP address information can only be extracted if guest tools are installed and running.
+
+#### 5b. Resolve the tenant of a VM
+
+The tenant of a VM is resolved from different sources. The first match wins:
+
+1. `vm_tenant_relation` matched against the VM name
+2. `vm_tenant_resource_pool_relation` matched against the resource pool path and then
+   against the plain resource pool name of the VM
+3. `vm_tenant_folder_relation` matched against the VM folder path (relative to the
+   datacenter's VM folder) and then against the plain folder name of the VM
+
+   An empty path (a VM in the cluster root pool, or directly in the datacenter's VM folder)
+   is not matched; such a VM is matched by its plain pool name `Resources` or folder name
+   `vm` only.
+4. if `vm_tenant_inherit_from_cluster` is enabled: the tenant resolved via
+   `cluster_tenant_relation` for this cluster or, if that relation matched nothing, the
+   tenant assigned to the cluster in NetBox
+
+A tenant already set on an existing NetBox VM is kept if `overwrite_vm_tenant` is disabled.
+If a tenant was resolved for the VM, its IP addresses inherit it through the `device` step
+of `ip_tenant_inheritance_order`.
+
+#### 6. Sync VMware Tools guest hostname to a custom field
+
+The vCenter VM name (used as the NetBox VM `name`) and the hostname reported from inside the
+guest OS by VMware Tools are not always identical. This can happen if:
+* a VM was renamed in vCenter but the OS hostname was not changed (or vice versa)
+* an OS administrator changed the hostname without informing the virtualization team
+* a VM was cloned and the guest hostname was not adjusted afterwards
+
+To make this drift visible in NetBox, the option `vm_guest_hostname_custom_field` can be set to
+the name of a NetBox custom field. If set, the guest hostname reported by VMware Tools (vCenter
+property `guest.hostName`) is synced into that custom field on every synced VM, while the NetBox
+VM `name` keeps reflecting the vCenter inventory name unchanged. This allows administrators to
+compare the NetBox VM name against the custom field value on the same VM record to spot naming
+drift.
+
+```ini
+vm_guest_hostname_custom_field = vmware_guest_hostname
+```
+
+If the custom field does not exist in NetBox yet it will be created automatically (type `Text`,
+assigned to the `Virtual Machine` object type), the same way other custom fields managed by
+netbox-sync (e.g. `vcsa_*` custom attributes) are created. An administrator can also pre-create
+the field beforehand; netbox-sync will then just use the existing field.
+
+This option is unset by default, so the feature is disabled and no additional custom field is
+created unless explicitly configured.
+
+VMware Tools may not always report a hostname, for example if Tools are not installed, not
+running, outdated, or simply have not reported guest information yet. In that case
+netbox-sync leaves the custom field untouched and keeps the last known value, instead of
+clearing it. A message is logged at debug level (`-l DEBUG2`) whenever this happens.
+
+Example result in NetBox for a VM named `APPPRD01` in vCenter whose guest OS reports
+`appprd01.corp.example.com` as its hostname:
+
+```text
+Virtual Machine Name:        APPPRD01
+Custom Fields:
+  VMware Guest Hostname:     appprd01.corp.example.com
+```
+
+### Cables to CDP/LLDP neighbors
+
+An ESXi host reports the switch and the switch port each of its physical interfaces (pNICs) is
+connected to, if CDP or LLDP is enabled on the switch. With the option `sync_host_cables` enabled
+netbox-sync uses this information to create cables in NetBox between the host interface and the
+switch port.
+
+```ini
+sync_host_cables = True
+```
+
+Cables are objects which are usually maintained by hand, that's why this option is disabled by
+default. With the option disabled no cable is read from or written to NetBox at all. NetBox 3.3 or
+newer is needed, on older versions the option is ignored.
+
+netbox-sync only connects things it can find, it never creates the other end of a cable:
+
+* the device the neighbor reports as its system name must already exist in NetBox. The name is
+  matched exactly first, a short name is only matched against a FQDN if that match is unambiguous
+* the port the neighbor reports must already exist as an interface of that device. Long and short
+  interface names are matched against each other, so a reported `FastEthernet0/16` also matches an
+  interface named `Fa0/16` in NetBox. CDP reports the port ID, LLDP additionally reports a port
+  description and both are tried
+* both interfaces must already exist in NetBox. An interface which was just discovered gets its
+  cable during the next run
+* neither of the two interfaces may be connected already. A cable which was created by hand or which
+  connects to a different port is never changed or deleted, it is reported at log level `DEBUG`
+  instead
+
+Cables created by this source are tagged like every other object and are marked as orphaned and
+pruned once the host stops reporting that neighbor (see `prune_enabled`). Disabling the option again
+leaves all previously created cables untouched in NetBox.
+
+### Filtering VM Disk Information
+VM disks are synchronized between vCenter and NetBox. Since NetBox 3.7.0, virtual disks are tracked as separate objects 
+linked to VMs. In some scenarios, such as when temporary disks are attached to VMs during backup operations 
+(e.g., "Independent-nonpersistent" disks from Veeam), you might want to exclude these changes from synchronization 
+to avoid cluttering your NetBox change log.
+
+You can use the following filter options to exclude disk synchronization for specific VMs:
+
+1. **`vm_exclude_disk_sync`**: A regex pattern matching VM names where disk synchronization should be excluded.
+   ```ini
+   vm_exclude_disk_sync = backup-.*, veeam-.*
+   ```
+
+2. **`vm_exclude_disk_sync_by_tag`**: A comma-separated list of vCenter tags. VMs with any of these tags will have 
+   their disk information excluded from synchronization.
+   ```ini
+   vm_exclude_disk_sync_by_tag = backup-vm, veeam-job
+   ```
+
+When a VM matches these filters, it will still be synchronized to NetBox with all its other information 
+(CPU, memory, interfaces, IP addresses, etc.), but changes to disk information will be ignored.
