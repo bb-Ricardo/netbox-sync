@@ -1,234 +1,229 @@
-# Source: vmware
+# OpenStack source
 
-## Setup
-You need to have a source section in your `settings.ini` file with following type:
-```ini
-type = vmware
+The `openstack` source reads availability zones, compute hypervisors, servers,
+flavors, and Cinder volumes, then reconciles their inventory into NetBox.
+OpenStack is queried read-only; inventory writes are made to NetBox.
+All identifiers and credentials below are fictitious placeholders.
+
+## Installation
+
+The SDK is optional; other sources do not require it:
+
+```sh
+pip install -r requirements-openstack.txt
+# Alternatively:
+uv sync --extra openstack
 ```
-All options for this source are described in the [settings-example.ini](../settings-example.ini) file.
 
-If you have multiple vCenter instances just add another source with the same type in the **same** file.
+The supported SDK range is `openstacksdk>=4.0,<5`. Selecting an OpenStack source
+without the SDK logs an error and skips that source.
 
-***IMPORTANT:*** For VMware source you should define the var `cluster_site_relation` which maps a vCenter cluster to an
-exiting Site in NetBox. If undefined a placeholder site will be created.
+## Authentication and permissions
 
-### vCenter user
-You need a user account with "Read-only" role on vCenter root scope.
-The "Propagate to children" setting must also be checked.
+The current source uses Keystone Identity v3 username/password authentication
+with an explicit project, region, user domain, and project domain. It passes
+these source settings directly to `openstacksdk`; it does not expose
+`clouds.yaml` cloud selection or application-credential authentication.
+SDK YAML configuration and `OS_*` environment loading are disabled, so
+`OS_CLOUD`, `OS_INTERFACE`, and other OpenStack client settings cannot override
+the configured source. Standard `NBS_SOURCE_*` configuration remains supported.
 
-## Adding objects from a vCenter to NetBox
+The account must be allowed to read:
 
-To match new/updated objects to existing objects in NetBox a few different steps are taken to find the correct object.
+* Detailed Nova availability zones, including their host information.
+* Detailed Nova hypervisors and servers.
+* Nova flavors when server responses do not include their full specifications.
+* Detailed Cinder volumes, including sizes for attached volumes.
 
-You might be interested in this [description](common_concepts.md). This describes how discovered
-IP addresses and interfaces will be added to NetBox.
+`all_projects = True` is the default for server and volume discovery and
+requires cross-project access, normally administrative or suitably delegated
+read permissions. Exact roles depend on the cloud's Nova and Cinder policy.
+`all_projects = False` requests servers and volumes within the authenticated
+project, but does not remove the availability-zone or hypervisor queries;
+project-only credentials may still lack the permissions needed by this source.
 
-### Add/update device/VM object in inventory based on gathered data
+Use TLS certificate validation (the default). Configure the runtime's trusted
+CA certificates for private endpoints rather than disabling verification.
+The sync host needs outbound access to Keystone and the Nova/Cinder endpoints
+advertised in the service catalog. No guest SSH access or guest agent is required
+for addresses returned by Nova.
 
-Try to find object first based on the object data, interface MAC addresses and primary IPs.
-1. try to find by name and cluster/site
-2. try to find by mac addresses interfaces
-3. try to find by serial number (1st) or asset tag (2nd)
-4. try to find by primary IP
+## Configuration
 
-### Finding hosts and VMs from discovered data
-
-#### 1. try to find exact name match including cluster/site
-
-If this NetBox object (device, vm) matches, the found object will be used.
-
-#### 2. Try to find a NetBox object based on list of MAC addresses
-
-Iterate over all NetBox interfaces of an object (device, vm) and compare MAC address with list
-of MAC addresses discovered for this object. If a match was found, count for every object (device, vm)
-how many MAC addresses are matching.
-
-If exactly one NetBox object (device, vm) with matching interface MACs was found then this one will be used.
-
-If two or more NetBox object (device, vm) with matching MACs were found, compare the two
-NetBox object (device, vm) with the highest amount of matching interfaces. If the ratio of matching interface
-MAC addresses exceeds 2.0 then the top matching NetBox object (device, vm) is chosen as desired object.
-
-If the ratio is below 2.0 then None will be chosen. The probability is too low that
-this one is the correct one.
-
-#### 3. Try to find a NetBox object based on the primary IP (v4 or v6) address
-
-If an exact matching NetBox object (device, vm) was found the object will be used
-immediately without checking the other primary IP address (if defined).
-
-### Objects read and parsed from vCenter
-
-#### 1. Add a vCenter datacenter as a Cluster Group to NetBox
-Simple, nothing special going on here
-
-#### 2. Add a vCenter cluster as a Cluster to NetBox.
-
-Cluster name is checked against `cluster_include_filter` and `cluster_exclude_filter config` setting.
-
-#### 3. Parse distributed virtual port group
-This is done to extract name and VLAN IDs from each port group
-
-#### 4. Parse a vCenter (ESXi) host
-
-First host is filtered:
-* host has a cluster and this cluster is permitted
-* skip host with same name and site, we already parsed it (use unique host names)
-* does the host pass the `host_include_filter` and `host_exclude_filter`
-
-Then all necessary host data will be collected:<br>
-host model, manufacturer, serial, physical interfaces, virtual interfaces,
-virtual switches, proxy switches, host port groups, interface VLANs, IP addresses
-
-Primary IPv4/6 will be determined by
-1. if the interface port group name contains "management" or "mngt"
-2. interface with this IP is the default route of this host
-
-#### 5. Parse a vCenter VM
-
-Iterate over all VMs twice!
-
-To handle VMs with the same name in a cluster we first iterate over all VMs and look only at the
-active (online) ones and parse these first. Then we iterate a second time to catch the rest (also offline).
-
-This has been implemented to support migration scenarios where you create/copy the same
-machine with a different setup like a new version or something. This way NetBox will be
-updated primarily with the actual active VM data.
-
-First VM is filtered:
-* VM has a cluster and is it permitted
-* skip VMs with same name and cluster if already parsed
-* does the VM pass the `vm_include_filter` and `vm_exclude_filter`
-* does the VM pass the `vm_include_by_resource_pool_filter` and `vm_exclude_by_resource_pool_filter`
-
-Then all necessary VM data will be collected:<br>
-platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addresses
-
-Primary IPv4/6 will be determined by interface that provides the default route for this VM.
-
-The resource pool filters are applied to the resource pool path (i.e. `Parent/Child`, the
-cluster root pool `Resources` excluded) and to the plain resource pool name of the VM: the VM
-is kept when either matches the include filter and skipped when either matches the exclude
-filter. A VM placed directly in the cluster root pool has an empty pool path and is matched by
-its plain pool name `Resources` only. A VM without a resource pool (a template) passes both
-filters.
-
-**Note:**<br>
-IP address information can only be extracted if guest tools are installed and running.
-
-#### 5b. Resolve the tenant of a VM
-
-The tenant of a VM is resolved from different sources. The first match wins:
-
-1. `vm_tenant_relation` matched against the VM name
-2. `vm_tenant_resource_pool_relation` matched against the resource pool path and then
-   against the plain resource pool name of the VM
-3. `vm_tenant_folder_relation` matched against the VM folder path (relative to the
-   datacenter's VM folder) and then against the plain folder name of the VM
-
-   An empty path (a VM in the cluster root pool, or directly in the datacenter's VM folder)
-   is not matched; such a VM is matched by its plain pool name `Resources` or folder name
-   `vm` only.
-4. if `vm_tenant_inherit_from_cluster` is enabled: the tenant resolved via
-   `cluster_tenant_relation` for this cluster or, if that relation matched nothing, the
-   tenant assigned to the cluster in NetBox
-
-A tenant already set on an existing NetBox VM is kept if `overwrite_vm_tenant` is disabled.
-If a tenant was resolved for the VM, its IP addresses inherit it through the `device` step
-of `ip_tenant_inheritance_order`.
-
-#### 6. Sync VMware Tools guest hostname to a custom field
-
-The vCenter VM name (used as the NetBox VM `name`) and the hostname reported from inside the
-guest OS by VMware Tools are not always identical. This can happen if:
-* a VM was renamed in vCenter but the OS hostname was not changed (or vice versa)
-* an OS administrator changed the hostname without informing the virtualization team
-* a VM was cloned and the guest hostname was not adjusted afterwards
-
-To make this drift visible in NetBox, the option `vm_guest_hostname_custom_field` can be set to
-the name of a NetBox custom field. If set, the guest hostname reported by VMware Tools (vCenter
-property `guest.hostName`) is synced into that custom field on every synced VM, while the NetBox
-VM `name` keeps reflecting the vCenter inventory name unchanged. This allows administrators to
-compare the NetBox VM name against the custom field value on the same VM record to spot naming
-drift.
+Add this section to the application's existing NetBox settings:
 
 ```ini
-vm_guest_hostname_custom_field = vmware_guest_hostname
+[source/example-openstack]
+type = openstack
+auth_url = https://identity.example.org:5000/v3
+project = inventory
+username = inventory-reader
+password = REPLACE_WITH_PASSWORD
+region = RegionOne
+user_domain = Default
+project_domain = Default
+validate_tls_certs = True
+all_projects = True
+group_name = Example OpenStack
+cluster_site_relation = .* = Example Cloud Site
+permitted_subnets = 10.0.0.0/8, fd00::/8
+dns_name_lookup = False
 ```
 
-If the custom field does not exist in NetBox yet it will be created automatically (type `Text`,
-assigned to the `Virtual Machine` object type), the same way other custom fields managed by
-netbox-sync (e.g. `vcsa_*` custom attributes) are created. An administrator can also pre-create
-the field beforehand; netbox-sync will then just use the existing field.
+All seven authentication/scope fields (`auth_url`, `project`, `username`,
+`password`, `region`, `user_domain`, and `project_domain`) are mandatory.
+`group_name` defaults to `Openstack`. Use separate named sources for other
+regions or clouds; there is no automatic region enumeration.
 
-This option is unset by default, so the feature is disabled and no additional custom field is
-created unless explicitly configured.
+Keep real passwords out of version control and restrict access to configuration
+files. The application also supports its standard source environment settings;
+for example, a source defined entirely through environment variables can use:
 
-VMware Tools may not always report a hostname, for example if Tools are not installed, not
-running, outdated, or simply have not reported guest information yet. In that case
-netbox-sync leaves the custom field untouched and keeps the last known value, instead of
-clearing it. A message is logged at debug level (`-l DEBUG2`) whenever this happens.
-
-Example result in NetBox for a VM named `APPPRD01` in vCenter whose guest OS reports
-`appprd01.corp.example.com` as its hostname:
-
-```text
-Virtual Machine Name:        APPPRD01
-Custom Fields:
-  VMware Guest Hostname:     appprd01.corp.example.com
+```sh
+NBS_SOURCE_1_NAME=example-openstack
+NBS_SOURCE_1_TYPE=openstack
+NBS_SOURCE_1_AUTH_URL=https://identity.example.org:5000/v3
+NBS_SOURCE_1_PROJECT=inventory
+NBS_SOURCE_1_USERNAME=inventory-reader
+NBS_SOURCE_1_PASSWORD=REPLACE_WITH_PASSWORD
+NBS_SOURCE_1_REGION=RegionOne
+NBS_SOURCE_1_USER_DOMAIN=Default
+NBS_SOURCE_1_PROJECT_DOMAIN=Default
 ```
 
-### Cables to CDP/LLDP neighbors
+These are example variable assignments; supply secrets through your runtime's
+secret mechanism rather than storing this block in a repository.
+Generate the complete supported configuration with:
 
-An ESXi host reports the switch and the switch port each of its physical interfaces (pNICs) is
-connected to, if CDP or LLDP is enabled on the switch. With the option `sync_host_cables` enabled
-netbox-sync uses this information to create cables in NetBox between the host interface and the
-switch port.
+```sh
+python netbox-sync.py -g
+```
+
+### Site, network, and tenant relations
+
+`cluster_site_relation` maps availability-zone names to NetBox sites using
+regular expressions. `host_site_relation` can override sites for hypervisors.
+Correct site mapping matters for prefix, VLAN, and VRF selection.
+
+Only addresses permitted by `permitted_subnets` are imported. Pre-create the
+NetBox prefixes, VRFs, and VLANs appropriate to your cloud's networks. Address
+prefix matching prefers the mapped site and can fall back to other matching
+prefixes; without a matching prefix, a bare IPv4/IPv6 address retains its
+host-length mask. Carefully inspect overlapping tenant address spaces before
+permitting IP writes.
+
+Interfaces and addresses come from Nova server address data, not a separate
+Neutron topology inventory. Fixed and floating addresses may both be imported
+when permitted; fixed addresses are preferred for primary IP selection.
+Within a resolved VM, existing interfaces with a discovered MAC keep their
+names before positional interface matching is attempted. Detaching an earlier
+port therefore does not renumber or steal the later port's interface, MAC,
+or IPs; the detached interface is left for normal orphan handling.
+An interface paired without a MAC match is renamed to the discovered network
+name. Ports without MAC data still rely on positional/shared matching.
+Virtual disks are matched by disk name within the resolved VM, so same-named
+VMs in different availability zones retain separate disks.
+For `all_projects = True`, the source can repair an IP still assigned to an
+active but deleted VM after fully consuming the Nova server list. Normally both
+the IP and old VM must have only this source's `Source:` tag; orphaned records
+can qualify through the cluster-ownership recovery described below. The old VM's stored
+server UUID (UUID name, or UUID comments with default naming) must be absent
+from the complete snapshot, the target UUID must be present, and exactly one
+server must report the IP. Existing VRF matching and shared-address-role
+safeguards still apply. Repair is logged and does not disable the old
+interface or claim the old VM; normal orphan handling remains responsible for
+those objects. Unknown UUIDs, unverified/mixed ownership, incomplete server
+discovery, duplicate IP discovery, and project-only discovery do not authorize
+this repair. Other source types retain their existing reassignment behavior.
+Because normal orphan handling removes Source tags, an IP or old VM with no
+Source tags may instead qualify when it has the orphan tag and its old
+cluster has exclusively this source's persisted tag, belongs to the configured
+group, and is resolved and owned by this source in current discovery.
+This does not permit recovery from unknown or competing clusters, non-orphaned
+untagged records, or records with another source's tag. All UUID, complete
+snapshot, unique-IP-claim, and VRF checks still apply. Successful repair restores
+the IP's Source tag and removes its orphan tag through normal tagging, without
+retagging or reviving the old VM.
+Blocked stale-IP repair logs include the first failing prerequisite and relevant
+NetBox IDs, ownership tags, or UUID state. A following shared-interface warning
+confirms that the assignment was left unchanged.
+`set_primary_ip`, `preserve_primary_ips`, `skip_fhrp_group_ips`,
+`ip_tenant_inheritance_order`, interface exclusion filters, and
+`disable_vlan_sync` control the shared network reconciliation behavior.
+
+Tenants and tags are configured through relations rather than automatically
+mirroring Keystone project names:
 
 ```ini
-sync_host_cables = True
+cluster_site_relation = ^zone-a$ = Example Cloud Site
+vm_tenant_relation = ^production-.* = Example Tenant
+vm_tag_relation = .* = OpenStack
 ```
 
-Cables are objects which are usually maintained by hand, that's why this option is disabled by
-default. With the option disabled no cable is read from or written to NetBox at all. NetBox 3.3 or
-newer is needed, on older versions the option is ignored.
+Host, VM, and cluster site/tenant/role/tag options and platform mappings are
+described in the generated configuration and [example settings](../settings-example.ini).
 
-netbox-sync only connects things it can find, it never creates the other end of a cable:
+## Object mapping
 
-* the device the neighbor reports as its system name must already exist in NetBox. The name is
-  matched exactly first, a short name is only matched against a FQDN if that match is unambiguous
-* the port the neighbor reports must already exist as an interface of that device. Long and short
-  interface names are matched against each other, so a reported `FastEthernet0/16` also matches an
-  interface named `Fa0/16` in NetBox. CDP reports the port ID, LLDP additionally reports a port
-  description and both are tried
-* both interfaces must already exist in NetBox. An interface which was just discovered gets its
-  cable during the next run
-* neither of the two interfaces may be connected already. A cable which was created by hand or which
-  connects to a different port is never changed or deleted, it is reported at log level `DEBUG`
-  instead
+| OpenStack | NetBox |
+| --- | --- |
+| Configured group name | Cluster group |
+| Availability zone | Cluster |
+| Hypervisor | Device and reported host interface/IP |
+| Server | Virtual machine |
+| Flavor vCPUs / RAM | VM CPU / memory |
+| Flavor name | VM platform unless disabled or mapped |
+| Image-backed root / ephemeral disks | VM disk capacity or virtual disks |
+| Attached Cinder volume | VM disk capacity or virtual disk named by volume ID |
+| Server network/MAC/address data | VM interfaces, MACs, and permitted IP addresses |
 
-Cables created by this source are tagged like every other object and are marked as orphaned and
-pruned once the host stops reporting that neighbor (see `prune_enabled`). Disabling the option again
-leaves all previously created cables untouched in NetBox.
+Servers with status `ACTIVE` are active in NetBox; other states map to offline.
+By default VM names are used, with duplicate names within an availability zone
+logged and skipped. Consider `set_vm_name_to_uuid = True` for cross-project
+inventories where names repeat; the original name is then stored in the
+`openstack_vm_name` custom field. Changing naming settings can affect matching,
+so review a dry run before applying them to existing inventory.
 
-### Filtering VM Disk Information
-VM disks are synchronized between vCenter and NetBox. Since NetBox 3.7.0, virtual disks are tracked as separate objects 
-linked to VMs. In some scenarios, such as when temporary disks are attached to VMs during backup operations 
-(e.g., "Independent-nonpersistent" disks from Veeam), you might want to exclude these changes from synchronization 
-to avoid cluttering your NetBox change log.
+`skip_vm_platform` disables flavor-to-platform mapping. `skip_vm_comments`
+disables VM UUID comments. `strip_host_domain_name` and
+`strip_vm_domain_name` control domain stripping.
+`host_custom_object_attributes` and `vm_custom_object_attributes` copy selected
+SDK resource attributes into custom fields; dotted paths are supported.
 
-You can use the following filter options to exclude disk synchronization for specific VMs:
+NetBox 3.7+ uses separate virtual disks; older versions retain aggregate VM
+disk capacity. OpenStack reports flavor and volume sizes in gigabytes. NetBox
+versions before 4.1 store the reported value as gigabytes; from 4.1, the source
+converts it to megabytes by multiplying by 1000. Missing attached-volume sizes
+are logged rather than replaced with fabricated zero sizes. NetBox 4.2+ uses
+scoped cluster sites and separate MAC address objects.
 
-1. **`vm_exclude_disk_sync`**: A regex pattern matching VM names where disk synchronization should be excluded.
-   ```ini
-   vm_exclude_disk_sync = backup-.*, veeam-.*
-   ```
+## Filters and lifecycle
 
-2. **`vm_exclude_disk_sync_by_tag`**: A comma-separated list of vCenter tags. VMs with any of these tags will have 
-   their disk information excluded from synchronization.
-   ```ini
-   vm_exclude_disk_sync_by_tag = backup-vm, veeam-job
-   ```
+Cluster, host, and VM include/exclude filters are regular expressions matched
+from the start of the name. Include checks run before exclude checks.
+Excluding an availability zone excludes its hosts and VMs; excluding a host
+does not by itself exclude its VMs.
 
-When a VM matches these filters, it will still be synchronized to NetBox with all its other information 
-(CPU, memory, interfaces, IP addresses, etc.), but changes to disk information will be ignored.
+Objects participate in the application's normal source tagging, orphaning, and
+pruning lifecycle. Changing project scope, filters, naming, or permitted networks
+can change which objects are considered discovered. Avoid overlapping sources
+and inspect the dry-run log before allowing writes or pruning.
+
+## Validation
+
+Start with a dry run using credentials with the intended scope:
+
+```sh
+python netbox-sync.py -n -c settings.ini
+```
+
+Check authentication, availability-zone coverage, hypervisor access, server and
+volume counts, site mappings, duplicate names, and address/VRF assignments.
+Unit tests use a fake SDK and the real in-memory NetBox models:
+
+```sh
+python -m pytest tests/test_openstack_source.py
+```
+
+These tests do not replace validation against your cloud's API versions and
+authorization policies.
