@@ -1,6 +1,6 @@
 [project]
 name = "netbox-sync"
-version = "1.9.2"
+version = "1.9.3"
 description = "Sync objects from various sources to NetBox"
 authors = [
     { name = "Ricardo Bartels", email = "ricardo.bartels@telekom.de" }
