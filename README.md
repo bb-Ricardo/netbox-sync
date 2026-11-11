@@ -105,7 +105,7 @@ usage: netbox-sync.py [-h] [-c settings.ini [settings.ini ...]] [-g]
 
 Sync objects from various sources to NetBox
 
-Version: 1.9.1 (2026-10-05)
+Version: 1.9.3 (2026-11-11)
 Project URL: https://github.com/bb-ricardo/netbox-sync
 
 options:
