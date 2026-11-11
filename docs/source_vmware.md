@@ -105,6 +105,12 @@ platform, virtual interfaces, virtual cpu/disk/memory interface VLANs, IP addres
 
 Primary IPv4/6 will be determined by interface that provides the default route for this VM.
 
+The VLAN of a VM interface is looked up in the site of the VM. A VM in a cluster without a site
+(no `cluster_site_relation`, or `<NONE>` for a cluster spanning sites) has no site, its VLANs are
+looked up in the site of the host it runs on instead. That way the VM uses the VLAN the host
+already synced for its uplinks. If that site has no VLAN with this ID, VLAN groups and VLANs
+without a site are tried as before, and a new VLAN is created without a site.
+
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
 
