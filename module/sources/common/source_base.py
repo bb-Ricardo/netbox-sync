@@ -402,7 +402,7 @@ class SourceBase:
         return current_longest_matching_prefix
 
     def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None,
-                             vmware_object=None, keep_undiscovered_ips=False, vlan_lookup_site=None):
+                             vmware_object=None, keep_undiscovered_ips=False):
         """
         Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
         Validates/enriches data in following order:
@@ -431,9 +431,6 @@ class SourceBase:
             if True the source reported no addresses at all for this interface, so its
             existing IPs are kept. The caller decides this before filtering its own
             discovery, because an address it dropped is still one it saw
-        vlan_lookup_site: NBSite
-            site to look up existing VLANs in if the device/VM has no site itself. Only used
-            for the lookup, a VLAN which is not found is created from the interface data as before
 
         Returns
         -------
@@ -458,8 +455,6 @@ class SourceBase:
 
         device_object_cluster = grab(device_object, "data.cluster")
         device_object_site = grab(device_object, "data.site")
-        if device_object_site is not None:
-            vlan_lookup_site = device_object_site
 
         if type(device_object) == NBVM:
             interface_class = NBVMInterface
@@ -879,7 +874,7 @@ class SourceBase:
         vlan_interface_data = dict()
         if untagged_vlan is not None or (untagged_vlan is None and len(tagged_vlans) == 0):
             if matching_untagged_vlan is None and untagged_vlan is not None:
-                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, vlan_lookup_site,
+                matching_untagged_vlan = self.get_vlan_object_if_exists(untagged_vlan, device_object_site,
                                                                         device_object_cluster)
 
                 # don't sync newly discovered VLANs to NetBox
@@ -904,7 +899,7 @@ class SourceBase:
                 log.debug2(f"Found matching prefix VLAN {matching_tagged_vlan.get_display_name()} for "
                            f"tagged interface VLAN.")
             else:
-                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, vlan_lookup_site,
+                matching_tagged_vlan = self.get_vlan_object_if_exists(tagged_vlan, device_object_site,
                                                                       device_object_cluster)
 
                 # don't sync newly discovered VLANs to NetBox
