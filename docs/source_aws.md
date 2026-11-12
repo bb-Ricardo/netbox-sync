@@ -304,7 +304,9 @@ instances are outside this discovery scope.
 
 Optional resources use `aws_service`, `aws_resource_id`, and `aws_metadata`
 custom fields on VMs, clusters, and virtual disks. Existing unrelated tags are
-preserved. These objects are logical documentation of AWS resources, not
+preserved. AWS timestamps in metadata are stored as ISO 8601 strings; timezone-aware
+timestamps are normalized to UTC. The metadata remains a JSON object.
+These objects are logical documentation of AWS resources, not
 claims that serverless services are virtual servers.
 
 ### Automatic or explicit regions
