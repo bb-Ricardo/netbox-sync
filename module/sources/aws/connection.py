@@ -7,6 +7,7 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
+from datetime import datetime, timezone
 from hashlib import sha256
 from ipaddress import ip_address, ip_interface, ip_network
 from itertools import product
@@ -27,6 +28,19 @@ from module.sources.aws.config import AWSConfig
 from module.sources.common.source_base import SourceBase
 
 log = get_logger()
+
+
+def json_safe(value):
+    """Convert AWS timestamps to UTC ISO 8601 strings for NetBox JSON fields."""
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
+    return value
 
 
 class AWSHandler(SourceBase):
@@ -324,6 +338,9 @@ class AWSHandler(SourceBase):
         return f"{name[:limit - 13]}-{suffix}"
 
     def service_object(self, object_type, identity, data):
+        data = {**data, "custom_fields": {
+            **data["custom_fields"], "aws_metadata": json_safe(data["custom_fields"]["aws_metadata"]),
+        }}
         items = self.inventory.get_all_items(object_type)
         matches = [item for item in items
                    if (item.data.get("custom_fields") or {}).get("aws_resource_id") == identity]
