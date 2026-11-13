@@ -104,6 +104,16 @@ For example, the following supplemental policy enables all three:
 }
 ```
 
+The policy includes `s3:GetBucketTagging` for optional S3 tag synchronization.
+If bucket tagging is desired, grant this permission to the inventory role used
+by your AWS profile (or every selected member-account role in organization mode)
+and configure `tag_keys` to select the tags to copy to NetBox.
+
+**Current S3 discovery always requests bucket tags**, even when `tag_keys` is
+empty. Omitting `s3:GetBucketTagging` can therefore cause an authorization denial
+that skips the affected bucket and postpones orphaning/pruning for this source,
+as described below; it does not simply disable tag synchronization.
+
 Where your IAM policy supports resource-level permissions, restrict the
 resource-specific actions to the intended buckets, functions, and EKS resources.
 Listing actions still need their documented wildcard scope. No S3 object reads,
@@ -294,7 +304,9 @@ instances are outside this discovery scope.
 
 Optional resources use `aws_service`, `aws_resource_id`, and `aws_metadata`
 custom fields on VMs, clusters, and virtual disks. Existing unrelated tags are
-preserved. These objects are logical documentation of AWS resources, not
+preserved. AWS timestamps in metadata are stored as ISO 8601 strings; timezone-aware
+timestamps are normalized to UTC. The metadata remains a JSON object.
+These objects are logical documentation of AWS resources, not
 claims that serverless services are virtual servers.
 
 ### Automatic or explicit regions

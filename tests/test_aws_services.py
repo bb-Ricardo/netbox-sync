@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 boto3 = pytest.importorskip("boto3")
 from botocore.stub import Stubber
@@ -105,30 +106,73 @@ def test_services_import_and_repeat(make_source, inventory, version):
     ]
 
 
-def test_eks_timestamps_are_stored_as_json(make_source, inventory):
-    # boto3 parses EKS timestamps into datetime objects in the local timezone
+def test_aws_service_metadata_timestamps_are_json_safe_and_stable(make_source, inventory):
     local = timezone(timedelta(hours=2))
+    timestamp = datetime(2026, 10, 23, 14, 0, 0, 123000, tzinfo=local)
+    expected = "2026-10-23T12:00:00.123000+00:00"
     data = service_data()
-    eks = data["EKSClusters"][0]
-    eks["createdAt"] = datetime(2026, 10, 23, 14, 0, 0, 123000, tzinfo=local)
-    eks["nodegroups"][0]["modifiedAt"] = datetime(2026, 10, 24, 2, 0, tzinfo=local)
-    eks["fargateProfiles"][0]["createdAt"] = datetime(2026, 10, 24, 2, 0, tzinfo=local)
-    # with S3 the bucket holder VM exists before the EKS worker is looked up by name
-    source = make_source("sync_s3 = True\nsync_eks = True\nsync_private_ips = False", data=data)
+    data["EKSClusters"][0]["createdAt"] = timestamp
+    data["EKSClusters"][0]["nodegroups"][0]["modifiedAt"] = timestamp
+    data["EKSClusters"][0]["fargateProfiles"][0]["createdAt"] = timestamp
+    data["Buckets"][0]["CreationDate"] = timestamp
+    data["Functions"][0]["nested"] = {"updates": [timestamp]}
+    original = copy.deepcopy(data)
+    source = make_source("sync_s3 = True\nsync_lambda = True\nsync_eks = True", data=data)
     source.apply()
-
-    cluster = next(item for item in inventory.get_all_items(NBCluster)
-                   if item.data.get("custom_fields", {}).get("aws_service") == "eks")
-    metadata = cluster.data["custom_fields"]["aws_metadata"]
-    assert metadata["createdAt"] == "2026-10-23T12:00:00.123000+00:00"
-    assert metadata["nodegroups"][0]["modifiedAt"] == "2026-10-24T00:00:00+00:00"
-    assert metadata["fargateProfiles"][0]["createdAt"] == "2026-10-24T00:00:00+00:00"
-
-    # the request body sent to NetBox, read back on the next run
-    cluster.data["custom_fields"] = json.loads(json.dumps(cluster.data["custom_fields"], allow_nan=False))
-    cluster.updated_items = []
+    objects = [
+        item for object_type in (NBCluster, NBVM, NBVirtualDisk)
+        for item in inventory.get_all_items(object_type)
+        if "aws_metadata" in (item.data.get("custom_fields") or {})
+    ]
+    for item in objects:
+        fields = item.data["custom_fields"]
+        request = requests.Request("PATCH", "https://netbox.example.invalid/api/", json={
+            "custom_fields": fields,
+        }).prepare()
+        assert json.loads(request.body)["custom_fields"] == fields
+    eks = next(item for item in objects if item.data["custom_fields"]["aws_resource_id"] == CLUSTER_ARN)
+    metadata = eks.data["custom_fields"]["aws_metadata"]
+    assert metadata["createdAt"] == expected
+    assert metadata["nodegroups"][0]["modifiedAt"] == expected
+    assert metadata["fargateProfiles"][0]["createdAt"] == expected
+    bucket = next(item for item in objects if isinstance(item, NBVirtualDisk)
+                  and item.data["custom_fields"]["aws_service"] == "s3")
+    assert bucket.data["custom_fields"]["aws_metadata"]["CreationDate"] == expected
+    function = next(item for item in objects if item.data["custom_fields"]["aws_resource_id"] == FUNCTION_ARN)
+    assert function.data["custom_fields"]["aws_metadata"]["nested"]["updates"] == [expected]
+    for key in ("EKSClusters", "Buckets", "Functions"):
+        assert data[key] == original[key]
+    before = [copy.deepcopy(item.data["custom_fields"]) for item in objects]
+    for item in objects:
+        item.updated_items.clear()
     source.apply()
-    assert "custom_fields" not in cluster.updated_items
+    assert [item.data["custom_fields"] for item in objects] == before
+    assert all("custom_fields" not in item.updated_items for item in objects)
+
+
+@pytest.mark.parametrize("existing_id", [None, "", "   "])
+def test_service_object_adopts_only_managed_legacy_resource(make_source, inventory, existing_id):
+    source = make_source("sync_lambda = True")
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": "legacy"})
+    cluster = inventory.add_object(NBCluster, data={
+        "name": "legacy-cluster", "group": group,
+    })
+    existing = inventory.add_object(NBVM, data={
+        "name": "Lambda old", "cluster": cluster, "tags": [source.source_tag],
+        "custom_fields": {"aws_resource_id": existing_id, "aws_service": "lambda"},
+    })
+    data = {
+        "name": "Lambda old", "cluster": cluster,
+        "custom_fields": {"aws_resource_id": FUNCTION_ARN, "aws_service": "lambda",
+                          "aws_metadata": {"createdAt": datetime(2026, 1, 1, tzinfo=timezone.utc)}},
+        "tags": [],
+    }
+    assert source.service_object(NBVM, FUNCTION_ARN, data) is existing
+    assert existing.data["custom_fields"]["aws_resource_id"] == FUNCTION_ARN
+    assert existing.data["custom_fields"]["aws_metadata"]["createdAt"] == "2026-01-01T00:00:00+00:00"
+    assert isinstance(data["custom_fields"]["aws_metadata"]["createdAt"], datetime)
+    assert len(inventory.get_all_items(NBVM)) == 1
 
 
 def test_s3_requires_supported_netbox_before_discovery(make_source, inventory, caplog):
@@ -282,12 +326,12 @@ def test_s3_conflict_skips_dependencies_but_continues(make_source, inventory, ca
     cluster = inventory.add_object(NBCluster, data={
         "name": f"S3 {ACCOUNT}/{REGION}", "group": group,
         "custom_fields": {} if stage == "cluster" else {"aws_resource_id": identity},
-    }, source=source)
+    }, source=None if stage == "cluster" else source)
     if stage != "cluster":
         holder = inventory.add_object(NBVM, data={
             "name": f"S3 inventory {ACCOUNT}/{REGION}", "cluster": cluster,
             "custom_fields": {} if stage == "holder" else {"aws_resource_id": identity},
-        }, source=source)
+        }, source=None if stage == "holder" else source)
         if stage == "bucket":
             inventory.add_object(NBVirtualDisk, data={
                 "name": "inventory-bucket", "virtual_machine": holder, "size": 0,
