@@ -6,6 +6,7 @@ Available source types:
 * VMware vCenter Server
 * AWS EC2, EBS, and network interfaces, with opt-in S3, Lambda, and EKS inventory (see [AWS source](docs/source_aws.md))
 * oVirt / Red Hat Virtualization (see [oVirt source](docs/source_ovirt.md))
+* OpenStack (optional `openstacksdk` dependency; see [OpenStack source](docs/source_openstack.md))
 * [bb-ricardo/check_redfish](https://github.com/bb-Ricardo/check_redfish) inventory files
 * [DigitalOcean](docs/source_digitalocean.md)
 
@@ -48,6 +49,9 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 #### Source: oVirt (if used)
 * oVirt / Red Hat Virtualization Engine v4 API
 * Optional SDK and native libraries: see [installation and configuration](docs/source_ovirt.md)
+#### Source: OpenStack (if used)
+* Identity v3, Nova and Cinder APIs; `openstacksdk>=4.0,<5`
+* See [OpenStack installation and configuration](docs/source_openstack.md) for credentials, permissions, and inventory mapping
 
 # Installing
 * here we assume we install in ```/opt```
