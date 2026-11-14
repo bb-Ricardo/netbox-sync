@@ -90,6 +90,8 @@ def test_discovery_uses_current_inventory_apis(cloud, netbox_version):
     handler = OpenStackHandler("cloud")
     assert handler.init_successful
     assert cloud.sdk.connect.call_args.kwargs["verify"] is True
+    assert cloud.sdk.connect.call_args.kwargs["load_yaml_config"] is False
+    assert cloud.sdk.connect.call_args.kwargs["load_envvars"] is False
     handler.apply()
     cluster = handler.get_object_from_cache(NBCluster, "zone.example")
     assert cluster.get_site_name() == "Cloud"
@@ -148,7 +150,8 @@ def test_registration_authentication_and_project_scope(cloud):
     cloud.sdk.connect.assert_called_once_with(
         auth_url=cloud.settings["auth_url"], project_name="admin", username="sync",
         password="test-only", region_name="RegionOne", user_domain_name="Default",
-        project_domain_name="Default", verify=False, app_name="netbox-sync", app_version="0.1",
+        project_domain_name="Default", verify=False, load_yaml_config=False, load_envvars=False,
+        app_name="netbox-sync", app_version="0.1",
     )
     cloud.session.authorize.assert_called_once()
     handler.apply()
@@ -277,6 +280,79 @@ def test_interface_names_and_host_interface_type_are_preserved(cloud):
 
     assert vm_nic.data["name"] == "vNIC2 (secondary)"
     assert host_interface.data["type"] == "1000base-t"
+
+
+def test_detaching_first_port_keeps_second_port_interface_and_ip(cloud):
+    first = {"addr": "10.0.0.41", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:01"}
+    second = {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:02"}
+    cloud.session.compute.servers.return_value = [server(addresses={"private": [first, second]})]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+
+    vm = cloud.inventory.get_all_items(NBVM)[0]
+    second_interface = next(interface for interface in cloud.inventory.get_all_interfaces(vm)
+                            if interface.data["name"] == "vNIC2 (private)")
+    cloud.session.compute.servers.return_value = [server(addresses={"private": [second]})]
+    handler.apply()
+
+    assert second_interface.data["name"] == "vNIC2 (private)"
+    assert {ip.data["address"] for ip in second_interface.get_ip_addresses()} == {"10.0.0.42/32"}
+
+
+def test_replacing_private_port_with_public_port_renames_interface(cloud):
+    private = {"addr": "10.0.0.41", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:01"}
+    public = {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:02"}
+    cloud.session.compute.servers.return_value = [server(addresses={"private": [private]})]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+
+    vm = cloud.inventory.get_all_items(NBVM)[0]
+    interface = cloud.inventory.get_all_interfaces(vm)[0]
+    cloud.session.compute.servers.return_value = [server(addresses={"public": [public]})]
+    handler.apply()
+
+    assert interface.data["name"] == "vNIC1 (public)"
+    assert interface.data["description"] == "vNIC1 (public)"
+    assert "10.0.0.42/32" in {ip.data["address"] for ip in interface.get_ip_addresses()}
+
+
+@pytest.mark.parametrize("all_projects, expected_vm_name", [
+    (True, "replacement.example.org"),
+    (False, "deleted.example.org"),
+])
+def test_stale_ip_repair_requires_complete_all_projects_discovery(cloud, all_projects, expected_vm_name):
+    cloud.settings["all_projects"] = all_projects
+    old_id = "00000000-0000-0000-0000-000000000001"
+    new_id = "00000000-0000-0000-0000-000000000002"
+    old_port = {
+        "addr": "10.0.0.42", "version": 4,
+        "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:01",
+    }
+    cloud.session.compute.servers.return_value = [
+        server(id=old_id, name="deleted.example.org", addresses={"private": [old_port]})
+    ]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+    old_vm = cloud.inventory.get_all_items(NBVM)[0]
+    stale_ip = old_vm.data["primary_ip4"]
+    old_vm.add_tags(handler.source_tag)
+    stale_ip.add_tags(handler.source_tag)
+    old_vm.source = None
+    stale_ip.source = None
+
+    replacement = [
+        {"addr": "10.0.0.43", "version": 4,
+         "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:02"},
+        {"addr": "10.0.0.42", "version": 4,
+         "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:03"},
+    ]
+    cloud.session.compute.servers.return_value = [
+        server(id=new_id, name="replacement.example.org", addresses={"private": replacement})
+    ]
+    handler.apply()
+
+    assigned_vm = stale_ip.get_device_vm()
+    assert assigned_vm.data["name"] == expected_vm_name
 
 
 def test_network_ports_invalid_addresses_and_floating_primary_preference(cloud):
