@@ -8,9 +8,11 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import pprint
+from collections import Counter
 from ipaddress import ip_interface
 from importlib import import_module
 from urllib.parse import unquote
+from uuid import UUID
 
 from packaging import version
 
@@ -20,6 +22,7 @@ from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none
 from module.common.support import normalize_mac_address
 from module.netbox.inventory import NetBoxInventory
+from module.netbox.connection import NetBoxHandler
 from module.netbox import *
 
 log = get_logger()
@@ -71,6 +74,8 @@ class OpenStackHandler(SourceBase):
         self.inventory = NetBoxInventory()
         self.name = name
         self.session = None
+        self._server_snapshot_ids = None
+        self._server_ip_counts = Counter()
         self.init_successful = False
 
         # parse settings
@@ -122,6 +127,8 @@ class OpenStackHandler(SourceBase):
 
         try:
             self.session = openstack.connect(
+                load_yaml_config=False,
+                load_envvars=False,
                 auth_url=self.settings.auth_url,
                 project_name=self.settings.project,
                 username=self.settings.username,
@@ -156,6 +163,8 @@ class OpenStackHandler(SourceBase):
         Every update of new/existing objects fot this source has to happen here.
         """
 
+        self._server_snapshot_ids = None
+        self._server_ip_counts.clear()
         log.info(f"Query data from OpenStack: '{self.settings.auth_url}'")
         self.permitted_clusters.clear()
         self.cluster_host_map.clear()
@@ -178,12 +187,104 @@ class OpenStackHandler(SourceBase):
         for volume in volumes:
             self.add_volume(volume)
 
-        servers = self.session.compute.servers(details=True, all_projects=self.settings.all_projects)
+        servers = list(self.session.compute.servers(details=True, all_projects=self.settings.all_projects))
+        snapshot_ids = set()
+        for server in servers:
+            try:
+                snapshot_ids.add(str(UUID(str(server.id))))
+            except (ValueError, AttributeError):
+                log.warning("OpenStack server snapshot contains an invalid UUID; stale IP repair is disabled.")
+                break
+        else:
+            self._server_snapshot_ids = snapshot_ids
+        for server in servers:
+            addresses = set()
+            for network_addresses in (grab(server, "addresses") or {}).values():
+                for address in network_addresses:
+                    try:
+                        addresses.add(str(ip_interface(address["addr"]).ip))
+                    except (KeyError, ValueError):
+                        continue
+            self._server_ip_counts.update(addresses)
         # Prefer an already-associated server before using status to break ties.
-        for server in sorted(servers, key=self.get_server_priority):
-            self.add_virtual_machine(server)
+        try:
+            for server in sorted(servers, key=self.get_server_priority):
+                self.add_virtual_machine(server)
 
-        self.update_basic_data()
+            self.update_basic_data()
+        finally:
+            self._server_snapshot_ids = None
+
+    def can_reassign_stale_ip(self, ip, device_vm_object):
+        def blocked(reason):
+            log.warning(
+                f"OpenStack source '{self.name}': stale IP repair blocked for "
+                f"'{ip.data['address']}' (NetBox IP ID {ip.nb_id}): {reason}."
+            )
+            return False
+
+        if self._server_snapshot_ids is None:
+            return blocked("no complete server UUID snapshot is available")
+        if not self.settings.all_projects:
+            return blocked("all_projects is False; absence from this project does not prove deletion")
+        old_vm = ip.get_device_vm()
+        if not isinstance(old_vm, NBVM) or not isinstance(device_vm_object, NBVM):
+            return blocked("both owners must be virtual machines")
+        if old_vm.source is not None:
+            return blocked(
+                f"old VM '{old_vm.get_display_name()}' (NetBox VM ID {old_vm.nb_id}) "
+                f"was claimed this run by source '{getattr(old_vm.source, 'name', None)}'"
+            )
+        if device_vm_object.source is not self:
+            return blocked("the target VM is not owned by this source in this run")
+        recovered_orphan_ownership = False
+        for item in (ip, old_vm):
+            source_tags = {tag for tag in item.get_tags() if tag.startswith("Source: ")}
+            if source_tags != {self.source_tag}:
+                if source_tags or NetBoxHandler.orphaned_tag not in item.get_tags():
+                    return blocked(
+                        f"{item.name} '{item.get_display_name()}' (NetBox ID {item.nb_id}) has "
+                        f"source tags {sorted(source_tags)}; expected only '{self.source_tag}' "
+                        "or an orphaned record with verified cluster ownership"
+                    )
+                recovered_orphan_ownership = True
+        if recovered_orphan_ownership:
+            cluster = old_vm.data.get("cluster")
+            cluster_tags = {tag for tag in cluster.get_tags() if tag.startswith("Source: ")} \
+                if isinstance(cluster, NBCluster) else set()
+            if not isinstance(cluster, NBCluster) or cluster.source is not self or \
+                    cluster_tags != {self.source_tag} or \
+                    self.get_object_from_cache(NBCluster, cluster.data.get("name")) is not cluster or \
+                    grab(cluster, "data.group.data.name") != self.settings.group_name:
+                return blocked("orphaned records lack an exclusively source-owned cluster in current discovery")
+        if ip.source is not None and ip.source is not self:
+            return blocked(f"IP was claimed by another source '{getattr(ip.source, 'name', None)}'")
+        identity_key = "name" if self.settings.set_vm_name_to_uuid else "comments"
+        identities = []
+        for vm in (old_vm, device_vm_object):
+            try:
+                identities.append(str(UUID(str(vm.data.get(identity_key)))))
+            except ValueError:
+                return blocked(
+                    f"VM '{vm.get_display_name()}' (NetBox VM ID {vm.nb_id}) has no valid "
+                    f"server UUID in '{identity_key}'"
+                )
+        old_id, current_id = identities
+        address = str(ip_interface(ip.data["address"]).ip)
+        if old_id in self._server_snapshot_ids:
+            return blocked(f"old server UUID {old_id} is still present in discovery")
+        if current_id not in self._server_snapshot_ids:
+            return blocked(f"target server UUID {current_id} is absent from discovery")
+        if self._server_ip_counts[address] != 1:
+            return blocked(f"{self._server_ip_counts[address]} discovered servers report this IP; expected one")
+        log.info(
+            f"Reclaiming OpenStack IP '{ip.data['address']}' (NetBox ID {ip.nb_id}) from VM "
+            f"'{old_vm.get_display_name()}' (UUID {old_id}), absent from the complete server snapshot, "
+            f"to '{device_vm_object.get_display_name()}' (UUID {current_id}) for source '{self.name}'."
+            + (" Recovered missing orphan Source tags using verified cluster ownership."
+               if recovered_orphan_ownership else "")
+        )
+        return True
 
     @staticmethod
     def passes_filter(name, include_filter, exclude_filter):
@@ -675,6 +776,50 @@ class OpenStackHandler(SourceBase):
         if exclude_filter is not None:
             nic_data = {name: data for name, data in nic_data.items() if not exclude_filter.match(name)}
 
+        mac_matched_interfaces = set()
+        if object_type == NBVM:
+            current_by_mac = {}
+            for interface in self.inventory.get_all_interfaces(device_vm_object):
+                existing_name = grab(interface, "data.name")
+                if exclude_filter is not None and existing_name is not None and exclude_filter.match(existing_name):
+                    continue
+                if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+                    mac = grab(interface, "data.primary_mac_address.data.mac_address")
+                else:
+                    mac = grab(interface, "data.mac_address")
+                if mac:
+                    current_by_mac.setdefault(normalize_mac_address(mac), []).append(interface)
+            names_by_mac = {}
+            for int_name, int_data in nic_data.items():
+                mac = int_data.get("mac_address")
+                matches = current_by_mac.get(normalize_mac_address(mac), []) if mac else []
+                if len(matches) > 1:
+                    message = f"Multiple interfaces of OpenStack VM '{object_name}' match MAC '{mac}'."
+                    log.error(message)
+                    raise ValueError(message)
+                if matches:
+                    names_by_mac[int_name] = matches[0].data["name"]
+                    mac_matched_interfaces.add(matches[0])
+            used_names = set(names_by_mac.values())
+            remapped_data = {}
+            remapped_ips = {}
+            for int_name, int_data in nic_data.items():
+                target_name = names_by_mac.get(int_name, int_name)
+                if int_name not in names_by_mac:
+                    index = 1
+                    network_label = int_name.partition(" ")[2]
+                    while target_name in used_names:
+                        target_name = f"vNIC{index} {network_label}"
+                        index += 1
+                used_names.add(target_name)
+                if int_name not in names_by_mac:
+                    int_data["description"] = target_name
+                int_data["name"] = target_name
+                remapped_data[target_name] = int_data
+                remapped_ips[target_name] = nic_ips.get(int_name, [])
+            nic_data = remapped_data
+            nic_ips = remapped_ips
+
         # map interfaces of existing object with discovered interfaces
         nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
 
@@ -700,7 +845,8 @@ class OpenStackHandler(SourceBase):
             existing_interface = nic_object_dict.get(int_name)
             if existing_interface is not None:
                 existing_name = grab(existing_interface, "data.name")
-                if existing_name is not None:
+                if existing_name is not None and (
+                        object_type == NBDevice or existing_interface in mac_matched_interfaces):
                     int_data["name"] = existing_name
                 if object_type == NBDevice:
                     int_data.pop("type", None)
