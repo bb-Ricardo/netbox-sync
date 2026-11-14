@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2021 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -7,1439 +7,883 @@
 #  For a copy, see file LICENSE.txt included in this
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
-import pprint
-from collections import Counter
-from ipaddress import ip_interface
-from importlib import import_module
-from urllib.parse import unquote
-from uuid import UUID
+from datetime import datetime, timezone
+from hashlib import sha256
+from ipaddress import ip_address, ip_interface, ip_network
+from itertools import product
 
-from packaging import version
+from packaging.version import Version
 
-from module.sources.common.source_base import SourceBase
-from module.sources.openstack.config import OpenStackConfig
-from module.common.logging import get_logger, DEBUG3
-from module.common.misc import grab, dump, get_string_or_none
+from module.common.logging import get_logger
+from module.common.misc import do_error_exit
 from module.common.support import normalize_mac_address
+from module.netbox import (
+    NBCustomField, NBCluster, NBClusterGroup, NBClusterType, NBIPAddress,
+    NBMACAddress, NBSite, NBTag, NBTenant, NBVirtualDisk, NBVM, NBVMInterface, NBVRF,
+)
 from module.netbox.inventory import NetBoxInventory
 from module.netbox.connection import NetBoxHandler
-from module.netbox import *
+from module.sources.aws.client import AWSClient, AWSDiscoveryError
+from module.sources.aws.config import AWSConfig
+from module.sources.common.source_base import SourceBase
 
 log = get_logger()
 
 
-# noinspection PyTypeChecker
-class OpenStackHandler(SourceBase):
+def json_safe(value):
     """
-    Source class to import data from a Openstack instance and add/update NetBox objects based on gathered information
+    boto3 returns timestamps (EKS createdAt, modifiedAt, ...) as datetime objects. A NetBox
+    JSON field only takes plain JSON, so store them as ISO 8601 strings in UTC; the local
+    timezone of the host running the sync must not change the stored value.
     """
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat()
+    return value
 
+
+class AWSHandler(SourceBase):
+    source_type = "aws"
     dependent_netbox_objects = [
-        NBTag,
-        NBManufacturer,
-        NBDeviceType,
-        NBPlatform,
-        NBClusterType,
-        NBClusterGroup,
-        NBDeviceRole,
-        NBSite,
-        NBCluster,
-        NBDevice,
-        NBVM,
-        NBVirtualDisk,
-        NBVMInterface,
-        NBInterface,
-        NBIPAddress,
-        NBPrefix,
-        NBTenant,
-        NBVRF,
-        NBVLAN,
-        NBVLANGroup,
-        NBMACAddress,
-        NBFHRPGroupItem,
-        NBCustomField
+        NBTag, NBCustomField, NBTenant, NBSite, NBClusterGroup, NBClusterType,
+        NBCluster, NBVM, NBVMInterface, NBMACAddress, NBIPAddress, NBVRF, NBVirtualDisk,
     ]
 
-    source_type = "openstack"
-
-    # internal vars
-    session = None
-    site_name = None
-
     def __init__(self, name=None):
-
-        if name is None:
-            raise ValueError(f"Invalid value for attribute 'name': '{name}'.")
-
-        self.inventory = NetBoxInventory()
+        if not name:
+            raise ValueError(f"Invalid source name '{name}'.")
         self.name = name
-        self.session = None
-        self._server_snapshot_ids = None
-        self._server_ip_counts = Counter()
-        self.init_successful = False
-
-        # parse settings
-        settings_handler = OpenStackConfig()
-        settings_handler.source_name = self.name
-        self.settings = settings_handler.parse()
-
+        self.inventory = NetBoxInventory()
+        config = AWSConfig()
+        config.source_name = name
+        self.settings = config.parse()
         self.set_source_tag()
-        self.site_name = f"OpenStack: {name}"
-
-        if self.settings.enabled is False:
-            log.info(f"Source '{name}' is currently disabled. Skipping")
+        self.init_successful = False
+        if not self.settings.enabled:
+            log.info(f"Source '{name}' is disabled. Skipping.")
             return
-
-        self.create_openstack_session()
-
-        if self.session is None:
-            log.info(f"Source '{name}' is currently unavailable. Skipping")
-            return
-
+        try:
+            self.client = AWSClient(profile=self.settings.profile)
+        except AWSDiscoveryError as exc:
+            self.abort(exc)
         self.init_successful = True
-        self.permitted_clusters = dict()
-        self.cluster_host_map = dict()
-        self.volume_map = dict()
-        self.processed_host_names = dict()
-        self.processed_vm_names = dict()
-        self.object_cache = dict()
 
-    def create_openstack_session(self):
-        """
-        Initialize session with OpenStack
-
-        Returns
-        -------
-        bool: if initialization was successful or not
-        """
-
-        if self.session is not None:
-            return True
-
-        log.debug(f"Starting OpenStack connection to '{self.settings.auth_url}'")
-
-        try:
-            openstack = import_module("openstack")
-        except ImportError:
-            log.error("OpenStack source requires openstacksdk. Install with "
-                      "'pip install -r requirements-openstack.txt' or 'uv sync --extra openstack'.")
-            return False
-
-        try:
-            self.session = openstack.connect(
-                load_yaml_config=False,
-                load_envvars=False,
-                auth_url=self.settings.auth_url,
-                project_name=self.settings.project,
-                username=self.settings.username,
-                password=self.settings.password,
-                region_name=self.settings.region,
-                user_domain_name=self.settings.user_domain,
-                project_domain_name=self.settings.project_domain,
-                verify=self.settings.validate_tls_certs,
-                app_name='netbox-sync',
-                app_version='0.1',
-            )
-            self.session.authorize()
-        except Exception as e:
-            log.error(f"Unable to connect to OpenStack instance '{self.settings.auth_url}': {e}")
-            self.finish()
-            return False
-
-        log.info(f"Successfully connected to OpenStack '{self.settings.auth_url}'")
-
-        return True
-
-    def finish(self):
-        if self.session is not None:
-            self.session.close()
-            self.session = None
+    def abort(self, error):
+        message = f"AWS source '{self.name}': {error}. No NetBox writes or pruning will be performed."
+        log.error(message)
+        do_error_exit(message)
 
     def apply(self):
-        """
-        Main source handler method. This method is called for each source from "main" program
-        to retrieve data from it source and apply it to the NetBox inventory.
-
-        Every update of new/existing objects fot this source has to happen here.
-        """
-
-        self._server_snapshot_ids = None
-        self._server_ip_counts.clear()
-        log.info(f"Query data from OpenStack: '{self.settings.auth_url}'")
-        self.permitted_clusters.clear()
-        self.cluster_host_map.clear()
-        self.volume_map.clear()
-        self.processed_host_names.clear()
-        self.processed_vm_names.clear()
-        self.object_cache.clear()
-
-        self.inventory.add_update_object(NBClusterGroup, data={"name": self.settings.group_name}, source=self)
-
-        availability_zones = self.session.compute.availability_zones(details=True)
-        for availability_zone in availability_zones:
-            self.add_cluster(availability_zone)
-
-        hypervisors = self.session.compute.hypervisors(details=True)
-        for hypervisor in hypervisors:
-            self.add_host(hypervisor)
-
-        volumes = self.session.block_storage.volumes(details=True, all_projects=self.settings.all_projects)
-        for volume in volumes:
-            self.add_volume(volume)
-
-        servers = list(self.session.compute.servers(details=True, all_projects=self.settings.all_projects))
-        snapshot_ids = set()
-        for server in servers:
-            try:
-                snapshot_ids.add(str(UUID(str(server.id))))
-            except (ValueError, AttributeError):
-                log.warning("OpenStack server snapshot contains an invalid UUID; stale IP repair is disabled.")
-                break
-        else:
-            self._server_snapshot_ids = snapshot_ids
-        for server in servers:
-            addresses = set()
-            for network_addresses in (grab(server, "addresses") or {}).values():
-                for address in network_addresses:
-                    try:
-                        addresses.add(str(ip_interface(address["addr"]).ip))
-                    except (KeyError, ValueError):
-                        continue
-            self._server_ip_counts.update(addresses)
-        # Prefer an already-associated server before using status to break ties.
         try:
-            for server in sorted(servers, key=self.get_server_priority):
-                self.add_virtual_machine(server)
-
-            self.update_basic_data()
-        finally:
-            self._server_snapshot_ids = None
-
-    def can_reassign_stale_ip(self, ip, device_vm_object):
-        def blocked(reason):
-            log.warning(
-                f"OpenStack source '{self.name}': stale IP repair blocked for "
-                f"'{ip.data['address']}' (NetBox IP ID {ip.nb_id}): {reason}."
-            )
-            return False
-
-        if self._server_snapshot_ids is None:
-            return blocked("no complete server UUID snapshot is available")
-        if not self.settings.all_projects:
-            return blocked("all_projects is False; absence from this project does not prove deletion")
-        old_vm = ip.get_device_vm()
-        if not isinstance(old_vm, NBVM) or not isinstance(device_vm_object, NBVM):
-            return blocked("both owners must be virtual machines")
-        if old_vm.source is not None:
-            return blocked(
-                f"old VM '{old_vm.get_display_name()}' (NetBox VM ID {old_vm.nb_id}) "
-                f"was claimed this run by source '{getattr(old_vm.source, 'name', None)}'"
-            )
-        if device_vm_object.source is not self:
-            return blocked("the target VM is not owned by this source in this run")
-        recovered_orphan_ownership = False
-        for item in (ip, old_vm):
-            source_tags = {tag for tag in item.get_tags() if tag.startswith("Source: ")}
-            if source_tags != {self.source_tag}:
-                if source_tags or NetBoxHandler.orphaned_tag not in item.get_tags():
-                    return blocked(
-                        f"{item.name} '{item.get_display_name()}' (NetBox ID {item.nb_id}) has "
-                        f"source tags {sorted(source_tags)}; expected only '{self.source_tag}' "
-                        "or an orphaned record with verified cluster ownership"
-                    )
-                recovered_orphan_ownership = True
-        if recovered_orphan_ownership:
-            cluster = old_vm.data.get("cluster")
-            cluster_tags = {tag for tag in cluster.get_tags() if tag.startswith("Source: ")} \
-                if isinstance(cluster, NBCluster) else set()
-            if not isinstance(cluster, NBCluster) or cluster.source is not self or \
-                    cluster_tags != {self.source_tag} or \
-                    self.get_object_from_cache(NBCluster, cluster.data.get("name")) is not cluster or \
-                    grab(cluster, "data.group.data.name") != self.settings.group_name:
-                return blocked("orphaned records lack an exclusively source-owned cluster in current discovery")
-        if ip.source is not None and ip.source is not self:
-            return blocked(f"IP was claimed by another source '{getattr(ip.source, 'name', None)}'")
-        identity_key = "name" if self.settings.set_vm_name_to_uuid else "comments"
-        identities = []
-        for vm in (old_vm, device_vm_object):
-            try:
-                identities.append(str(UUID(str(vm.data.get(identity_key)))))
-            except ValueError:
-                return blocked(
-                    f"VM '{vm.get_display_name()}' (NetBox VM ID {vm.nb_id}) has no valid "
-                    f"server UUID in '{identity_key}'"
-                )
-        old_id, current_id = identities
-        address = str(ip_interface(ip.data["address"]).ip)
-        if old_id in self._server_snapshot_ids:
-            return blocked(f"old server UUID {old_id} is still present in discovery")
-        if current_id not in self._server_snapshot_ids:
-            return blocked(f"target server UUID {current_id} is absent from discovery")
-        if self._server_ip_counts[address] != 1:
-            return blocked(f"{self._server_ip_counts[address]} discovered servers report this IP; expected one")
-        log.info(
-            f"Reclaiming OpenStack IP '{ip.data['address']}' (NetBox ID {ip.nb_id}) from VM "
-            f"'{old_vm.get_display_name()}' (UUID {old_id}), absent from the complete server snapshot, "
-            f"to '{device_vm_object.get_display_name()}' (UUID {current_id}) for source '{self.name}'."
-            + (" Recovered missing orphan Source tags using verified cluster ownership."
-               if recovered_orphan_ownership else "")
-        )
-        return True
-
-    @staticmethod
-    def passes_filter(name, include_filter, exclude_filter):
-        """
-        checks if object name passes a defined object filter.
-
-        Parameters
-        ----------
-        name: str
-            name of the object to check
-        include_filter: regex object
-            regex object of include filter
-        exclude_filter: regex object
-            regex object of exclude filter
-
-        Returns
-        -------
-        bool: True if all filter passed, otherwise False
-        """
-
-        # first includes
-        if include_filter is not None and not include_filter.match(name):
-            log.debug(f"Object '{name}' did not match include filter '{include_filter.pattern}'. Skipping")
-            return False
-
-        # second excludes
-        if exclude_filter is not None and exclude_filter.match(name):
-            log.debug(f"Object '{name}' matched exclude filter '{exclude_filter.pattern}'. Skipping")
-            return False
-
-        return True
-
-    def get_site_name(self, object_type, object_name, cluster_name=""):
-        """
-        Return a site name for a NBCluster or NBDevice depending on config options
-        host_site_relation and cluster_site_relation
-
-        Parameters
-        ----------
-        object_type: (NBCluster, NBDevice)
-            object type to check site relation for
-        object_name: str
-            object name to check site relation for
-        cluster_name: str
-            cluster name of NBDevice to check for site name
-
-        Returns
-        -------
-        str: site name if a relation was found
-        """
-
-        if object_type not in [NBCluster, NBDevice]:
-            raise ValueError(f"Object must be a '{NBCluster.name}' or '{NBDevice.name}'.")
-
-        log.debug2(f"Trying to find site name for {object_type.name} '{object_name}'")
-
-        # check if site was provided in config
-        relation_name = "host_site_relation" if object_type == NBDevice else "cluster_site_relation"
-
-        site_name = self.get_object_relation(object_name, relation_name)
-
-        if object_type == NBDevice and site_name is None:
-            site_name = self.get_site_name(NBCluster, cluster_name)
-            if site_name is not None:
-                log.debug2(f"Found a matching cluster site for {object_name}, using site '{site_name}'")
-
-        # set default site name
-        if site_name is None:
-            site_name = self.site_name
-            log.debug(f"No site relation for '{object_name}' found, using default site '{site_name}'")
-
-        return site_name
-
-    def get_object_based_on_macs(self, object_type, mac_list=None):
-        """
-        Try to find a NetBox object based on list of MAC addresses.
-
-        Iterate over all interfaces of this object type and compare MAC address with list of desired MAC
-        addresses. If match was found store related machine object and count every correct match.
-
-        If exactly one machine with matching interfaces was found then this one will be returned.
-
-        If two or more machines with matching MACs are found compare the two machines with
-        the highest amount of matching interfaces. If the ration of matching interfaces
-        exceeds 2.0 then the top matching machine is chosen as desired object.
-
-        If the ration is below 2.0 then None will be returned. The probability is too low that
-        this one is the correct one.
-
-        None will also be returned if no machine was found at all.
-
-        Parameters
-        ----------
-        object_type: (NBDevice, NBVM)
-            type of NetBox device to find in inventory
-        mac_list: list
-            list of MAC addresses to compare against NetBox interface objects
-
-        Returns
-        -------
-        (NBDevice, NBVM, None): object instance of found device, otherwise None
-        """
-
-        object_to_return = None
-
-        if object_type not in [NBDevice, NBVM]:
-            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
-
-        if mac_list is None or not isinstance(mac_list, list) or len(mac_list) == 0:
-            return
-
-        interface_typ = NBInterface if object_type == NBDevice else NBVMInterface
-
-        objects_with_matching_macs = dict()
-        matching_object = None
-
-        for interface in self.inventory.get_all_items(interface_typ):
-
-            mac_address = grab(interface, "data.primary_mac_address.data.mac_address") or \
-                grab(interface, "data.mac_address")
-            if mac_address in mac_list:
-
-                matching_object = grab(interface, f"data.{interface.secondary_key}")
-                if not isinstance(matching_object, (NBDevice, NBVM)):
-                    continue
-
-                log.debug2("Found matching MAC '%s' on %s '%s'" %
-                           (grab(interface, "data.mac_address"), object_type.name,
-                            matching_object.get_display_name(including_second_key=True)))
-
-                if objects_with_matching_macs.get(matching_object) is None:
-                    objects_with_matching_macs[matching_object] = 1
-                else:
-                    objects_with_matching_macs[matching_object] += 1
-
-        # try to find object based on amount of matching MAC addresses
-        num_devices_witch_matching_macs = len(objects_with_matching_macs.keys())
-
-        if num_devices_witch_matching_macs == 1 and isinstance(matching_object, (NBDevice, NBVM)):
-
-            log.debug2("Found one %s '%s' based on MAC addresses and using it" %
-                       (object_type.name, matching_object.get_display_name(including_second_key=True)))
-
-            object_to_return = list(objects_with_matching_macs.keys())[0]
-
-        elif num_devices_witch_matching_macs > 1:
-
-            log.debug2(f"Found {num_devices_witch_matching_macs} {object_type.name}s with matching MAC addresses")
-
-            # now select the two top matches
-            first_choice, second_choice = \
-                sorted(objects_with_matching_macs, key=objects_with_matching_macs.get, reverse=True)[0:2]
-
-            first_choice_matches = objects_with_matching_macs.get(first_choice)
-            second_choice_matches = objects_with_matching_macs.get(second_choice)
-
-            log.debug2(f"The top candidate {first_choice.get_display_name()} with {first_choice_matches} matches")
-            log.debug2(f"The second candidate {second_choice.get_display_name()} with {second_choice_matches} matches")
-
-            # get ratio between
-            matching_ration = first_choice_matches / second_choice_matches
-
-            # only pick the first one if the ration exceeds 2
-            if matching_ration >= 2.0:
-                log.debug2(f"The matching ratio of {matching_ration} is high enough "
-                           f"to select {first_choice.get_display_name()} as desired {object_type.name}")
-                object_to_return = first_choice
+            if self.settings.sync_s3 and Version(self.inventory.netbox_api_version) < Version("3.7"):
+                raise ValueError("S3 bucket inventory requires NetBox 3.7 or newer")
+            services = tuple(service for service in ("s3", "lambda", "eks")
+                             if getattr(self.settings, f"sync_{service}"))
+            options = {"services": services} if services else {}
+            if self.settings.organization:
+                snapshots = self.client.discover_organization(
+                    self.settings.regions, self.settings.organization_role_name,
+                    expected_account=self.settings.account_id,
+                    discovery_region=self.settings.discovery_region,
+                    include_management=self.settings.organization_include_management,
+                    external_id=self.settings.organization_external_id,
+                    account_ids=self.settings.organization_account_ids, **options)
+                account_names = getattr(self.client, "account_names", {})
             else:
-                log.debug2("Both candidates have a similar amount of "
-                           "matching interface MAC addresses. Using NONE of them!")
-
-        return object_to_return
-
-    def get_object_based_on_primary_ip(self, object_type, primary_ip4=None, primary_ip6=None):
-        """
-        Try to find a NBDevice or NBVM based on the primary IP address. If an exact
-        match was found the device/vm object will be returned immediately without
-        checking of the other primary IP address (if defined).
-
-        Parameters
-        ----------
-        object_type: (NBDevice, NBVM)
-            object type to look for
-        primary_ip4: str
-            primary IPv4 address of object to find
-        primary_ip6: str
-            primary IPv6 address of object to find
-
-        Returns
-        -------
-
-        """
-
-        def _matches_device_primary_ip(device_primary_ip, ip_needle):
-
-            ip = None
-            if device_primary_ip is not None and ip_needle is not None:
-                if isinstance(device_primary_ip, dict):
-                    ip = grab(device_primary_ip, "address")
-
-                elif isinstance(device_primary_ip, NBIPAddress):
-                    ip = device_primary_ip.data.get("address")
-                elif isinstance(device_primary_ip, int):
-                    ip = self.inventory.get_by_id(NBIPAddress, nb_id=device_primary_ip)
-                    ip = grab(ip, "data.address")
-
-                if ip is not None and ip.split("/")[0] == ip_needle:
-                    return True
-
-            return False
-
-        if object_type not in [NBDevice, NBVM]:
-            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
-
-        if primary_ip4 is None and primary_ip6 is None:
-            return
-
-        if primary_ip4 is not None:
-            primary_ip4 = str(primary_ip4).split("/")[0]
-
-        if primary_ip6 is not None:
-            primary_ip6 = str(primary_ip6).split("/")[0]
-
-        for device in self.inventory.get_all_items(object_type):
-
-            if _matches_device_primary_ip(grab(device, "data.primary_ip4"), primary_ip4) is True:
-                log.debug2(f"Found existing host '{device.get_display_name()}' "
-                           f"based on the primary IPv4 '{primary_ip4}'")
-                return device
-
-            if _matches_device_primary_ip(grab(device, "data.primary_ip6"), primary_ip6) is True:
-                log.debug2(f"Found existing host '{device.get_display_name()}' "
-                           f"based on the primary IPv6 '{primary_ip6}'")
-                return device
-
-    def get_object_relation(self, name, relation, fallback=None):
-        """
-
-        Parameters
-        ----------
-        name: str
-            name of the object to find a relation for
-        relation: str
-            name of the config variable relation (i.e: vm_tag_relation)
-        fallback: str
-            fallback string if no relation matched
-
-        Returns
-        -------
-        data: str, list, None
-            string of matching relation or list of matching tags
-        """
-
-        resolved_list = list()
-        for single_relation in grab(self.settings, relation, fallback=list()):
-            object_regex = single_relation.get("object_regex")
-            match_found = False
-            if object_regex.match(name):
-                resolved_name = single_relation.get("assigned_name")
-                log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) for {name}")
-                resolved_list.append(resolved_name)
-                match_found = True
-
-            # special cluster condition
-            if match_found is False and grab(f"{relation}".split("_"), "0") == "cluster":
-
-                stripped_name = "/".join(name.split("/")[1:])
-                if object_regex.match(stripped_name):
-
-                    resolved_name = single_relation.get("assigned_name")
-                    log.debug2(f"Found a matching {relation} '{resolved_name}' ({object_regex.pattern}) "
-                               f"for {stripped_name}")
-                    resolved_list.append(resolved_name)
-
-        if grab(f"{relation}".split("_"), "1") == "tag":
-            return resolved_list
-
-        else:
-            resolved_name = fallback
-            if len(resolved_list) >= 1:
-                resolved_name = resolved_list[0]
-                if len(resolved_list) > 1:
-                    log.debug(f"Found {len(resolved_list)} matches for {name} in {relation}."
-                              f" Using first on: {resolved_name}")
-
-            return resolved_name
-
-    def get_cluster_for_host(self, hostname):
-        for cluster, hosts in self.cluster_host_map.items():
-            if hostname in hosts:
-                return cluster
-        return None
-
-    def get_server_priority(self, server):
-        name = get_string_or_none(grab(server, "name"))
-        if name is not None and self.settings.strip_vm_domain_name:
-            name = name.split(".")[0]
-        if self.settings.set_vm_name_to_uuid:
-            name = get_string_or_none(grab(server, "id"))
-
-        cluster_name = get_string_or_none(grab(server, "availability_zone"))
-        cluster = self.get_object_from_cache(NBCluster, cluster_name)
-        if name is not None and cluster is not None and not self.settings.skip_vm_comments:
-            existing_vm = self.inventory.get_by_data(
-                NBVM, data={"name": name, "cluster": cluster}
-            )
-            if grab(existing_vm, "data.comments") == get_string_or_none(grab(server, "id")):
-                return 0, server.status != "ACTIVE"
-
-        return 1, server.status != "ACTIVE"
-
-    @staticmethod
-    def get_compute_host_names(hosts):
-        compute_host_names = []
-        for hostname, services in (hosts or {}).items():
-            if not isinstance(services, dict) or not services:
-                compute_host_names.append(hostname)
-                continue
-
-            service_names = {str(name).lower() for name in services}
-            service_names.update(
-                str(grab(service, "binary", fallback="")).lower()
-                for service in services.values()
-            )
-            has_nova_services = any(name.startswith("nova-") for name in service_names)
-            if not has_nova_services or "nova-compute" in service_names:
-                compute_host_names.append(hostname)
-
-        return compute_host_names
-
-    def object_synced_by_other_source(self, nb_object):
-        if nb_object.source is not None:
-            return nb_object.source is not self
-        other_tags = [source.source_tag for source in self.inventory.source_list if source is not self]
-        return bool(set(nb_object.get_tags()).intersection(other_tags))
-
-    def add_custom_attributes(self, object_type, obj, data):
-        attributes = self.settings.host_custom_object_attributes if object_type == NBDevice else \
-            self.settings.vm_custom_object_attributes
-        for attribute in attributes or []:
-            value = grab(obj, attribute)
-            if value is None:
-                continue
-            field = self.add_update_custom_field({
-                "name": f"openstack_{attribute}", "label": attribute[:50],
-                "object_types": [object_type.object_type], "type": "text",
-                "description": f"OpenStack resource attribute '{attribute}'",
-            })
-            data.setdefault("custom_fields", {})[field.data["name"]] = str(value)
-
-    def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
-                                   nic_ips=None, p_ipv4=None, p_ipv6=None):
-        """
-        Add/update device/VM object in inventory based on gathered data.
-
-        Try to find object first based on the object data, interface MAC addresses and primary IPs.
-            1. try to find by name and cluster/site
-            2. try to find by mac addresses interfaces
-            3. try to find by primary IP
-
-        IP addresses for each interface are added here as well. First they will be checked and added
-        if all checks pass. For each IP address a matching IP prefix will be searched for. First we
-        look for longest matching IP Prefix in the same site. If this failed we try to find the longest
-        matching global IP Prefix.
-
-        If a IP Prefix was found then we try to get the VRF and VLAN for this prefix. Now we compare
-        if interface VLAN and prefix VLAN match up and warn if they don't. Then we try to add data to
-        the IP address if not already set:
-
-            add prefix VRF if VRF for this IP is undefined
-            add tenant if tenant for this IP is undefined
-                1. try prefix tenant
-                2. if prefix tenant is undefined try VLAN tenant
-
-        And we also set primary IP4/6 for this object depending on the "set_primary_ip" setting.
-
-        If a IP address is set as primary IP for another device then using this IP on another
-        device will be rejected by NetBox.
-
-        Setting "always":
-            check all NBDevice and NBVM objects if this IP address is set as primary IP to any
-            other object then this one. If we found another object, then we unset the primary_ip*
-            for the found object and assign it to this object.
-
-            This setting will also reset the primary IP if it has been changed in NetBox
-
-        Setting "when-undefined":
-            Will set the primary IP for this object if primary_ip4/6 is undefined. Will cause a
-            NetBox error if IP has been assigned to a different object as well
-
-        Setting "never":
-            Well, the attribute primary_ip4/6 will never be touched/changed.
-
-        Parameters
-        ----------
-        object_type: (NBDevice, NBVM)
-            NetBoxObject sub class of object to add
-        object_data: dict
-            data of object to add/update
-        pnic_data: dict
-            data of physical interfaces of this object, interface name as key
-        vnic_data: dict
-            data of virtual interfaces of this object, interface name as key
-        nic_ips: dict
-            dict of ips per interface of this object, interface name as key
-        p_ipv4: str
-            primary IPv4 as string including netmask/prefix
-        p_ipv6: str
-            primary IPv6 as string including netmask/prefix
-
-        """
-
-        if object_type not in [NBDevice, NBVM]:
-            raise ValueError(f"Object must be a '{NBVM.name}' or '{NBDevice.name}'.")
-
-        pnic_data = pnic_data or {}
-        vnic_data = vnic_data or {}
-        nic_ips = nic_ips or {}
-
-        if log.level == DEBUG3:
-
-            log.debug3("function: add_device_vm_to_inventory")
-            log.debug3(f"Object type {object_type}")
-            pprint.pprint(object_data)
-            pprint.pprint(pnic_data)
-            pprint.pprint(vnic_data)
-            pprint.pprint(nic_ips)
-            pprint.pprint(p_ipv4)
-            pprint.pprint(p_ipv6)
-
-        # check existing Devices for matches
-        log.debug2(f"Trying to find a {object_type.name} based on the collected name, cluster, IP and MAC addresses")
-
-        device_vm_object = self.inventory.get_by_data(object_type, data=object_data)
-
-        if device_vm_object is not None:
-            log.debug2("Found a exact matching %s object: %s" %
-                       (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
-
-        # keep searching if no exact match was found
-        else:
-
-            log.debug2(f"No exact match found. Trying to find {object_type.name} based on MAC addresses")
-
-            # on VMs vnic data is used, on physical devices pnic data is used
-            mac_source_data = vnic_data if object_type == NBVM else pnic_data
-
-            nic_macs = [x.get("mac_address") for x in mac_source_data.values() if x.get("mac_address") is not None]
-
-            device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
-
-        if device_vm_object is not None:
-            log.debug2("Found a matching %s object: %s" %
-                       (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
-
-        # keep looking for devices with the same primary IP
-        else:
-
-            log.debug2(f"No match found. Trying to find {object_type.name} based on primary IP addresses")
-
-            device_vm_object = self.get_object_based_on_primary_ip(object_type, p_ipv4, p_ipv6)
-
-        if device_vm_object is None:
-            object_name = object_data.get(object_type.primary_key)
-            log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
-            device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
-        else:
-            device_vm_object.update(data=object_data, source=self)
-
-        # update role according to config settings
-        object_name = object_data.get(object_type.primary_key)
-        role_name = self.get_object_relation(object_name,
-                                             "host_role_relation" if object_type == NBDevice else "vm_role_relation")
-
-        if object_type == NBDevice:
-            if role_name is None:
-                role_name = "Server"
-            device_vm_object.update(data={"device_role": {"name": role_name}})
-        if object_type == NBVM and role_name is not None:
-            device_vm_object.update(data={"role": {"name": role_name}})
-
-        # compile all nic data into one dictionary
-        if object_type == NBVM:
-            nic_data = vnic_data
-        else:
-            nic_data = {**pnic_data, **vnic_data}
-        exclude_filter = self.settings.vm_interface_exclude_filter if object_type == NBVM else \
-            self.settings.host_interface_exclude_filter
-        if exclude_filter is not None:
-            nic_data = {name: data for name, data in nic_data.items() if not exclude_filter.match(name)}
-
-        mac_matched_interfaces = set()
-        if object_type == NBVM:
-            current_by_mac = {}
-            for interface in self.inventory.get_all_interfaces(device_vm_object):
-                existing_name = grab(interface, "data.name")
-                if exclude_filter is not None and existing_name is not None and exclude_filter.match(existing_name):
-                    continue
-                if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-                    mac = grab(interface, "data.primary_mac_address.data.mac_address")
-                else:
-                    mac = grab(interface, "data.mac_address")
-                if mac:
-                    current_by_mac.setdefault(normalize_mac_address(mac), []).append(interface)
-            names_by_mac = {}
-            for int_name, int_data in nic_data.items():
-                mac = int_data.get("mac_address")
-                matches = current_by_mac.get(normalize_mac_address(mac), []) if mac else []
-                if len(matches) > 1:
-                    message = f"Multiple interfaces of OpenStack VM '{object_name}' match MAC '{mac}'."
-                    log.error(message)
-                    raise ValueError(message)
-                if matches:
-                    names_by_mac[int_name] = matches[0].data["name"]
-                    mac_matched_interfaces.add(matches[0])
-            used_names = set(names_by_mac.values())
-            remapped_data = {}
-            remapped_ips = {}
-            for int_name, int_data in nic_data.items():
-                target_name = names_by_mac.get(int_name, int_name)
-                if int_name not in names_by_mac:
-                    index = 1
-                    network_label = int_name.partition(" ")[2]
-                    while target_name in used_names:
-                        target_name = f"vNIC{index} {network_label}"
-                        index += 1
-                used_names.add(target_name)
-                if int_name not in names_by_mac:
-                    int_data["description"] = target_name
-                int_data["name"] = target_name
-                remapped_data[target_name] = int_data
-                remapped_ips[target_name] = nic_ips.get(int_name, [])
-            nic_data = remapped_data
-            nic_ips = remapped_ips
-
-        # map interfaces of existing object with discovered interfaces
-        nic_object_dict = self.map_object_interfaces_to_current_interfaces(device_vm_object, nic_data)
-
-        if object_data.get("status", "") == "active" and (nic_ips is None or len(nic_ips.keys()) == 0):
-            log.debug(f"No IP addresses for '{object_name}' found!")
-
-        primary_ipv4_object = None
-        primary_ipv6_object = None
-
-        if p_ipv4 is not None:
-            try:
-                primary_ipv4_object = ip_interface(p_ipv4)
-            except ValueError:
-                log.error(f"Primary IPv4 ({p_ipv4}) does not appear to be a valid IP address (needs included suffix).")
-
-        if p_ipv6 is not None:
-            try:
-                primary_ipv6_object = ip_interface(p_ipv6)
-            except ValueError:
-                log.error(f"Primary IPv6 ({p_ipv6}) does not appear to be a valid IP address (needs included suffix).")
-
-        for int_name, int_data in nic_data.items():
-            existing_interface = nic_object_dict.get(int_name)
-            if existing_interface is not None:
-                existing_name = grab(existing_interface, "data.name")
-                if existing_name is not None and (
-                        object_type == NBDevice or existing_interface in mac_matched_interfaces):
-                    int_data["name"] = existing_name
-                if object_type == NBDevice:
-                    int_data.pop("type", None)
-
-            # add/update interface with retrieved data
-            nic_object, ip_address_objects = self.add_update_interface(nic_object_dict.get(int_name), device_vm_object,
-                                                                       int_data, nic_ips.get(int_name, list()))
-
-            # add all interface IPs
-            for ip_object in ip_address_objects:
-
-                if ip_object is None:
-                    continue
-
-                ip_interface_object = ip_interface(grab(ip_object, "data.address"))
-
-                # continue if address is not a primary IP
-                if ip_interface_object not in [primary_ipv4_object, primary_ipv6_object]:
-                    continue
-
-                # set/update/remove primary IP addresses
-                set_this_primary_ip = False
-                ip_version = ip_interface_object.ip.version
-                if self.settings.set_primary_ip == "always":
-
-                    for object_type in [NBDevice, NBVM]:
-
-                        # new IPs don't need to be removed from other devices/VMs
-                        if ip_object.is_new is True:
-                            break
-
-                        for devices_vms in self.inventory.get_all_items(object_type):
-
-                            # device has no primary IP of this version
-                            this_primary_ip = grab(devices_vms, f"data.primary_ip{ip_version}")
-
-                            # we found this exact object
-                            if devices_vms == device_vm_object:
-                                continue
-
-                            # device has the same object assigned
-                            if this_primary_ip == ip_object:
-                                devices_vms.unset_attribute(f"primary_ip{ip_version}")
-
-                    set_this_primary_ip = True
-
-                elif self.settings.set_primary_ip != "never" and \
-                        grab(device_vm_object, f"data.primary_ip{ip_version}") is None:
-                    set_this_primary_ip = True
-
-                if set_this_primary_ip is True:
-
-                    log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
-                              f"'{device_vm_object.get_display_name()}'")
-                    device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
-
-        return device_vm_object
-
-    def add_object_to_cache(self, obj_type, key, netbox_object):
-
-        if obj_type is None or key is None or netbox_object is None:
-            return
-
-        # noinspection PyBroadException
-        try:
-            vm_class_name = obj_type.__name__
-        except Exception:
-            return
-
-        if self.object_cache.get(vm_class_name) is None:
-            self.object_cache[vm_class_name] = dict()
-
-        self.object_cache[vm_class_name][key] = netbox_object
-
-    def get_object_from_cache(self, obj_type, key):
-
-        if obj_type is None or key is None:
-            return
-
-        # noinspection PyBroadException
-        try:
-            vm_class_name = obj_type.__name__
-        except Exception:
-            return
-
-        if self.object_cache.get(vm_class_name) is None:
-            return
-
-        return self.object_cache[vm_class_name].get(key)
-
-    def add_cluster(self, obj):
-        """
-        Add a OpenStack Availability Zone as a NBCluster to NetBox. Cluster name is checked against
-        cluster_include_filter and cluster_exclude_filter config setting. Also adds
-        cluster and site_name to "self.permitted_clusters" so hosts and VMs can be
-        checked if they are part of a permitted cluster.
-
-        Parameters
-        ----------
-        obj: openstack.compute.v2.availability_zone.AvailabilityZone
-            cluster to add
-        """
-
-        name = get_string_or_none(grab(obj, "name"))
-        group = self.inventory.get_by_data(NBClusterGroup, data={"name": self.settings.group_name})
-
-        if name is None or group is None:
-            return
-
-        group_name = grab(group, "data.name")
-
-        log.debug(f"Parsing OpenStack AZ: {name}")
-
-        if self.passes_filter(name, self.settings.cluster_include_filter,
-                              self.settings.cluster_exclude_filter) is False:
-            return
-
-        site_name = self.get_site_name(NBCluster, name)
-
-        data = {
-            "name": name,
-            "type": {"name": "Openstack"},
-            "group": group,
-            "site": {"name": site_name}
-        }
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
-            data.pop("site")
-            data["scope_type"] = NBSite.object_type
-            data["scope_id"] = self.inventory.add_update_object(NBSite, data={"name": site_name}, source=self)
-        tags = self.get_object_relation(name, "cluster_tag_relation")
-        if tags:
-            data["tags"] = tags
-
-        tenant_name = self.get_object_relation(name, "cluster_tenant_relation")
-        if tenant_name is not None:
-            data["tenant"] = {"name": tenant_name}
-
-        # try to find cluster including cluster group
-        log.debug2("Trying to find a matching existing cluster")
-        cluster_object = None
-        for cluster_candidate in self.inventory.get_all_items(NBCluster):
-            if grab(cluster_candidate, "data.name") != name:
-                continue
-            if cluster_candidate.get_site_name() not in (None, site_name) and \
-                    self.object_synced_by_other_source(cluster_candidate):
-                continue
-
-            # try to find a cluster with matching site
-            candidate_group = grab(cluster_candidate, "data.group.data.name")
-            if candidate_group not in (None, group_name):
-                continue
-
-            if cluster_candidate.get_site_name() == site_name:
-                cluster_object = cluster_candidate
-                log.debug2("Found an existing cluster where 'name' and 'site' are matching")
-                break
-
-            if grab(cluster_candidate, "data.group") is not None and \
-                    grab(cluster_candidate, "data.group.data.name") == group_name:
-                cluster_object = cluster_candidate
-                log.debug2("Found an existing cluster where 'name' and 'cluster group' are matching")
-                break
-
-            if grab(cluster_candidate, "data.tenant") is not None and \
-                    tenant_name is not None and \
-                    grab(cluster_candidate, "data.tenant.data.name") == tenant_name:
-                cluster_object = cluster_candidate
-                log.debug2("Found an existing cluster where 'name' and 'tenant' are matching")
-                break
-
-        if cluster_object is not None:
-            cluster_object.update(data=data, source=self)
-        else:
-            cluster_object = self.inventory.add_update_object(NBCluster, data=data, source=self)
-
-        self.add_object_to_cache(NBCluster, name, cluster_object)
-
-        self.cluster_host_map[name] = self.get_compute_host_names(grab(obj, "hosts"))
-        log.debug2(f"Found compute hosts for availability zone '{name}': "
-                   f"{self.cluster_host_map[name]}")
-
-        self.permitted_clusters[name] = site_name
-
-    def add_host(self, obj):
-        """
-        Parse a Openstack host to NetBox once all data is gathered.
-
-        First host is filtered:
-             host has a cluster and is it permitted
-             was host with same name and site already parsed
-             does the host pass the host_include_filter and host_exclude_filter
-
-        Then all necessary host data will be collected.
-
-        Primary IPv4/6 will be determined by 'host_ip' value
-
-        Parameters
-        ----------
-        obj: Hypervisor
-            host object to parse
-        """
-
-        name = get_string_or_none(grab(obj, "name"))
-        if name is None:
-            return
-
-        if name is not None and self.settings.strip_host_domain_name is True:
-            name = name.split(".")[0]
-
-        # parse data
-        log.debug(f"Parsing Openstack host: {name}")
-
-        #
-        # Filtering
-        #
-
-        # manage site and cluster
-        short_name = get_string_or_none(obj.service_details["host"])
-        cluster_name = self.get_cluster_for_host(short_name)
-
-        if cluster_name is None:
-            # Nova omits disabled compute services from availability zone host lists
-            if get_string_or_none(grab(obj, "status")) == "disabled":
-                log.info(f"Host '{name}' is disabled in Nova and not part of any availability zone. Skipping.")
-            else:
-                log.error(f"Unable to find an availability zone for host '{name}'. Skipping.")
-            return
-
-        if log.level == DEBUG3:
-            try:
-                log.info("Cluster data")
-                dump(obj.service_details.to_dict())
-            except Exception as e:
-                log.error(e)
-
-        if self.permitted_clusters.get(cluster_name) is None:
-            log.debug(f"Host '{name}' is not part of a permitted cluster. Skipping")
-            return
-
-        # get cluster object
-        nb_cluster_object = self.get_object_from_cache(NBCluster, cluster_name)
-
-        # get a site for this host
-        site_name = self.get_site_name(NBDevice, name, cluster_name)
-
-        if name in self.processed_host_names.get(site_name, list()):
-            log.warning(f"Host '{name}' for site '{site_name}' already parsed. "
-                        "Make sure to use unique host names. Skipping")
-            return
-
-        # add host to processed list
-        if self.processed_host_names.get(site_name) is None:
-            self.processed_host_names[site_name] = list()
-
-        self.processed_host_names[site_name].append(name)
-
-        # filter hosts by name
-        if self.passes_filter(name, self.settings.host_include_filter, self.settings.host_exclude_filter) is False:
-            return
-
-        #
-        # Collecting data
-        #
-
-        # collect all necessary data
-        manufacturer = None
-        model = None
-        platform = get_string_or_none(obj.hypervisor_type)
-
-        # if the device vendor/model cannot be retrieved (due to problem on the host),
-        # set a dummy value so the host still gets synced
-        if manufacturer is None:
-            manufacturer = "Generic Vendor"
-        if model is None:
-            model = "Generic Model"
-
-        # get status
-        status = "offline"
-        if get_string_or_none(obj.status) == "enabled" and grab(obj, "state", fallback="up") == "up":
-            status = "active"
-
-        # get host_tenant_relation
-        tenant_name = self.get_object_relation(name, "host_tenant_relation")
-
-        # get host_tag_relation
-        host_tags = self.get_object_relation(name, "host_tag_relation")
-
-        # prepare host data model
-        host_data = {
-            "name": name,
-            "device_type": {
-                "model": model,
-                "manufacturer": {
-                    "name": manufacturer
-                }
-            },
-            "site": {"name": site_name},
-            "cluster": nb_cluster_object,
-            "status": status
-        }
-
-        # add data if present
-        if platform is not None:
-            host_data["platform"] = {"name": platform}
-        if tenant_name is not None:
-            host_data["tenant"] = {"name": tenant_name}
-        if len(host_tags) > 0:
-            host_data["tags"] = host_tags
-        self.add_custom_attributes(NBDevice, obj, host_data)
-
-        pnic_data_dict = dict()
-        pnic_data = {
-                "name": "eth0",
-                "enabled": True,
-                "type": "virtual"
-        }
-        pnic_data_dict["eth0"] = pnic_data
-
-        ip_addr = grab(obj, "host_ip")
-        if ip_addr is not None and not self.settings.permitted_subnets.permitted(ip_addr, interface_name="eth0"):
-            ip_addr = None
-        prefix = None
-        matched_prefix = None
-        if ip_addr is not None:
-            matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr), site_name)
-            if matched_prefix is None:
-                matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr))
-        if matched_prefix is not None:
-            prefix = matched_prefix.data["prefix"].prefixlen
-            ip_addr = f"{ip_addr}/{prefix}"
-
-        vnic_ips = dict()
-        vnic_ips["eth0"] = list()
-        if ip_addr is not None:
-            ip_addr = str(ip_interface(ip_addr))
-            vnic_ips["eth0"].append(ip_addr)
-
-        host_primary_ip4 = ip_addr if ip_addr is not None and ip_interface(ip_addr).version == 4 else None
-        host_primary_ip6 = ip_addr if ip_addr is not None and ip_interface(ip_addr).version == 6 else None
-
-        # add host to inventory
-        host = self.add_device_vm_to_inventory(NBDevice, object_data=host_data, pnic_data=pnic_data_dict,
-                                              vnic_data=dict(), nic_ips=vnic_ips,
-                                              p_ipv4=host_primary_ip4, p_ipv6=host_primary_ip6)
-        self.add_object_to_cache(NBDevice, short_name, host)
-
-        return
-
-    def add_volume(self, obj):
-        """
-        Parse OpenStack volume and store in in a map.
-        """
-
-        id = obj.id
-        size = obj.size
-
-        self.volume_map[id] = size
-
-    def add_virtual_machine(self, obj):
-        """
-        Parse a OpenStack VM add to NetBox once all data is gathered.
-
-        Parameters
-        ----------
-        obj: openstack.compute.v2.server.Server
-            virtual machine object to parse
-        """
-
-        name = get_string_or_none(grab(obj, "name"))
-        if name is None:
-            return
-
-        if name is not None and self.settings.strip_vm_domain_name is True:
-            name = name.split(".")[0]
-
-        if self.settings.set_vm_name_to_uuid:
-            name = get_string_or_none(obj.id)
-
-        log.debug(f"Parsing OpenStack VM: {name}")
-
-        # get VM power state
-        status = "active" if get_string_or_none(obj.status) == "ACTIVE" else "offline"
-
-        cluster_name = get_string_or_none(obj.availability_zone)
-
-        # check VM cluster
-        if cluster_name is None:
-            log.error(f"Requesting cluster for Virtual Machine '{name}' failed. Skipping.")
-            return
-
-        elif self.permitted_clusters.get(cluster_name) is None:
-            log.debug(f"Virtual machine '{name}' is not part of a permitted cluster. Skipping")
-            return
-
-        nb_cluster_object = self.get_object_from_cache(NBCluster, cluster_name)
-
-        if name in self.processed_vm_names.get(cluster_name, list()):
-            log.warning(f"Virtual machine '{name}' for cluster '{cluster_name}' already parsed. "
-                        "Make sure to use unique VM names. Skipping")
-            return
-
-        # add host to processed list
-        if self.processed_vm_names.get(cluster_name) is None:
-            self.processed_vm_names[cluster_name] = list()
-
-        self.processed_vm_names[cluster_name].append(name)
-
-        # filter VMs by name
-        if self.passes_filter(name, self.settings.vm_include_filter, self.settings.vm_exclude_filter) is False:
-            return
-
-        #
-        # Collect data
-        #
-
-        site_name = self.get_site_name(NBCluster, cluster_name)
-        flavor = dict(grab(obj, "flavor") or {})
-        if not all(key in flavor for key in ("vcpus", "ram", "disk")) and flavor.get("id"):
-            flavor = self.session.compute.get_flavor(flavor["id"]).to_dict()
-        # first check against vm_platform_relation
-        platform = None
-        if self.settings.skip_vm_platform is False:
-            platform = get_string_or_none(flavor.get("original_name") or flavor.get("name"))
-
-            if platform is not None:
-                platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
-
-        disks = {}
-        if grab(obj, "image") and flavor.get("disk"):
-            disks["root"] = int(flavor["disk"])
-        if flavor.get("ephemeral"):
-            disks["ephemeral"] = int(flavor["ephemeral"])
-        disk_complete = True
-        for volume in grab(obj, "attached_volumes", fallback=[]) or []:
-            size = self.volume_map.get(volume["id"])
-            if size is None:
-                log.warning(f"Volume '{volume['id']}' of VM '{name}' was not discovered; preserving disk size.")
-                disk_complete = False
-            disks[volume["id"]] = int(size) if size is not None else None
-
-        annotation = None
-        if self.settings.skip_vm_comments is False:
-            if not self.settings.set_vm_name_to_uuid:
-                annotation = get_string_or_none(obj.id)
-
-        # assign vm_tenant_relation
-        tenant_name = self.get_object_relation(name, "vm_tenant_relation")
-
-        vm_data = {
-            "name": name,
-            "cluster": nb_cluster_object,
-            "status": status,
-        }
-        if flavor.get("vcpus"):
-            vm_data["vcpus"] = float(flavor["vcpus"])
-        if flavor.get("ram") is not None:
-            vm_data["memory"] = int(flavor["ram"])
-        if disk_complete and version.parse(self.inventory.netbox_api_version) < version.parse("3.7.0"):
-            vm_data["disk"] = sum(disks.values())
-        tags = self.get_object_relation(name, "vm_tag_relation")
-        if tags:
-            vm_data["tags"] = tags
-        host = self.get_object_from_cache(NBDevice, grab(obj, "compute_host"))
-        if host is not None and version.parse(self.inventory.netbox_api_version) >= version.parse("3.3.0"):
-            vm_data["device"] = host
-
-        # Add adaption for change in NetBox 3.3.0 VM model
-        # issue: https://github.com/netbox-community/netbox/issues/10131#issuecomment-1225783758
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.3.0"):
-            vm_data["site"] = {"name": site_name}
-        if platform is not None:
-            vm_data["platform"] = {"name": platform}
-        if annotation is not None:
-            vm_data["comments"] = annotation
-        if tenant_name is not None:
-            vm_data["tenant"] = {"name": tenant_name}
-
-        if self.settings.set_vm_name_to_uuid:
-            custom_field = self.add_update_custom_field({
-                    "name": "openstack_vm_name",
-                    "label": "name",
-                    "object_types": ["virtualization.virtualmachine"],
-                    "type": "text",
-                    "description": f"Openstack '{self.name}' synced object attribute 'name'"
-                })
-            vm_data["custom_fields"] = {
-                grab(custom_field, "data.name"): get_string_or_none(grab(obj, "name"))
+                account, snapshot = self.client.discover(
+                    self.settings.regions, self.settings.account_id, self.settings.discovery_region, **options)
+                snapshots = {account: snapshot} if account is not None else {}
+                account_names = {}
+            if self.settings.organization and self.settings.sync_private_ips:
+                self.resolve_shared_networks(snapshots)
+                self.defer_inaccessible_network_instances(snapshots)
+            vrfs = {}
+            for account, snapshot in snapshots.items():
+                self.validate_services(account, snapshot)
+                self.validate_snapshot(account, snapshot, vrfs)
+            self.retain_disabled_services()
+            if getattr(self.client, "access_denied", []):
+                self.retain_inaccessible_objects()
+            account_labels = {
+                account: account_names.get(account) or self.settings.account_name or account
+                for account in snapshots
             }
-        self.add_custom_attributes(NBVM, obj, vm_data)
+            label_counts = {}
+            for label in account_labels.values():
+                key = label.casefold()
+                label_counts[key] = label_counts.get(key, 0) + 1
+            for account, label in account_labels.items():
+                if label_counts[label.casefold()] > 1:
+                    account_labels[account] = f"{label} ({account})"
+            for account, snapshot in snapshots.items():
+                self.sync_snapshot(account, snapshot, account_name=account_labels[account])
+            self.reconcile_access_tags()
+        except (AWSDiscoveryError, ValueError, KeyError) as exc:
+            self.abort(exc)
 
-        vm_primary_ip4 = None
-        vm_primary_ip6 = None
-        vm_primary_ip4_is_fixed = False
-        vm_primary_ip6_is_fixed = False
-        vm_nic_dict = dict()
-        nic_ips = dict()
-        count = 0
+    def validate_services(self, account, snapshot):
+        for region, data in snapshot.items():
+            inaccessible = data.get("InaccessibleServices", [])
+            for enabled, key in (
+                (self.settings.sync_s3 and "s3" not in inaccessible, "Buckets"),
+                (self.settings.sync_lambda and "lambda" not in inaccessible, "Functions"),
+                (self.settings.sync_eks and "eks" not in inaccessible, "EKSClusters"),
+            ):
+                if enabled and not isinstance(data.get(key), list):
+                    raise ValueError(f"Missing AWS {key} discovery (account '{account}', region '{region}')")
+                if enabled:
+                    identity_key = {"Buckets": "Name", "Functions": "FunctionArn", "EKSClusters": "arn"}[key]
+                    identities = [resource[identity_key] for resource in data[key]]
+                    if len(set(identities)) != len(identities):
+                        raise ValueError(f"Duplicate AWS {key} discovery (account '{account}', region '{region}')")
+            for bucket in data["Buckets"] if self.settings.sync_s3 and "s3" not in inaccessible else []:
+                if bucket["Region"] != region or not bucket["Name"] or len(bucket["Name"]) > 63:
+                    raise ValueError(f"Invalid S3 bucket '{bucket['Name']}' for region '{region}'")
+                self.service_tags({tag["Key"]: tag["Value"] for tag in bucket["Tags"]})
+                if "Versioning" not in bucket or "Encryption" not in bucket:
+                    raise ValueError(f"Incomplete S3 bucket metadata for '{bucket['Name']}'")
+            for function in data["Functions"] if self.settings.sync_lambda and "lambda" not in inaccessible else []:
+                self.validate_arn(function["FunctionArn"], "lambda", account, region)
+                if function["State"] not in ("Pending", "Active", "Inactive", "Failed"):
+                    raise ValueError(f"Unknown Lambda state '{function['State']}' for '{function['FunctionArn']}'")
+                if not function["FunctionName"] or not isinstance(function["MemorySize"], int):
+                    raise ValueError(f"Incomplete Lambda configuration for '{function['FunctionArn']}'")
+                self.service_tags(function["Tags"])
+            if self.settings.sync_eks and "eks" not in inaccessible:
+                clusters = {cluster["name"]: cluster for cluster in data["EKSClusters"]}
+                if len(clusters) != len(data["EKSClusters"]):
+                    raise ValueError(f"Duplicate EKS cluster discovery in account '{account}', region '{region}'")
+                asg_clusters = {}
+                for cluster in data["EKSClusters"]:
+                    self.validate_arn(cluster["arn"], "eks", account, region)
+                    for field in ("status", "version", "resourcesVpcConfig", "nodegroups", "fargateProfiles"):
+                        if field not in cluster:
+                            raise ValueError(f"Incomplete EKS {field} for '{cluster['arn']}'")
+                    self.service_tags(cluster.get("tags", {}))
+                    for group in cluster["nodegroups"]:
+                        for asg in group.get("resources", {}).get("autoScalingGroups", []):
+                            name = asg["name"]
+                            if name in asg_clusters and asg_clusters[name] != cluster["name"]:
+                                raise ValueError(f"EKS Auto Scaling group '{name}' belongs to multiple clusters")
+                            asg_clusters[name] = cluster["name"]
+                data["EKSWorkers"] = {}
+                for instance in data["instances"]:
+                    tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
+                    names = {tags[key] for key in (
+                        "aws:eks:cluster-name", "eks:cluster-name", "eksctl.cluster.k8s.io/v1alpha1/cluster-name",
+                    ) if tags.get(key)}
+                    asg_cluster = asg_clusters.get(tags.get("aws:autoscaling:groupName"))
+                    if asg_cluster:
+                        names.add(asg_cluster)
+                    if len(names) > 1:
+                        raise ValueError(f"Conflicting EKS cluster membership for instance '{instance['InstanceId']}'")
+                    if names:
+                        name = next(iter(names))
+                        if name in clusters:
+                            data["EKSWorkers"][instance["InstanceId"]] = name
+                        else:
+                            log.warning(
+                                f"AWS instance '{instance['InstanceId']}' references undiscovered EKS cluster "
+                                f"'{name}' (account '{account}', region '{region}'); retaining EC2 placement.")
 
-        for network, addresses in (grab(obj, "addresses") or {}).items():
-            default_mac = next((address.get("OS-EXT-IPS-MAC:mac_addr") for address in addresses
-                                if address.get("OS-EXT-IPS-MAC:mac_addr")), None)
-            interfaces = {}
-            for address in addresses:
-                mac = address.get("OS-EXT-IPS-MAC:mac_addr") or default_mac
-                if mac not in interfaces:
-                    count += 1
-                    full_name = unquote(f"vNIC{count} ({network})")
-                    interfaces[mac] = full_name
-                    vm_nic_dict[full_name] = {
-                        "name": full_name,
-                        "description": full_name,
-                        "enabled": True,
-                    }
-                    if mac:
-                        vm_nic_dict[full_name]["mac_address"] = normalize_mac_address(mac)
-                    nic_ips[full_name] = []
-                full_name = interfaces[mac]
-                try:
-                    ip_addr = str(ip_interface(address["addr"]))
-                except (KeyError, ValueError):
-                    log.warning(f"Invalid address on OpenStack VM '{name}'; skipping.")
+    def validate_arn(self, arn, service, account, region):
+        parts = arn.split(":", 5)
+        if len(parts) != 6 or parts[0] != "arn" or parts[2:5] != [service, region, account] or not parts[5]:
+            raise ValueError(f"Invalid {service} resource ARN '{arn}' for account '{account}', region '{region}'")
+
+    def service_tags(self, tags):
+        result = [f"AWS:{key}={tags[key]}" for key in self.settings.tag_keys if key in tags]
+        if any(len(tag) > 100 for tag in result):
+            raise ValueError("AWS service tag exceeds the NetBox tag name limit (100 characters)")
+        return result
+
+    def reconcile_tags(self, item, tags):
+        # Tag lookup can reuse an existing name with different capitalization.
+        desired_tags = {self.inventory.get_by_data(NBTag, data={"name": name}) for name in tags}
+        managed_prefixes = tuple(f"AWS:{key}=".casefold() for key in self.settings.tag_keys)
+        for tag in item.data.get("tags", []):
+            if tag.get_display_name().casefold().startswith(managed_prefixes) and tag not in desired_tags:
+                item.remove_tags(tag)
+
+    def retain_disabled_services(self):
+        for object_type in (NBVM, NBVirtualDisk, NBCluster):
+            for item in self.inventory.get_all_items(object_type):
+                service = (item.data.get("custom_fields") or {}).get("aws_service")
+                if service in ("s3", "lambda", "eks") and not getattr(self.settings, f"sync_{service}") and \
+                        (item.source is self or self.source_tag in item.get_tags()):
+                    item.set_source(self)
+
+    def access_scope(self, item):
+        fields = item.data.get("custom_fields") or {}
+        metadata = fields.get("aws_metadata") or {}
+        identity = fields.get("aws_resource_id") or ""
+        service = "ec2" if fields.get("aws_instance_id") else fields.get("aws_service")
+        account = fields.get("aws_account_id") or metadata.get("account")
+        region = fields.get("aws_region") or metadata.get("region")
+        resource = None
+        if identity.startswith("arn:"):
+            parts = identity.split(":", 5)
+            if len(parts) == 6:
+                service, region, account, resource = parts[2:]
+                if service == "lambda":
+                    resource = identity
+                elif service == "eks":
+                    resource = resource.removeprefix("cluster/")
+        elif identity.startswith("s3/"):
+            parts = identity.split("/")
+            account = parts[1]
+            if isinstance(item, NBVirtualDisk):
+                resource = parts[2]
+            else:
+                region = parts[2]
+        for parent_key in ("virtual_machine", "cluster"):
+            parent = item.data.get(parent_key)
+            if parent is not None:
+                parent_account, parent_region, parent_service, _ = self.access_scope(parent)
+                account = account or parent_account
+                region = region or parent_region
+                service = service or parent_service
+                break
+        if isinstance(item, (NBIPAddress, NBMACAddress)):
+            parent = item.get_device_vm()
+            if parent is not None:
+                account, region, service, _ = self.access_scope(parent)
+        if account is None:
+            group = item if isinstance(item, NBClusterGroup) else item.data.get("group")
+            name = group.data.get("name", "") if group is not None else ""
+            if name.startswith("AWS "):
+                label = name[4:]
+                account = next((key for key, value in getattr(self.client, "account_names", {}).items()
+                                if label in (value, f"{value} ({key})")), None)
+                if account is None and label.isdigit():
+                    account = label
+        if region is None:
+            site = item.data.get("scope_id") or item.data.get("site")
+            name = site.data.get("name", "") if isinstance(site, NBSite) else ""
+            if name.startswith("AWS "):
+                region = name[4:]
+        return account, region, service or "ec2", resource
+
+    def reconcile_access_tags(self):
+        checks = getattr(self.client, "access_checks", [])
+        if not checks:
+            return
+        prefix = "Sync:AccessDenied:"
+        scopes = {}
+        for check in checks:
+            outcomes = scopes.setdefault(
+                (check.account, check.region, check.service, check.resource), (set(), set()))
+            outcomes[0 if check.denied else 1].add(check.operation)
+        for object_type in self.dependent_netbox_objects:
+            for item in self.inventory.get_all_items(object_type):
+                if object_type in (NBTag, NBCustomField, NBTenant) or "tags" not in item.data_model or not (
+                        item.source is self or self.source_tag in item.get_tags()):
                     continue
-                if not self.settings.permitted_subnets.permitted(ip_addr, interface_name=full_name):
-                    continue
+                account, region, service, resource = self.access_scope(item)
+                denied, succeeded = set(), set()
+                for key in product(
+                        (None, account), (None, region), ("organizations", "sts", "account", service),
+                        (None, resource)):
+                    if key in scopes:
+                        failures, successes = scopes[key]
+                        denied.update(failures)
+                        succeeded.update(successes)
+                for operation in denied:
+                    item.add_tags(f"{prefix}{operation}")
+                for tag in item.get_tags():
+                    if tag.startswith(prefix) and tag[len(prefix):] in succeeded - denied:
+                        item.remove_tags(tag)
 
-                matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr), site_name)
-                if matched_prefix is None:
-                    matched_prefix = self.return_longest_matching_prefix_for_ip(ip_interface(ip_addr))
-                if matched_prefix is not None:
-                    prefix = matched_prefix.data["prefix"].prefixlen
-                    ip_addr = f"{ip_interface(ip_addr).ip}/{prefix}"
+    def retain_source_objects(self):
+        # Source-wide retention also protects children and cross-account shared-network dependencies.
+        for object_type in self.dependent_netbox_objects:
+            for item in self.inventory.get_all_items(object_type):
+                if self.source_tag in item.get_tags():
+                    item.set_source(self)
 
-                nic_ips[full_name].append(ip_addr)
-                is_fixed = address.get("OS-EXT-IPS:type") == "fixed"
-                if ip_interface(ip_addr).version == 4 and (
-                        vm_primary_ip4 is None or (is_fixed and not vm_primary_ip4_is_fixed)):
-                    vm_primary_ip4 = ip_addr
-                    vm_primary_ip4_is_fixed = is_fixed
-                if ip_interface(ip_addr).version == 6 and (
-                        vm_primary_ip6 is None or (is_fixed and not vm_primary_ip6_is_fixed)):
-                    vm_primary_ip6 = ip_addr
-                    vm_primary_ip6_is_fixed = is_fixed
+    def retain_inaccessible_objects(self):
+        self.retain_source_objects()
+        log.warning(
+            f"AWS source '{self.name}': authorization-denied discovery is incomplete. "
+            "Retaining all previously managed source objects this run; accessible resources will still be updated.")
 
-        # add VM to inventory
-        vm = self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=vm_nic_dict,
-                                            nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6)
-        if version.parse(self.inventory.netbox_api_version) >= version.parse("3.7.0"):
-            for disk_name, disk_size in disks.items():
-                data = {"name": disk_name, "virtual_machine": vm}
-                if disk_size is None:
-                    existing = self.inventory.get_by_data(NBVirtualDisk, data=data)
-                    if existing is not None:
-                        existing.update(data=data, source=self)
-                    continue
-                multiplier = 1000 if version.parse(self.inventory.netbox_api_version) >= version.parse("4.1.0") else 1
-                data["size"] = disk_size * multiplier
-                self.inventory.add_update_object(NBVirtualDisk, data=data, source=self)
+    def defer_inaccessible_network_instances(self, snapshots):
+        if not any(service in ("ec2", "account", "sts", "organizations")
+                   for _, _, service in getattr(self.client, "access_denied", [])):
+            return
+        for account, snapshot in snapshots.items():
+            for region, data in snapshot.items():
+                retained = []
+                for instance in data["instances"]:
+                    missing_network = False
+                    for reference in instance.get("NetworkInterfaces", []):
+                        eni = data["NetworkInterfaces"].get(reference["NetworkInterfaceId"])
+                        if eni is not None and (eni["VpcId"] not in data["Vpcs"] or
+                                                eni["SubnetId"] not in data["Subnets"]):
+                            missing_network = True
+                    if missing_network:
+                        log.warning(
+                            f"AWS instance '{instance['InstanceId']}' (account '{account}', region '{region}') "
+                            "has missing network dependencies during authorization-denied discovery. "
+                            "Deferring its update and retaining existing objects.")
+                    else:
+                        retained.append(instance)
+                data["instances"] = retained
 
-        return
+    def resource_name(self, name, identity, limit):
+        if len(name) <= limit:
+            return name
+        suffix = sha256(identity.encode("utf-8")).hexdigest()[:12]
+        return f"{name[:limit - 13]}-{suffix}"
 
-    def update_basic_data(self):
-        """
+    def service_object(self, object_type, identity, data):
+        """Adopt tagged legacy objects; EC2 VMs carry aws_instance_id, not aws_resource_id."""
+        fields = data["custom_fields"]
+        fields["aws_metadata"] = json_safe(fields["aws_metadata"])
+        items = self.inventory.get_all_items(object_type)
+        matches = [item for item in items
+                   if (item.data.get("custom_fields") or {}).get("aws_resource_id") == identity]
+        parent = "virtual_machine" if object_type is NBVirtualDisk else "cluster" if object_type is NBVM else "group"
+        if not matches:
+            name_matches = [item for item in items
+                            if item.data.get("name") == data["name"] and
+                            item.data.get(parent) is data.get(parent)]
+            if len(name_matches) == 1:
+                candidate = name_matches[0]
+                fields = candidate.data.get("custom_fields") or {}
+                candidate_identity = fields.get("aws_resource_id")
+                candidate_service = fields.get("aws_service")
+                identity_missing = candidate_identity is None or (
+                    isinstance(candidate_identity, str) and not candidate_identity.strip())
+                service = (data.get("custom_fields") or {}).get("aws_service")
+                service_matches = candidate_service in (None, "", service)
+                source_managed = candidate.source is self or self.source_tag in candidate.get_tags()
+                if identity_missing and service_matches and source_managed:
+                    matches = [candidate]
+        if len(matches) > 1:
+            raise ValueError(f"Multiple NetBox {object_type.name} objects match AWS resource '{identity}'")
+        if matches:
+            item = matches[0]
+            if item.source is not self and self.source_tag not in item.get_tags():
+                raise ValueError(f"AWS resource '{identity}' belongs to another source")
+            item.update(data=data, source=self)
+        else:
+            if any(item.data.get("name") == data["name"] and item.data.get(parent) is data.get(parent)
+                   for item in items):
+                raise ValueError(f"NetBox {object_type.name} name collision for AWS resource '{identity}'")
+            item = self.inventory.add_object(object_type, data=data, source=self)
+        self.reconcile_tags(item, data["tags"])
+        return item
 
-        Returns
-        -------
+    def service_cluster(self, account, region, site, group, service, identity, name,
+                        metadata=None, tags=None):
+        data = {
+            "name": self.resource_name(name, identity, 100), "group": group,
+            "type": {"name": f"AWS {service.upper() if service != 'lambda' else 'Lambda'}"},
+            "custom_fields": {"aws_service": service, "aws_resource_id": identity,
+                              "aws_metadata": metadata or {"account": account, "region": region}},
+            "tags": self.service_tags(tags or {}),
+        }
+        if Version(self.inventory.netbox_api_version) >= Version("4.2"):
+            data.update(scope_type="dcim.site", scope_id=site)
+        else:
+            data["site"] = site
+        return self.service_object(NBCluster, identity, data)
 
-        """
+    def logical_vm(self, account, region, site, cluster, service, identity, name, metadata, tags, **attributes):
+        data = {
+            "name": self.resource_name(name, identity, 64), "cluster": cluster, "status": "active",
+            "comments": f"Logical AWS {service} inventory object; not an EC2 instance.",
+            "custom_fields": {
+                "aws_account_id": account, "aws_region": region, "aws_service": service,
+                "aws_resource_id": identity, "aws_metadata": metadata,
+            },
+            "tags": [f"AWS:logical-{service}", *self.service_tags(tags)],
+            **attributes,
+        }
+        if Version(self.inventory.netbox_api_version) >= Version("3.3"):
+            data["site"] = site
+        if self.settings.tenant:
+            data["tenant"] = {"name": self.settings.tenant}
+        return self.service_object(NBVM, identity, data)
 
-        # add source identification tag
-        self.inventory.add_update_object(NBTag, data={
-            "name": self.source_tag,
-            "description": f"Marks objects synced from Openstack '{self.name}' "
-                           f"({self.settings.auth_url}) to this NetBox Instance."
-        })
+    def sync_lambda(self, account, region, site, cluster, function):
+        status = {"Pending": "planned", "Active": "active", "Inactive": "offline", "Failed": "failed"}
+        self.logical_vm(
+            account, region, site, cluster, "lambda", function["FunctionArn"],
+            f"Lambda {function['FunctionName']}",
+            {key: value for key, value in function.items() if key != "Tags"},
+            function["Tags"], memory=function["MemorySize"], status=status[function["State"]])
 
-        # update virtual site if present
-        this_site_object = self.inventory.get_by_data(NBSite, data={"name": self.site_name})
+    def sync_s3(self, account, region, site, group, buckets):
+        if not buckets:
+            return
+        identity = f"s3/{account}/{region}"
+        try:
+            cluster = self.service_cluster(
+                account, region, site, group, "s3", identity, f"S3 {account}/{region}")
+        except ValueError as exc:
+            self.retain_source_objects()
+            log.warning(f"Skipping S3 buckets (account '{account}', region '{region}'): {exc}")
+            return
+        try:
+            holder = self.logical_vm(
+                account, region, site, cluster, "s3", identity, f"S3 inventory {account}/{region}",
+                {"kind": "bucket-inventory-holder", "usage_status": "unknown"}, {})
+        except ValueError as exc:
+            self.retain_source_objects()
+            log.warning(f"Skipping S3 buckets (account '{account}', region '{region}'): {exc}")
+            return
+        for bucket in buckets:
+            bucket_id = f"s3/{account}/{bucket['Name']}"
+            try:
+                self.service_object(NBVirtualDisk, bucket_id, {
+                    "name": bucket["Name"], "virtual_machine": holder,
+                    # NetBox requires size; zero is explicitly unknown, never a usage measurement.
+                    "size": 0,
+                    "description": "AWS S3 bucket; usage unknown (size 0 is a placeholder, not measured).",
+                    "custom_fields": {
+                        "aws_service": "s3", "aws_resource_id": bucket_id,
+                        "aws_metadata": {**{key: value for key, value in bucket.items() if key != "Tags"},
+                                         "usage_status": "unknown", "usage_bytes": None},
+                    },
+                    "tags": self.service_tags({tag["Key"]: tag["Value"] for tag in bucket["Tags"]}),
+                })
+            except ValueError as exc:
+                log.warning(f"Skipping S3 bucket '{bucket['Name']}' "
+                            f"(account '{account}', region '{region}'): {exc}")
 
-        if this_site_object is not None:
-            this_site_object.update(data={
-                "name": self.site_name,
-                "comments": "A default virtual site created to house objects "
-                            "that have been synced from this Openstack instance "
-                            "and have no predefined site assigned."
+    def resolve_shared_networks(self, snapshots):
+        networks = {}
+        for account, snapshot in snapshots.items():
+            for region, data in snapshot.items():
+                for kind in ("Vpcs", "Subnets"):
+                    for resource_id, resource in data[kind].items():
+                        owner = resource.get("OwnerId", account)
+                        key = (kind, region, resource_id)
+                        owners = networks.setdefault(key, {})
+                        if resource.get("OwnerId") and any(
+                                item.get("OwnerId") and previous_owner != owner
+                                for previous_owner, item in owners.items()):
+                            raise ValueError(
+                                f"Conflicting AWS {kind} ownership for '{resource_id}' "
+                                f"(region '{region}'): {', '.join(sorted(set(owners) | {owner}))}")
+                        if owner in owners:
+                            previous = owners[owner]
+                            fields = ("VpcId", "CidrBlock")
+                            if any(previous.get(field) != resource.get(field) for field in fields) or \
+                                    set(self.ipv6_networks(previous)) != set(self.ipv6_networks(resource)):
+                                raise ValueError(
+                                    f"Conflicting AWS {kind} discovery for '{resource_id}' "
+                                    f"(owner '{owner}', region '{region}')")
+                        owners[owner] = resource
+        for account, snapshot in snapshots.items():
+            for region, data in snapshot.items():
+                data["VpcOwners"] = {}
+                for instance in data["instances"]:
+                    for reference in instance.get("NetworkInterfaces", []):
+                        eni = data["NetworkInterfaces"].get(reference["NetworkInterfaceId"])
+                        if eni is None:
+                            continue
+                        vpc_id, subnet_id = eni["VpcId"], eni["SubnetId"]
+                        vpcs = networks.get(("Vpcs", region, vpc_id), {})
+                        local_vpc = data["Vpcs"].get(vpc_id)
+                        owner = local_vpc.get("OwnerId", account) if local_vpc is not None else None
+                        if owner is None and len(vpcs) == 1:
+                            owner = next(iter(vpcs))
+                        if owner is None and vpcs:
+                            raise ValueError(
+                                f"Ambiguous AWS VPC ownership for '{vpc_id}' "
+                                f"(account '{account}', region '{region}', "
+                                f"ENI '{eni['NetworkInterfaceId']}'): {', '.join(sorted(vpcs))}")
+                        if owner is None:
+                            continue
+                        data["VpcOwners"][vpc_id] = owner
+                        data["Vpcs"][vpc_id] = dict(vpcs[owner], OwnerId=owner)
+                        subnets = networks.get(("Subnets", region, subnet_id), {})
+                        if subnets and owner not in subnets:
+                            raise ValueError(
+                                f"Conflicting AWS subnet ownership for '{subnet_id}' "
+                                f"(account '{account}', region '{region}', "
+                                f"ENI '{eni['NetworkInterfaceId']}', VPC owner '{owner}'): "
+                                f"{', '.join(sorted(subnets))}")
+                        if owner in subnets:
+                            data["Subnets"][subnet_id] = dict(subnets[owner], OwnerId=owner)
+
+    def vrf_name(self, account, region, vpc):
+        return self.settings.vpc_vrf_relation.get(
+            f"{account}/{region}/{vpc}", self.settings.vpc_vrf_relation.get(
+                f"{region}/{vpc}", f"AWS {account}/{region}/{vpc}"))
+
+    def get_vrf(self, account, region, vpc):
+        account_region_vpc = f"{account}/{region}/{vpc}"
+        region_vpc = f"{region}/{vpc}"
+        has_mapping = account_region_vpc in self.settings.vpc_vrf_relation or \
+            region_vpc in self.settings.vpc_vrf_relation
+        name = self.vrf_name(account, region, vpc)
+        vrf = self.inventory.get_by_data(NBVRF, data={"name": name})
+        if vrf is None:
+            if has_mapping:
+                raise ValueError(f"Create mapped NetBox VRF '{name}' for VPC '{vpc}' before importing its IPs")
+            vrf = self.inventory.add_object(NBVRF, data={"name": name}, source=self)
+        return vrf
+
+    def ipv6_networks(self, resource):
+        return [
+            ip_network(entry["Ipv6CidrBlock"])
+            for entry in resource.get("Ipv6CidrBlockAssociationSet", [])
+            if entry.get("Ipv6CidrBlockState", {}).get("State") == "associated"
+        ]
+
+    def addresses(self, eni, subnet):
+        networks = [ip_network(subnet["CidrBlock"]), *self.ipv6_networks(subnet)]
+        addresses = [
+            (entry["PrivateIpAddress"], entry.get("Primary", False))
+            for entry in eni.get("PrivateIpAddresses", [])
+        ]
+        addresses.extend(
+            (entry["Ipv6Address"], entry.get("IsPrimaryIpv6", False))
+            for entry in eni.get("Ipv6Addresses", [])
+        )
+        result = []
+        for value, primary in addresses:
+            address = ip_address(value)
+            network = next((net for net in networks
+                            if net.version == address.version and address in net), None)
+            if network is None:
+                raise ValueError(f"ENI '{eni['NetworkInterfaceId']}' IP '{value}' has no matching AWS subnet")
+            value = f"{address}/{network.prefixlen}"
+            if self.settings.permitted_subnets.permitted(value, interface_name=eni["NetworkInterfaceId"]):
+                result.append((value, primary))
+        return result
+
+    def validate_snapshot(self, account, snapshot, vrfs=None):
+        if vrfs is None:
+            vrfs = {}
+        for region, data in snapshot.items():
+            for instance in data["instances"]:
+                spec = data["InstanceTypes"].get(instance["InstanceType"])
+                if spec is None:
+                    raise ValueError(f"Missing AWS instance type '{instance['InstanceType']}'")
+                if "DefaultVCpus" not in spec["VCpuInfo"] or "SizeInMiB" not in spec["MemoryInfo"]:
+                    raise ValueError(f"Incomplete AWS specifications for '{instance['InstanceType']}'")
+                for tag in instance.get("Tags", []):
+                    if tag["Key"] in self.settings.tag_keys and len(f"AWS:{tag['Key']}={tag['Value']}") > 100:
+                        raise ValueError(f"AWS tag '{tag['Key']}' exceeds the NetBox tag name limit (100 characters)")
+                for attachment in instance.get("BlockDeviceMappings", []):
+                    volume_id = attachment.get("Ebs", {}).get("VolumeId")
+                    if volume_id and volume_id not in data["Volumes"]:
+                        raise ValueError(f"Missing attached EBS volume '{volume_id}'")
+                for reference in instance.get("NetworkInterfaces", []):
+                    eni = data["NetworkInterfaces"].get(reference["NetworkInterfaceId"])
+                    if eni is None:
+                        raise ValueError(f"Missing attached ENI '{reference['NetworkInterfaceId']}'")
+                    if eni.get("Attachment", {}).get("InstanceId") != instance["InstanceId"]:
+                        raise ValueError(f"ENI '{eni['NetworkInterfaceId']}' changed attachment during discovery")
+                    if not eni.get("MacAddress"):
+                        raise ValueError(f"ENI '{eni['NetworkInterfaceId']}' has no MAC address")
+                    if not self.settings.sync_private_ips:
+                        continue
+                    vpc, subnet = eni["VpcId"], data["Subnets"].get(eni["SubnetId"])
+                    network_errors = []
+                    if vpc not in data["Vpcs"]:
+                        network_errors.append(f"VPC '{vpc}' was not returned by DescribeVpcs")
+                    if subnet is None:
+                        network_errors.append(
+                            f"subnet '{eni['SubnetId']}' was not returned by DescribeSubnets")
+                    elif subnet["VpcId"] != vpc:
+                        network_errors.append(
+                            f"subnet '{eni['SubnetId']}' belongs to VPC '{subnet['VpcId']}', "
+                            f"not ENI VPC '{vpc}'")
+                    if network_errors:
+                        raise ValueError(
+                            f"Incomplete VPC/subnet discovery for ENI '{eni['NetworkInterfaceId']}' "
+                            f"(account '{account}', region '{region}', instance '{instance['InstanceId']}', "
+                            f"VPC '{vpc}', subnet '{eni['SubnetId']}'): {'; '.join(network_errors)}")
+                    if self.addresses(eni, subnet):
+                        owner = data.get("VpcOwners", {}).get(vpc, account)
+                        vrf = self.get_vrf(owner, region, vpc)
+                        identity = (owner, region, vpc)
+                        if vrf in vrfs and vrfs[vrf] != identity:
+                            raise ValueError(f"VRF '{vrf.data['name']}' is mapped to more than one AWS VPC")
+                        vrfs[vrf] = identity
+
+    def custom_fields(self):
+        fields = (
+            ("aws_account_id", "AWS account ID", [NBVM.object_type]),
+            ("aws_region", "AWS region", [NBVM.object_type]),
+            ("aws_instance_id", "AWS instance ID", [NBVM.object_type]),
+            ("aws_name", "AWS Name tag", [NBVM.object_type]),
+            ("aws_instance_type", "AWS instance type", [NBVM.object_type]),
+            ("aws_availability_zone", "AWS Availability Zone", [NBVM.object_type]),
+            ("aws_vpc_id", "AWS VPC ID", [NBVM.object_type, NBVMInterface.object_type]),
+            ("aws_eni_id", "AWS ENI ID", [NBVMInterface.object_type]),
+            ("aws_subnet_id", "AWS subnet ID", [NBVMInterface.object_type]),
+            ("aws_public_ipv4", "AWS public IPv4", [NBVMInterface.object_type]),
+        )
+        for name, label, types in fields:
+            self.add_update_custom_field({
+                "name": name, "label": label, "object_types": types, "type": "text",
+                "description": f"Reported by AWS ({self.name})",
             })
+        if any((self.settings.sync_s3, self.settings.sync_lambda, self.settings.sync_eks)):
+            types = [NBVM.object_type, NBCluster.object_type, NBVirtualDisk.object_type]
+            for name, field_type in (
+                ("aws_service", "text"), ("aws_resource_id", "text"),
+                ("aws_metadata", "json"),
+            ):
+                field = self.add_update_custom_field({
+                    "name": name, "label": name.replace("_", " ").upper(),
+                    "object_types": types, "type": field_type,
+                    "description": f"Reported by AWS ({self.name})",
+                })
+                existing_type = field.data.get("type")
+                if isinstance(existing_type, dict):
+                    existing_type = existing_type.get("value")
+                if existing_type != field_type:
+                    raise ValueError(
+                        f"NetBox custom field '{name}' must have type '{field_type}', not '{existing_type}'")
 
-        server_role_object = self.inventory.get_by_data(NBDeviceRole, data={"name": "Server"})
+    def sync_snapshot(self, account, snapshot, account_name=None):
+        self.custom_fields()
+        account_name = account_name or account
+        group = self.inventory.add_update_object(
+            NBClusterGroup, data={"name": f"AWS {account_name}"}, source=self)
+        api_version = Version(self.inventory.netbox_api_version)
+        for region, data in snapshot.items():
+            site = self.inventory.add_update_object(
+                NBSite, data={"name": f"AWS {region}"}, source=self)
+            cluster_data = {
+                "name": f"AWS {account_name}/{region}", "group": group,
+                "type": {"name": "AWS EC2"},
+            }
+            if api_version >= Version("4.2"):
+                cluster_data.update(scope_type="dcim.site", scope_id=site)
+            else:
+                cluster_data["site"] = site
+            cluster = self.inventory.add_update_object(NBCluster, data=cluster_data, source=self)
+            eks_clusters = {}
+            inaccessible = data.get("InaccessibleServices", [])
+            if self.settings.sync_eks and "eks" not in inaccessible:
+                for resource in data["EKSClusters"]:
+                    try:
+                        eks_cluster = self.service_cluster(
+                            account, region, site, group, "eks", resource["arn"],
+                            f"EKS {account}/{region}/{resource['name']}",
+                            metadata={key: value for key, value in resource.items() if key != "tags"},
+                            tags=resource.get("tags", {}))
+                        eks_clusters[resource["name"]] = eks_cluster
+                    except ValueError as exc:
+                        self.retain_source_objects()
+                        log.warning(f"Skipping EKS cluster '{resource['name']}' "
+                                    f"(account '{account}', region '{region}'): {exc}")
+            if self.settings.sync_lambda and "lambda" not in inaccessible:
+                try:
+                    lambda_cluster = self.service_cluster(
+                        account, region, site, group, "lambda", f"lambda/{account}/{region}",
+                        f"Lambda {account}/{region}")
+                except ValueError as exc:
+                    self.retain_source_objects()
+                    log.warning(f"Skipping Lambda functions (account '{account}', region '{region}'): {exc}")
+                else:
+                    for function in data["Functions"]:
+                        try:
+                            self.sync_lambda(account, region, site, lambda_cluster, function)
+                        except ValueError as exc:
+                            self.retain_source_objects()
+                            log.warning(f"Skipping function '{function['FunctionName']}' "
+                                        f"(account '{account}', region '{region}'): {exc}")
+            if self.settings.sync_s3 and "s3" not in inaccessible:
+                self.sync_s3(account, region, site, group, data["Buckets"])
+            name_counts = {}
+            for instance in data["instances"]:
+                name = next((tag["Value"].strip() for tag in instance.get("Tags", [])
+                             if tag["Key"] == "Name" and tag["Value"].strip()), instance["InstanceId"])
+                key = name.casefold()
+                name_counts[key] = name_counts.get(key, 0) + 1
+            for instance in data["instances"]:
+                tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
+                vm_name = tags.get("Name", "").strip() or instance["InstanceId"]
+                if name_counts[vm_name.casefold()] > 1:
+                    vm_name = f"{vm_name} ({instance['InstanceId']})"
+                eks_cluster_name = data.get("EKSWorkers", {}).get(instance["InstanceId"])
+                if eks_cluster_name is not None and eks_cluster_name not in eks_clusters and \
+                        self.settings.sync_eks and "eks" not in inaccessible:
+                    log.warning(f"Skipping instance '{instance['InstanceId']}' (account '{account}', "
+                                f"region '{region}'): its EKS cluster '{eks_cluster_name}' was not synced.")
+                    continue
+                self.sync_instance(
+                    account, region, instance, data, site,
+                    eks_clusters.get(eks_cluster_name, cluster),
+                    api_version, vm_name=vm_name)
 
-        if server_role_object is not None:
-            role_data = {"name": "Server", "vm_role": True}
-            if server_role_object.is_new is True:
-                role_data["color"] = "9e9e9e"
+    def sync_instance(self, account, region, instance, data, site, cluster, api_version, vm_name=None):
+        instance_id = instance["InstanceId"]
+        if "eks" in data.get("InaccessibleServices", []):
+            existing = next((item for item in self.inventory.get_all_items(NBVM)
+                             if (item.data.get("custom_fields") or {}).get("aws_account_id") == account and
+                             (item.data.get("custom_fields") or {}).get("aws_instance_id") == instance_id), None)
+            if existing is not None and existing.data.get("cluster") is not None:
+                cluster = existing.data["cluster"]
+        tags = {tag["Key"]: tag["Value"] for tag in instance.get("Tags", [])}
+        spec = data["InstanceTypes"][instance["InstanceType"]]
+        vm_data = {
+            "name": vm_name or tags.get("Name", "").strip() or instance_id, "cluster": cluster,
+            "status": "active" if instance["State"]["Name"] == "running" else "offline",
+            "vcpus": spec["VCpuInfo"]["DefaultVCpus"],
+            "memory": spec["MemoryInfo"]["SizeInMiB"],
+            "custom_fields": {
+                "aws_account_id": account, "aws_region": region,
+                "aws_instance_id": instance_id, "aws_name": tags.get("Name", ""),
+                "aws_instance_type": instance["InstanceType"],
+                "aws_availability_zone": instance["Placement"]["AvailabilityZone"],
+                "aws_vpc_id": instance.get("VpcId", ""),
+            },
+            "tags": [f"AWS:{key}={tags[key]}" for key in self.settings.tag_keys if key in tags],
+        }
+        cpu = instance.get("CpuOptions", {})
+        if cpu.get("CoreCount") is not None and cpu.get("ThreadsPerCore") is not None:
+            vm_data["vcpus"] = cpu["CoreCount"] * cpu["ThreadsPerCore"]
+        if api_version >= Version("3.3"):
+            vm_data["site"] = site
+        if api_version >= Version("4.1"):
+            vm_data["serial"] = instance_id
+        if self.settings.tenant:
+            vm_data["tenant"] = {"name": self.settings.tenant}
+        disks = [
+            data["Volumes"][entry["Ebs"]["VolumeId"]]
+            for entry in instance.get("BlockDeviceMappings", []) if "Ebs" in entry
+        ]
+        if api_version < Version("3.7"):
+            vm_data["disk"] = sum(volume["Size"] for volume in disks)
+        vm = next((item for item in self.inventory.get_all_items(NBVM)
+                   if (item.data.get("custom_fields") or {}).get("aws_account_id") == account and
+                   (item.data.get("custom_fields") or {}).get("aws_instance_id") == instance_id), None)
+        if vm is None:
+            vm = self.inventory.add_update_object(NBVM, data=vm_data, source=self)
+        else:
+            vm.update(data=vm_data, source=self)
+        self.reconcile_tags(vm, vm_data["tags"])
+        if api_version >= Version("3.7"):
+            for volume in disks:
+                self.add_update_vm_child(NBVirtualDisk, vm, {
+                    "name": volume["VolumeId"], "virtual_machine": vm,
+                    "size": volume["Size"] * (1024 if api_version >= Version("4.1") else 1),
+                    "description": f"AWS EBS {volume['VolumeType']}",
+                })
+        for reference in instance.get("NetworkInterfaces", []):
+            eni = data["NetworkInterfaces"][reference["NetworkInterfaceId"]]
+            self.sync_interface(account, region, vm, eni, data, api_version)
 
-            server_role_object.update(data=role_data)
+    def add_update_vm_child(self, object_type, vm, data):
+        # Display-name matching loses the VM's account/cluster when names repeat.
+        existing = next((item for item in self.inventory.get_all_items(object_type)
+                         if item.data.get("virtual_machine") is vm and
+                         item.data.get("name") == data["name"]), None)
+        if existing is None:
+            return self.inventory.add_object(object_type, data=data, source=self)
+        existing.update(data=data, source=self)
+        return existing
 
-# EOF
+    def sync_interface(self, account, region, vm, eni, data, api_version):
+        interface_data = {
+            "name": eni["NetworkInterfaceId"], "virtual_machine": vm, "enabled": True,
+            "description": eni.get("Description", ""),
+            "custom_fields": {
+                "aws_eni_id": eni["NetworkInterfaceId"], "aws_vpc_id": eni.get("VpcId", ""),
+                "aws_subnet_id": eni.get("SubnetId", ""),
+                "aws_public_ipv4": ", ".join(sorted({
+                    address["Association"]["PublicIp"]
+                    for address in eni.get("PrivateIpAddresses", [])
+                    if address.get("Association", {}).get("PublicIp")
+                })),
+            },
+        }
+        mac = normalize_mac_address(eni.get("MacAddress"))
+        if api_version < Version("4.2"):
+            interface_data["mac_address"] = mac
+        interface = self.add_update_vm_child(NBVMInterface, vm, interface_data)
+        if api_version >= Version("4.2") and mac is not None:
+            mac_object = next((item for item in self.inventory.get_all_items(NBMACAddress)
+                               if item.data.get("mac_address") == mac and
+                               item.data.get("assigned_object_id") in (None, interface)), None)
+            mac_data = {"mac_address": mac, "assigned_object_id": interface,
+                        "assigned_object_type": NBVMInterface}
+            if mac_object is None:
+                mac_object = self.inventory.add_object(NBMACAddress, data=mac_data, source=self)
+            else:
+                mac_object.update(data=mac_data, source=self)
+            for old in interface.get_mac_addresses():
+                if old is not mac_object:
+                    old.remove_interface_association()
+            interface.update(data={"primary_mac_address": mac_object}, source=self)
+        if not self.settings.sync_private_ips:
+            for address in interface.get_ip_addresses():
+                if self.source_tag in address.get_tags():
+                    address.set_source(self)
+            return
+        subnet = data["Subnets"][eni["SubnetId"]]
+        addresses = self.addresses(eni, subnet)
+        discovered = []
+        for address, primary in addresses:
+            owner = data.get("VpcOwners", {}).get(eni["VpcId"], account)
+            vrf = self.get_vrf(owner, region, eni["VpcId"])
+            parsed = ip_interface(address)
+            candidates = [
+                item for item in self.inventory.get_all_items(NBIPAddress)
+                if ip_interface(item.data["address"]).ip == parsed.ip and item.data.get("vrf") is vrf
+            ]
+            if len(candidates) > 1:
+                raise ValueError(f"Multiple NetBox IPs match '{address}' in VRF '{vrf.data['name']}'")
+            existing = candidates[0] if candidates else None
+            if existing is not None and existing.data.get("assigned_object_id") is not None and \
+                    existing.get_interface() is not interface:
+                owner = existing.get_device_vm()
+                owner_tags = owner.get_tags() if owner is not None else []
+                same_source = owner is not None and (
+                    owner.source is self or self.source_tag in owner_tags)
+                managed_owner = same_source or NetBoxHandler.primary_tag in owner_tags
+                managed_orphan = NetBoxHandler.primary_tag in owner_tags and \
+                    NetBoxHandler.orphaned_tag in owner_tags
+                owner_status = owner.data.get("status") if owner is not None else None
+                if isinstance(owner_status, dict):
+                    owner_status = owner_status.get("value")
+                if managed_owner and owner_status == "active" and vm.data["status"] == "offline":
+                    log.error(
+                        f"AWS source '{self.name}': IP '{address}' in VRF '{vrf.data['name']}' "
+                        f"is assigned to active owner '{owner.get_display_name()}'. "
+                        f"Skipping reassignment to offline ENI '{eni['NetworkInterfaceId']}'.")
+                    continue
+                offline_to_active = managed_owner and owner_status == "offline" and vm.data["status"] == "active"
+                if not (same_source or managed_orphan or offline_to_active):
+                    owner_name = owner.get_display_name() if owner is not None else "unresolved owner"
+                    log.error(
+                        f"AWS source '{self.name}': IP '{address}' in VRF '{vrf.data['name']}' "
+                        f"belongs to another source (owner '{owner_name}'). "
+                        f"Skipping reassignment to ENI '{eni['NetworkInterfaceId']}'.")
+                    continue
+                if managed_orphan or offline_to_active:
+                    reason = "orphaned" if managed_orphan else "offline"
+                    log.warning(
+                        f"AWS source '{self.name}': Reclaiming IP '{address}' in VRF '{vrf.data['name']}' "
+                        f"from {reason} owner '{owner.get_display_name()}' "
+                        f"for ENI '{eni['NetworkInterfaceId']}'.")
+            ip_data = {"address": address, "vrf": vrf, "assigned_object_id": interface,
+                       "assigned_object_type": NBVMInterface}
+            if self.settings.tenant:
+                ip_data["tenant"] = {"name": self.settings.tenant}
+            if existing is None:
+                existing = self.inventory.add_object(NBIPAddress, data=ip_data, source=self)
+            else:
+                existing.update(data=ip_data, source=self)
+            discovered.append(existing)
+            if eni.get("Attachment", {}).get("DeviceIndex") == 0 and primary:
+                vm.update(data={f"primary_ip{parsed.version}": existing}, source=self)
+        for old in interface.get_ip_addresses():
+            if old not in discovered and (old.source is self or self.source_tag in old.get_tags()):
+                old.remove_interface_association()
