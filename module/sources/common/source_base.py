@@ -52,6 +52,9 @@ class SourceBase:
     def set_source_tag(self):
         self.source_tag = f"Source: {self.name}"
 
+    def can_reassign_stale_ip(self, ip, device_vm_object):
+        return False
+
     @classmethod
     def implements(cls, source_type):
 
@@ -705,6 +708,11 @@ class SourceBase:
                 # if device or VM is NOT active, set current nic status to disabled
                 if "active" not in str(grab(current_ip_device, "data.status")):
                     current_nic_enabled = False
+
+                if current_nic_enabled is True and this_nic_enabled is True and \
+                        self.can_reassign_stale_ip(ip, device_object):
+                    this_ip_object = ip
+                    break
 
                 if current_nic_enabled is True and this_nic_enabled is False:
                     log.debug(f"Current interface '{current_ip_nic.get_display_name()}' for IP '{ip_object}'"
