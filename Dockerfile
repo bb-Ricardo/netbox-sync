@@ -3,10 +3,12 @@ FROM python:3.14-slim AS builder
 COPY requirements.txt .
 COPY requirements-aws.txt .
 COPY requirements-ovirt.txt .
+COPY requirements-openstack.txt .
 
 ARG VENV=/opt/netbox-sync/venv
 ARG INSTALL_AWS=false
 ARG INSTALL_OVIRT=false
+ARG INSTALL_OPENSTACK=false
 
 # Install dependencies
 RUN if [ "$INSTALL_OVIRT" = "true" ]; then \
@@ -19,6 +21,7 @@ RUN if [ "$INSTALL_OVIRT" = "true" ]; then \
     $VENV/bin/pip install -r requirements.txt && \
     if [ "$INSTALL_AWS" = "true" ]; then $VENV/bin/pip install -r requirements-aws.txt; fi && \
     if [ "$INSTALL_OVIRT" = "true" ]; then $VENV/bin/pip install -r requirements-ovirt.txt; fi && \
+    if [ "$INSTALL_OPENSTACK" = "true" ]; then $VENV/bin/pip install -r requirements-openstack.txt; fi && \
     $VENV/bin/pip install vmware-vcenter==9.1.1.0 && \
     $VENV/bin/python3 -m pip uninstall -y pip && \
     find $VENV -type d -name "__pycache__" -print0 | xargs -0 -n1 rm -rf
