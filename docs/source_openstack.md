@@ -185,6 +185,10 @@ inventories where names repeat; the original name is then stored in the
 `openstack_vm_name` custom field. Changing naming settings can affect matching,
 so review a dry run before applying them to existing inventory.
 
+A VM that matches a server only by MAC or primary IP is not reused if it stores a
+different server UUID. A new server that got the address of a deleted one gets its
+own VM, and the address moves over through the stale IP repair described above.
+
 `skip_vm_platform` disables flavor-to-platform mapping. `skip_vm_comments`
 disables VM UUID comments. `strip_host_domain_name` and
 `strip_vm_domain_name` control domain stripping.

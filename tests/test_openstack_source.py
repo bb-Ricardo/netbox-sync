@@ -297,6 +297,7 @@ def test_detaching_first_port_keeps_second_port_interface_and_ip(cloud):
     handler.apply()
 
     assert second_interface.data["name"] == "vNIC2 (private)"
+    assert second_interface.data["description"] == "vNIC2 (private)"
     assert {ip.data["address"] for ip in second_interface.get_ip_addresses()} == {"10.0.0.42/32"}
 
 
@@ -413,6 +414,27 @@ def test_stale_ip_repair_is_blocked(cloud, blocker):
     handler.apply()
 
     assert stale_ip.get_device_vm() is old_vm
+
+
+def test_new_server_with_the_address_of_a_deleted_one_gets_its_own_vm(cloud):
+    old_id = "00000000-0000-0000-0000-000000000001"
+    new_id = "00000000-0000-0000-0000-000000000002"
+    port = {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:01"}
+    cloud.session.compute.servers.return_value = [server(id=old_id, name="old.example.org", addresses={"private": [port]})]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+    old_vm = cloud.inventory.get_all_items(NBVM)[0]
+    old_vm.add_tags(handler.source_tag)
+    old_vm.source = None
+
+    new_port = {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:02"}
+    cloud.session.compute.servers.return_value = [server(id=new_id, name="new.example.org", addresses={"private": [new_port]})]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+
+    assert old_vm.data["name"] == "old.example.org"
+    assert old_vm.data["comments"] == old_id
+    assert sorted(vm.data["name"] for vm in cloud.inventory.get_all_items(NBVM)) == ["new.example.org", "old.example.org"]
 
 
 def test_network_ports_invalid_addresses_and_floating_primary_preference(cloud):

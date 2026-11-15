@@ -579,6 +579,30 @@ class OpenStackHandler(SourceBase):
                 return cluster
         return None
 
+    def server_uuid(self, vm_data):
+        """The server UUID stored on a VM, None if this source stores none (skip_vm_comments)."""
+        key = "name" if self.settings.set_vm_name_to_uuid else "comments"
+        if key == "comments" and self.settings.skip_vm_comments:
+            return None
+        try:
+            return str(UUID(str((vm_data or {}).get(key))))
+        except ValueError:
+            return None
+
+    def same_server_or_none(self, object_type, candidate, object_data):
+        """
+        A VM found by MAC or primary IP that stores another server UUID belongs to another
+        server, usually a deleted one whose address was handed out again. Don't take it over.
+        """
+        if object_type != NBVM or candidate is None:
+            return candidate
+        existing, current = self.server_uuid(candidate.data), self.server_uuid(object_data)
+        if existing is not None and current is not None and existing != current:
+            log.debug(f"{candidate.name} '{candidate.get_display_name()}' matched by MAC or primary IP belongs "
+                      f"to server {existing}, not {current}. Not using it.")
+            return None
+        return candidate
+
     def get_server_priority(self, server):
         name = get_string_or_none(grab(server, "name"))
         if name is not None and self.settings.strip_vm_domain_name:
@@ -730,6 +754,7 @@ class OpenStackHandler(SourceBase):
             nic_macs = [x.get("mac_address") for x in mac_source_data.values() if x.get("mac_address") is not None]
 
             device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
+            device_vm_object = self.same_server_or_none(object_type, device_vm_object, object_data)
 
         if device_vm_object is not None:
             log.debug2("Found a matching %s object: %s" %
@@ -741,6 +766,7 @@ class OpenStackHandler(SourceBase):
             log.debug2(f"No match found. Trying to find {object_type.name} based on primary IP addresses")
 
             device_vm_object = self.get_object_based_on_primary_ip(object_type, p_ipv4, p_ipv6)
+            device_vm_object = self.same_server_or_none(object_type, device_vm_object, object_data)
 
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
@@ -807,8 +833,7 @@ class OpenStackHandler(SourceBase):
                         target_name = f"vNIC{index} {network_label}"
                         index += 1
                 used_names.add(target_name)
-                if int_name not in names_by_mac:
-                    int_data["description"] = target_name
+                int_data["description"] = target_name
                 int_data["name"] = target_name
                 remapped_data[target_name] = int_data
                 remapped_ips[target_name] = nic_ips.get(int_name, [])
