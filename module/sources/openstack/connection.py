@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2021 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -18,6 +18,7 @@ from packaging import version
 
 from module.sources.common.source_base import SourceBase
 from module.sources.openstack.config import OpenStackConfig
+from module import __version__
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none
 from module.common.support import normalize_mac_address
@@ -138,7 +139,7 @@ class OpenStackHandler(SourceBase):
                 project_domain_name=self.settings.project_domain,
                 verify=self.settings.validate_tls_certs,
                 app_name='netbox-sync',
-                app_version='0.1',
+                app_version=__version__,
             )
             self.session.authorize()
         except Exception as e:
@@ -615,12 +616,6 @@ class OpenStackHandler(SourceBase):
 
         return compute_host_names
 
-    def object_synced_by_other_source(self, nb_object):
-        if nb_object.source is not None:
-            return nb_object.source is not self
-        other_tags = [source.source_tag for source in self.inventory.source_list if source is not self]
-        return bool(set(nb_object.get_tags()).intersection(other_tags))
-
     def add_custom_attributes(self, object_type, obj, data):
         attributes = self.settings.host_custom_object_attributes if object_type == NBDevice else \
             self.settings.vm_custom_object_attributes
@@ -794,9 +789,9 @@ class OpenStackHandler(SourceBase):
                 mac = int_data.get("mac_address")
                 matches = current_by_mac.get(normalize_mac_address(mac), []) if mac else []
                 if len(matches) > 1:
-                    message = f"Multiple interfaces of OpenStack VM '{object_name}' match MAC '{mac}'."
-                    log.error(message)
-                    raise ValueError(message)
+                    log.warning(f"Multiple interfaces of OpenStack VM '{object_name}' match MAC '{mac}', "
+                                f"matching this port by name instead.")
+                    continue
                 if matches:
                     names_by_mac[int_name] = matches[0].data["name"]
                     mac_matched_interfaces.add(matches[0])
@@ -1078,7 +1073,7 @@ class OpenStackHandler(SourceBase):
         if log.level == DEBUG3:
             try:
                 log.info("Cluster data")
-                dump(obj.service_details.to_dict())
+                pprint.pprint(obj.service_details)
             except Exception as e:
                 log.error(e)
 

@@ -15,7 +15,7 @@ pip install -r requirements-openstack.txt
 uv sync --extra openstack
 ```
 
-The supported SDK range is `openstacksdk>=4.0,<5`. Selecting an OpenStack source
+The tested SDK version is `openstacksdk==4.22.0`. Selecting an OpenStack source
 without the SDK logs an error and skips that source.
 
 ## Authentication and permissions
@@ -120,7 +120,8 @@ names before positional interface matching is attempted. Detaching an earlier
 port therefore does not renumber or steal the later port's interface, MAC,
 or IPs; the detached interface is left for normal orphan handling.
 An interface paired without a MAC match is renamed to the discovered network
-name. Ports without MAC data still rely on positional/shared matching.
+name. Ports without MAC data, or with a MAC that more than one interface of the VM
+carries, still rely on positional/shared matching.
 Virtual disks are matched by disk name within the resolved VM, so same-named
 VMs in different availability zones retain separate disks.
 For `all_projects = True`, the source can repair an IP still assigned to an

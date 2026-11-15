@@ -355,6 +355,65 @@ def test_stale_ip_repair_requires_complete_all_projects_discovery(cloud, all_pro
     assert assigned_vm.data["name"] == expected_vm_name
 
 
+def test_two_interfaces_with_the_same_mac_do_not_stop_the_run(cloud):
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+    vm = cloud.inventory.get_all_items(NBVM)[0]
+    interface = cloud.inventory.get_all_interfaces(vm)[0]
+    # a second interface with the same MAC, e.g. made by hand
+    cloud.inventory.add_object(NBVMInterface, data={
+        "name": "eth-copy", "virtual_machine": vm, "primary_mac_address": interface.data["primary_mac_address"],
+    }, read_from_netbox=True)
+
+    handler.apply()
+
+    assert interface.data["name"] == "vNIC1 (private)"
+    assert "10.0.0.8/32" in {ip.data["address"] for ip in interface.get_ip_addresses()}
+
+
+@pytest.mark.parametrize("blocker", ["old-server-still-listed", "address-reported-twice",
+                                     "ip-tagged-by-another-source", "incomplete-server-list"])
+def test_stale_ip_repair_is_blocked(cloud, blocker):
+    old_id = "00000000-0000-0000-0000-000000000001"
+    new_id = "00000000-0000-0000-0000-000000000002"
+    other_id = "00000000-0000-0000-0000-000000000003"
+    old_port = {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:01"}
+    cloud.session.compute.servers.return_value = [
+        server(id=old_id, name="deleted.example.org", addresses={"private": [old_port]})
+    ]
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+    old_vm = cloud.inventory.get_all_items(NBVM)[0]
+    stale_ip = old_vm.data["primary_ip4"]
+    old_vm.add_tags(handler.source_tag)
+    stale_ip.add_tags(handler.source_tag)
+    old_vm.source = None
+    stale_ip.source = None
+
+    servers = [server(id=new_id, name="replacement.example.org", addresses={"private": [
+        {"addr": "10.0.0.43", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:02"},
+        {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:03"},
+    ]})]
+    if blocker == "old-server-still-listed":
+        # the old server still exists, it is only filtered out of this sync
+        cloud.settings["vm_exclude_filter"] = "deleted.*"
+        servers.append(server(id=old_id, name="deleted.example.org", addresses={"private": [
+            {"addr": "10.0.0.44", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:04"}]}))
+    elif blocker == "address-reported-twice":
+        servers.append(server(id=other_id, name="other.example.org", addresses={"private": [
+            {"addr": "10.0.0.42", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:05"}]}))
+    elif blocker == "ip-tagged-by-another-source":
+        stale_ip.add_tags("Source: other")
+    elif blocker == "incomplete-server-list":
+        servers.append(server(id="not-a-uuid", name="broken.example.org", addresses={"private": [
+            {"addr": "10.0.0.45", "version": 4, "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:00:00:06"}]}))
+    cloud.session.compute.servers.return_value = servers
+    handler = OpenStackHandler("cloud")
+    handler.apply()
+
+    assert stale_ip.get_device_vm() is old_vm
+
+
 def test_network_ports_invalid_addresses_and_floating_primary_preference(cloud):
     cloud.settings["permitted_subnets"] += ", 192.0.2.0/24"
     vm_resource = server()
