@@ -7,4 +7,5 @@
 !requirements.txt
 !requirements-aws.txt
 !requirements-ovirt.txt
+!requirements-openstack.txt
 !settings-example.ini
