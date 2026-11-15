@@ -8,6 +8,7 @@
 #  repository or visit: <https://opensource.org/licenses/MIT>.
 
 import copy
+import json
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
@@ -108,6 +109,52 @@ def test_services_import_and_repeat(make_source, inventory, version):
 def test_json_safe_normalizes_aware_timestamps_to_utc():
     timestamp = datetime(2026, 11, 14, 8, 30, tzinfo=timezone(timedelta(hours=-6)))
     assert json_safe({"createdAt": timestamp}) == {"createdAt": "2026-11-14T14:30:00+00:00"}
+
+
+def test_eks_timestamps_are_stored_as_json(make_source, inventory):
+    # boto3 parses EKS timestamps into datetime objects in the local timezone
+    local = timezone(timedelta(hours=2))
+    data = service_data()
+    eks = data["EKSClusters"][0]
+    eks["createdAt"] = datetime(2026, 10, 23, 14, 0, 0, 123000, tzinfo=local)
+    eks["nodegroups"][0]["modifiedAt"] = datetime(2026, 10, 24, 2, 0, tzinfo=local)
+    eks["fargateProfiles"][0]["createdAt"] = datetime(2026, 10, 24, 2, 0, tzinfo=local)
+    # with S3 the bucket holder VM exists before the EKS worker is looked up by name
+    source = make_source("sync_s3 = True\nsync_eks = True\nsync_private_ips = False", data=data)
+    source.apply()
+
+    cluster = next(item for item in inventory.get_all_items(NBCluster)
+                   if item.data.get("custom_fields", {}).get("aws_service") == "eks")
+    metadata = cluster.data["custom_fields"]["aws_metadata"]
+    assert metadata["createdAt"] == "2026-10-23T12:00:00.123000+00:00"
+    assert metadata["nodegroups"][0]["modifiedAt"] == "2026-10-24T00:00:00+00:00"
+    assert metadata["fargateProfiles"][0]["createdAt"] == "2026-10-24T00:00:00+00:00"
+
+    # the request body sent to NetBox, read back on the next run
+    cluster.data["custom_fields"] = json.loads(json.dumps(cluster.data["custom_fields"], allow_nan=False))
+    cluster.updated_items = []
+    source.apply()
+    assert "custom_fields" not in cluster.updated_items
+
+
+@pytest.mark.parametrize("existing_id", [None, "", "   "])
+def test_service_object_adopts_a_source_tagged_object_without_resource_id(make_source, inventory, existing_id):
+    source = make_source("sync_lambda = True")
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": "legacy"})
+    cluster = inventory.add_object(NBCluster, data={"name": "legacy-cluster", "group": group})
+    existing = inventory.add_object(NBVM, data={
+        "name": "Lambda old", "cluster": cluster, "tags": [source.source_tag],
+        "custom_fields": {"aws_resource_id": existing_id, "aws_service": "lambda"},
+    })
+    data = {
+        "name": "Lambda old", "cluster": cluster, "tags": [],
+        "custom_fields": {"aws_resource_id": FUNCTION_ARN, "aws_service": "lambda", "aws_metadata": {}},
+    }
+
+    assert source.service_object(NBVM, FUNCTION_ARN, data) is existing
+    assert existing.data["custom_fields"]["aws_resource_id"] == FUNCTION_ARN
+    assert len(inventory.get_all_items(NBVM)) == 1
 
 
 def test_s3_requires_supported_netbox_before_discovery(make_source, inventory, caplog):

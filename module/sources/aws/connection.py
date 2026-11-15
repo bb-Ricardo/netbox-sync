@@ -342,7 +342,11 @@ class AWSHandler(SourceBase):
         return f"{name[:limit - 13]}-{suffix}"
 
     def service_object(self, object_type, identity, data):
-        """Adopt tagged legacy objects; EC2 VMs carry aws_instance_id, not aws_resource_id."""
+        """
+        Find the NetBox object of an AWS resource by its aws_resource_id. An object without that
+        ID is taken over if it is the only one with this name and parent, belongs to this source
+        and has no other aws_service, instead of ending in a name collision.
+        """
         fields = data["custom_fields"]
         fields["aws_metadata"] = json_safe(fields["aws_metadata"])
         items = self.inventory.get_all_items(object_type)
@@ -355,9 +359,9 @@ class AWSHandler(SourceBase):
                             item.data.get(parent) is data.get(parent)]
             if len(name_matches) == 1:
                 candidate = name_matches[0]
-                fields = candidate.data.get("custom_fields") or {}
-                candidate_identity = fields.get("aws_resource_id")
-                candidate_service = fields.get("aws_service")
+                candidate_fields = candidate.data.get("custom_fields") or {}
+                candidate_identity = candidate_fields.get("aws_resource_id")
+                candidate_service = candidate_fields.get("aws_service")
                 identity_missing = candidate_identity is None or (
                     isinstance(candidate_identity, str) and not candidate_identity.strip())
                 service = (data.get("custom_fields") or {}).get("aws_service")
