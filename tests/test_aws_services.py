@@ -24,6 +24,7 @@ from module.netbox import (
 from module.sources import instantiate_sources
 from module.sources.aws import client as aws_client
 from module.sources.aws.client import AWSAccessCheck, AWSClient, AWSDiscoveryError
+from module.sources.aws.connection import json_safe
 from test_aws_source import (
     ACCOUNT, INSTANCE, REGION, SECOND_ACCOUNT, VPC, assume_member, identity, inventory_data,
     make_source, org_sdk, organization_accounts, stub_region, windows_config_paths,
@@ -105,6 +106,11 @@ def test_services_import_and_repeat(make_source, inventory, version):
     ]
 
 
+def test_json_safe_normalizes_aware_timestamps_to_utc():
+    timestamp = datetime(2026, 11, 14, 8, 30, tzinfo=timezone(timedelta(hours=-6)))
+    assert json_safe({"createdAt": timestamp}) == {"createdAt": "2026-11-14T14:30:00+00:00"}
+
+
 def test_eks_timestamps_are_stored_as_json(make_source, inventory):
     # boto3 parses EKS timestamps into datetime objects in the local timezone
     local = timezone(timedelta(hours=2))
@@ -129,6 +135,26 @@ def test_eks_timestamps_are_stored_as_json(make_source, inventory):
     cluster.updated_items = []
     source.apply()
     assert "custom_fields" not in cluster.updated_items
+
+
+@pytest.mark.parametrize("existing_id", [None, "", "   "])
+def test_service_object_adopts_a_source_tagged_object_without_resource_id(make_source, inventory, existing_id):
+    source = make_source("sync_lambda = True")
+    source.custom_fields()
+    group = inventory.add_object(NBClusterGroup, data={"name": "legacy"})
+    cluster = inventory.add_object(NBCluster, data={"name": "legacy-cluster", "group": group})
+    existing = inventory.add_object(NBVM, data={
+        "name": "Lambda old", "cluster": cluster, "tags": [source.source_tag],
+        "custom_fields": {"aws_resource_id": existing_id, "aws_service": "lambda"},
+    })
+    data = {
+        "name": "Lambda old", "cluster": cluster, "tags": [],
+        "custom_fields": {"aws_resource_id": FUNCTION_ARN, "aws_service": "lambda", "aws_metadata": {}},
+    }
+
+    assert source.service_object(NBVM, FUNCTION_ARN, data) is existing
+    assert existing.data["custom_fields"]["aws_resource_id"] == FUNCTION_ARN
+    assert len(inventory.get_all_items(NBVM)) == 1
 
 
 def test_s3_requires_supported_netbox_before_discovery(make_source, inventory, caplog):
@@ -282,12 +308,12 @@ def test_s3_conflict_skips_dependencies_but_continues(make_source, inventory, ca
     cluster = inventory.add_object(NBCluster, data={
         "name": f"S3 {ACCOUNT}/{REGION}", "group": group,
         "custom_fields": {} if stage == "cluster" else {"aws_resource_id": identity},
-    }, source=source)
+    }, source=source if stage != "cluster" else None)
     if stage != "cluster":
         holder = inventory.add_object(NBVM, data={
             "name": f"S3 inventory {ACCOUNT}/{REGION}", "cluster": cluster,
             "custom_fields": {} if stage == "holder" else {"aws_resource_id": identity},
-        }, source=source)
+        }, source=source if stage == "bucket" else None)
         if stage == "bucket":
             inventory.add_object(NBVirtualDisk, data={
                 "name": "inventory-bucket", "virtual_machine": holder, "size": 0,
@@ -299,6 +325,30 @@ def test_s3_conflict_skips_dependencies_but_continues(make_source, inventory, ca
     assert buckets == (["second"] if stage == "bucket" else [])
     assert any(vm.data.get("custom_fields", {}).get("aws_instance_id") == INSTANCE
                for vm in inventory.get_all_items(NBVM))
+
+
+@pytest.mark.parametrize("mismatch", ["aws_resource_id", "aws_service"])
+def test_s3_source_tagged_name_collision_is_not_adopted(make_source, inventory, caplog, mismatch):
+    data = service_data()
+    source = make_source("sync_s3 = True\nsync_private_ips = False", data=data)
+    source.apply()
+    bucket = next(disk for disk in inventory.get_all_items(NBVirtualDisk)
+                  if disk.data["name"] == "inventory-bucket")
+    bucket.source = None
+    bucket.add_tags(source.source_tag)
+    fields = bucket.data["custom_fields"]
+    if mismatch == "aws_resource_id":
+        fields["aws_resource_id"] = f"s3/{SECOND_ACCOUNT}/inventory-bucket"
+    else:
+        fields.pop("aws_resource_id")
+        fields["aws_service"] = "lambda"
+    original_fields = copy.deepcopy(fields)
+
+    source.apply()
+
+    assert "name collision" in caplog.text
+    assert bucket.data["custom_fields"] == original_fields
+    assert source.source_tag in bucket.get_tags()
 
 
 def test_eks_conflict_skips_workers_and_continues_next_region(make_source, inventory, caplog):

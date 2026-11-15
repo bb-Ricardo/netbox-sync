@@ -104,6 +104,11 @@ For example, the following supplemental policy enables all three:
 }
 ```
 
+**Current S3 discovery always requests bucket tags**, even when `tag_keys` is
+empty. Omitting `s3:GetBucketTagging` can therefore cause an authorization denial
+that skips the affected bucket and postpones orphaning/pruning for this source,
+as described below; it does not simply disable tag synchronization.
+
 Where your IAM policy supports resource-level permissions, restrict the
 resource-specific actions to the intended buckets, functions, and EKS resources.
 Listing actions still need their documented wildcard scope. No S3 object reads,
