@@ -34,7 +34,7 @@ aws = [
     "boto3>=1.40,<2",
 ]
 openstack = [
-    "openstacksdk>=4.0,<5",
+    "openstacksdk==4.22.0",
 ]
 ovirt = [
     "ovirt-engine-sdk-python==4.6.3",

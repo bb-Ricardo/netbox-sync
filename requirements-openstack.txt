@@ -1,2 +1,2 @@
 -r requirements.txt
-openstacksdk>=4.0,<5
+openstacksdk==4.22.0

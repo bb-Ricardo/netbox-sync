@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from module import __version__
 from module.config.file_output import ConfigFileOutput
 from module.config.files import ConfigFileINI, ConfigFileYAML
 from module.config.parser import ConfigParser
@@ -151,7 +152,7 @@ def test_registration_authentication_and_project_scope(cloud):
         auth_url=cloud.settings["auth_url"], project_name="admin", username="sync",
         password="test-only", region_name="RegionOne", user_domain_name="Default",
         project_domain_name="Default", verify=False, load_yaml_config=False, load_envvars=False,
-        app_name="netbox-sync", app_version="0.1",
+        app_name="netbox-sync", app_version=__version__,
     )
     cloud.session.authorize.assert_called_once()
     handler.apply()

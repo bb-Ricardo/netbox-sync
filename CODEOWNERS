@@ -6,3 +6,5 @@
 /docs/source_hetzner.md @SerhiiZahuba
 /module/sources/ovirt/ @ekrichbaum
 /docs/source_ovirt.md @ekrichbaum
+/module/sources/openstack/ @ekrichbaum
+/docs/source_openstack.md @ekrichbaum

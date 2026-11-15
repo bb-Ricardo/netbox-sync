@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2023 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -262,26 +262,6 @@ class OpenStackConfig(ConfigBase):
                          bool,
                          description="Set the name in Netbox to the VM UUID instead of name",
                          default_value=False),
-
-            # removed settings
-            ConfigOption("netbox_host_device_role",
-                         str,
-                         deprecation_message="You need to switch to 'host_role_relation'.",
-                         removed=True),
-            ConfigOption("netbox_vm_device_role",
-                         str,
-                         deprecation_message="You need to switch to 'vm_role_relation'.",
-                         removed=True),
-            ConfigOption("sync_tags",
-                         bool,
-                         deprecation_message="You need to switch to 'host_tag_relation', " +
-                                             "'vm_tag_relation' or 'cluster_tag_relation'",
-                         removed=True),
-            ConfigOption("sync_parent_tags",
-                         bool,
-                         deprecation_message="You need to switch to 'host_tag_relation', " +
-                                             "'vm_tag_relation' or 'cluster_tag_relation'",
-                         removed=True)
         ]
 
         super().__init__()

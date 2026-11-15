@@ -50,7 +50,7 @@ This ensures stale objects are removed from NetBox keeping an accurate current s
 * oVirt / Red Hat Virtualization Engine v4 API
 * Optional SDK and native libraries: see [installation and configuration](docs/source_ovirt.md)
 #### Source: OpenStack (if used)
-* Identity v3, Nova and Cinder APIs; `openstacksdk>=4.0,<5`
+* Identity v3, Nova and Cinder APIs; `openstacksdk==4.22.0`
 * See [OpenStack installation and configuration](docs/source_openstack.md) for credentials, permissions, and inventory mapping
 
 # Installing
