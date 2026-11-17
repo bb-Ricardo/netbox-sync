@@ -76,6 +76,18 @@ class NetBoxConfig(ConfigBase):
                          description="Specify the client certificate private key belonging to the client cert",
                          config_example="client.key"),
 
+            ConfigOption("branch_schema_id",
+                         str,
+                         description="""Schema ID of a NetBox Branching branch (NetBox Branching plugin).
+                         If set, the header 'X-NetBox-Branch: <schema_id>' is sent with every NetBox
+                         API request, so all reads and writes are performed inside this branch.
+                         The value is the branch's 8-character schema ID shown on the branch detail
+                         page in NetBox, NOT the branch name. Branch selection is stateless, hence the
+                         header is required on every request. If unset, no branch header is sent and
+                         requests target the main schema.
+                         """,
+                         config_example="td5smq0f"),
+
             ConfigOption("prune_enabled",
                          bool,
                          description="""Whether items which were created by this program but

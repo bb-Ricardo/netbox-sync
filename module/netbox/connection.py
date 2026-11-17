@@ -167,6 +167,13 @@ class NetBoxHandler:
         session = requests.Session()
         session.headers.update(header)
 
+        # NetBox Branching: branch selection is stateless, so the branch schema ID
+        # must be sent as a header with every single request
+        if self.settings.branch_schema_id is not None:
+            session.headers.update({"X-NetBox-Branch": self.settings.branch_schema_id})
+            log.info(f"NetBox Branching enabled: sending header 'X-NetBox-Branch' "
+                     f"with branch schema ID '{self.settings.branch_schema_id}' on every request")
+
         # adds proxy to the session
         if self.settings.proxy is not None:
             session.proxies.update({
