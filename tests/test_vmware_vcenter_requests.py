@@ -23,16 +23,33 @@ from module.sources.vmware.connection import VMWareHandler
 
 @pytest.fixture
 def fetch_counter(monkeypatch):
-    """Counts every property read (SOAP 'Fetch') per managed object and property."""
+    """
+    Counts how often each property of each managed object was transferred from vCenter, read one by
+    one (SOAP 'Fetch') or in bulk (PropertyCollector). The keys of the bulk reads carry the property
+    path as requested. The SOAP methods called are counted under the key 'methods'.
+    """
     from pyVmomi import SoapAdapter
 
     counts = collections.Counter()
+    counts.methods = collections.Counter()
+    counts.single_reads = collections.Counter()
     original = SoapAdapter.SoapStubAdapter.InvokeMethod
 
     def invoke(self, mo, info, args, outerStub=None):
+        counts.methods[info.wsdlName] += 1
         if info.wsdlName == "Fetch":
             counts[(mo._wsdlName, mo._moId, args[0])] += 1
-        return original(self, mo, info, args, outerStub)
+            counts.single_reads[(mo._wsdlName, mo._moId, args[0])] += 1
+
+        result = original(self, mo, info, args, outerStub)
+
+        if info.wsdlName in ["RetrievePropertiesEx", "ContinueRetrievePropertiesEx"]:
+            retrieved = result[1] if isinstance(result, tuple) else result
+            for object_content in getattr(retrieved, "objects", None) or list():
+                for prop in object_content.propSet or list():
+                    counts[(object_content.obj._wsdlName, object_content.obj._moId, prop.name)] += 1
+
+        return result
 
     monkeypatch.setattr(SoapAdapter.SoapStubAdapter, "InvokeMethod", invoke)
     return counts
@@ -59,6 +76,7 @@ def test_a_vm_parsed_in_the_first_run_is_not_requested_again_in_the_second(vmwar
 
     # the reads above went through the counted stub as well
     fetch_counter.clear()
+    fetch_counter.single_reads.clear()
     vmware_source.apply()
 
     reevaluated = {obj._moId for obj in vmware_source.objects_to_reevaluate}
@@ -66,6 +84,68 @@ def test_a_vm_parsed_in_the_first_run_is_not_requested_again_in_the_second(vmwar
 
     assert len(config_reads) > 0
     assert set(config_reads) == {1}
+
+
+def test_vm_and_host_properties_are_retrieved_in_bulk(vmware_source, fetch_counter):
+    vmware_source.apply()
+
+    single_reads = [key for key in fetch_counter.single_reads if key[0] in ("VirtualMachine", "HostSystem")]
+
+    assert fetch_counter.methods["RetrievePropertiesEx"] > 0
+    assert single_reads == [], "properties requested object by object"
+
+
+def test_property_cache_serves_prefetched_properties(sdk, fetch_counter):
+    from pyVmomi import vim
+    from module.sources.vmware.property_cache import PropertyCache
+
+    view = sdk.viewManager.CreateContainerView(sdk.rootFolder, [vim.VirtualMachine], True)
+    vms = list(view.view)
+    view.Destroy()
+    expected = [(vm.name, vm.runtime.powerState) for vm in vms]
+
+    cache = PropertyCache.for_stub(vms[0]._stub)
+    prefetched = cache.prefetch(sdk, vms, vim.VirtualMachine, ["name", "runtime.powerState"])
+
+    # same objects in the same order, now reading through the cache
+    assert prefetched == vms
+    assert all(vm._stub is cache for vm in prefetched)
+
+    fetch_counter.single_reads.clear()
+    assert [(vm.name, cache.get(vm, "runtime.powerState")[1]) for vm in prefetched] == expected
+    assert fetch_counter.single_reads == {}, "prefetched properties were requested again"
+
+    # a property which was not prefetched is requested once, objects reached through it use the cache too
+    host = prefetched[0].runtime.host
+    prefetched[0].runtime
+    assert fetch_counter.single_reads == {("VirtualMachine", vms[0]._moId, "runtime"): 1}
+    assert host._stub is cache
+
+    # only small properties survive eviction
+    cache.evict(prefetched)
+    assert cache.get(prefetched[0], "name") == (True, expected[0][0])
+    assert cache.get(prefetched[0], "runtime.powerState") == (False, None)
+
+
+def test_an_unknown_custom_object_attribute_does_not_break_the_sync(vcsim, inventory, load_config, vmware_settings,
+                                                                     sdk):
+    from pyVmomi import vim
+    from module.netbox.object_classes import NBVM
+    from module.sources import instantiate_sources
+
+    load_config(vmware_settings + "vm_custom_object_attributes = config.doesNotExist, config.uuid\n")
+    source = instantiate_sources()[0]
+    inventory.resolve_relations()
+    source.apply()
+
+    view = sdk.viewManager.CreateContainerView(sdk.rootFolder, [vim.VirtualMachine], True)
+    uuids = {vm.name: vm.config.uuid for vm in view.view}
+    view.Destroy()
+
+    synced = {vm.get_display_name(): vm for vm in inventory.get_all_items(NBVM)}
+    assert set(synced) == set(uuids)
+    for name, vm in synced.items():
+        assert uuids[name] in vm.data.get("custom_fields", dict()).values()
 
 
 def test_a_vm_queued_for_reevaluation_is_parsed_again(vmware_source, monkeypatch):
@@ -232,3 +312,68 @@ def test_custom_field_definitions_are_only_requested_for_custom_values(inventory
 
     assert results == [{"vcsa_owner": f"user{i}"} for i in range(3)]
     assert _VM.reads == 1
+
+
+class _BulkTagging(_CountingTagging):
+    """Adds the bulk request for attached tags, optionally failing like an old vCenter would."""
+
+    def __init__(self, attached, bulk_fails=False):
+        super().__init__(attached)
+        outer = self
+
+        class _TagAssociation(self.TagAssociation):
+            @staticmethod
+            def list_attached_tags_on_objects(dynamic_ids):
+                outer.calls["list_attached_tags_on_objects"] += 1
+                if bulk_fails:
+                    raise RuntimeError("not supported")
+                # objects without tags are left out, as vCenter does
+                return [SimpleNamespace(object_id=x, tag_ids=attached[x.id]) for x in dynamic_ids if attached[x.id]]
+
+        self.TagAssociation = _TagAssociation
+
+
+@pytest.mark.parametrize("bulk_fails", [False, True], ids=["bulk", "bulk-fails"])
+def test_attached_tags_are_retrieved_in_bulk(inventory, bulk_fails):
+    attached = {"vm-1": ["t1", "t2"], "vm-2": [], "vm-3": ["t1"]}
+    tagging = _BulkTagging(attached, bulk_fails=bulk_fails)
+    handler = _bare_handler(inventory, tag_name_include_category=False)
+    handler.tag_session = SimpleNamespace(tagging=tagging)
+
+    vms = [SimpleNamespace(name=x, _wsdlName="VirtualMachine", _moId=x) for x in attached]
+
+    handler.prefetch_vmware_object_tags(vms)
+    results = [sorted(t.get_display_name() for t in handler.get_vmware_object_tags(vm)) for vm in vms]
+
+    assert results == [["name-t1", "name-t2"], [], ["name-t1"]]
+    assert tagging.calls["list_attached_tags_on_objects"] == 1
+    assert tagging.calls["list_attached_tags"] == (3 if bulk_fails else 0)
+
+
+def test_an_invalid_custom_object_attribute_path_is_retried_without_it(inventory):
+    # vCenter answers a PropertyCollector request with an invalid property path with an
+    # InvalidProperty fault for the whole request, vcsim just leaves the path out
+    from pyVmomi import vim
+
+    class _RefusingCache:
+        def __init__(self):
+            self.requests = list()
+
+        def prefetch(self, _session, objects, _object_type, paths):
+            self.requests.append(list(paths))
+            if "config.doesNotExist" in paths:
+                raise vim.fault.InvalidProperty(name="config.doesNotExist")
+            return [f"prefetched-{x}" for x in objects]
+
+    handler = _bare_handler(inventory, sync_custom_attributes=False,
+                            vm_custom_object_attributes=["config.doesNotExist", "config.uuid"])
+    handler.property_cache = _RefusingCache()
+    handler.prefetch_chunk_size = 2
+
+    assert handler.prefetch_properties(["vm-1", "vm-2", "vm-3"], vim.VirtualMachine) == \
+        ["prefetched-vm-1", "prefetched-vm-2", "prefetched-vm-3"]
+
+    base_paths = handler.get_prefetch_paths(vim.VirtualMachine)[0]
+    with_custom = base_paths + ["config.doesNotExist", "config.uuid"]
+    # the refused paths are not tried again for the next chunk
+    assert handler.property_cache.requests == [with_custom, base_paths, base_paths]

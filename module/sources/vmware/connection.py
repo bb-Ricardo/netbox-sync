@@ -29,6 +29,7 @@ from pyVmomi.VmomiSupport import VmomiJSONEncoder
 
 from module.sources.common.source_base import SourceBase
 from module.sources.vmware.config import VMWareConfig
+from module.sources.vmware.property_cache import PropertyCache
 from module.common.logging import get_logger, DEBUG3
 from module.common.misc import grab, dump, get_string_or_none, plural, quoted_split
 from module.common.support import normalize_mac_address
@@ -109,9 +110,14 @@ class VMWareHandler(SourceBase):
     vm_name_max_length = 64
     vm_description_max_length = 200
 
+    # number of objects whose properties are requested from vCenter in one go. Bounds the memory
+    # the prefetched properties take, a VM 'config' with all its devices can be a few hundred KB.
+    prefetch_chunk_size = 250
+
     # internal vars
     session = None
     tag_session = None
+    property_cache = None
 
     site_name = None
 
@@ -716,6 +722,17 @@ class VMWareHandler(SourceBase):
 
         """
         object_mapping = {
+            # nothing is synced from folders, their names, parents and tags are retrieved in one
+            # go here instead of one by one while walking up the inventory tree
+            "folder": {
+                "view_type": vim.Folder,
+                "view_handler": None
+            },
+            # the same for resource pools (and vApps), walked for VM resource pool paths
+            "resource pool": {
+                "view_type": vim.ResourcePool,
+                "view_handler": None
+            },
             "datacenter": {
                 "view_type": vim.Datacenter,
                 "view_handler": self.add_datacenter
@@ -767,6 +784,9 @@ class VMWareHandler(SourceBase):
                 log.error("Recreating session failed")
                 break
 
+            if self.property_cache is None or self.property_cache.stub is not self._sdk_instance._stub:
+                self.property_cache = PropertyCache.for_stub(self._sdk_instance._stub)
+
             view_data = {
                 "container": self.session.rootFolder,
                 "type": [view_details.get("view_type")],
@@ -791,7 +811,17 @@ class VMWareHandler(SourceBase):
                 self.parsing_vms_the_first_time = False
                 log.debug("Iterating over all virtual machines a second time ")
 
-            for obj in view_objects:
+                # VMs parsed in the first run are skipped by add_virtual_machine() anyway,
+                # don't request their properties again
+                view_objects = [x for x in view_objects
+                                if self.get_vmware_object_key(x) not in self.processed_vm_object_keys]
+
+            view_handler = view_details.get("view_handler")
+
+            for obj in self.iterate_prefetched(view_objects, view_details.get("view_type")):
+
+                if view_handler is None:
+                    continue
 
                 if log.level == DEBUG3:
                     try:
@@ -800,14 +830,23 @@ class VMWareHandler(SourceBase):
                         log.error(e)
 
                 # noinspection PyArgumentList
-                view_details.get("view_handler")(obj)
+                view_handler(obj)
 
             container_view.Destroy()
 
         self.parsing_objects_to_reevaluate = True
         log.info("Parsing objects which were marked to be reevaluated")
 
+        # request the properties of all objects to reevaluate in one go as well
+        prefetched_objects_to_reevaluate = dict()
+        for object_type in [vim.HostSystem, vim.VirtualMachine]:
+            objects = [x for x in self.objects_to_reevaluate if isinstance(x, object_type)]
+            for prefetched_obj in self.prefetch_properties(objects, object_type):
+                prefetched_objects_to_reevaluate[self.get_vmware_object_key(prefetched_obj)] = prefetched_obj
+
         for obj in self.objects_to_reevaluate:
+
+            obj = prefetched_objects_to_reevaluate.get(self.get_vmware_object_key(obj), obj)
 
             if isinstance(obj, vim.HostSystem):
                 self.add_host(obj)
@@ -815,6 +854,9 @@ class VMWareHandler(SourceBase):
                 self.add_virtual_machine(obj)
             else:
                 log.error(f"Unable to handle reevaluation of {obj} (type: {type(obj)})")
+
+        if self.property_cache is not None:
+            self.property_cache.evict(list(prefetched_objects_to_reevaluate.values()))
 
         self.update_basic_data()
 
@@ -1571,7 +1613,7 @@ class VMWareHandler(SourceBase):
 
         for custom_object_attribute in custom_object_attributes:
 
-            attribute_data = grab(obj, custom_object_attribute, fallback="NOT FOUND")
+            attribute_data = self.get_prefetched_value(obj, custom_object_attribute, fallback="NOT FOUND")
 
             if attribute_data == "NOT FOUND":
                 log.warning(f"This object has no attribute '{custom_object_attribute}' or attribute is undefined.")
@@ -2140,6 +2182,233 @@ class VMWareHandler(SourceBase):
             property_cache[object_key] = grab(obj, property_name)
 
         return property_cache[object_key]
+
+    def get_prefetch_paths(self, object_type):
+        """
+        Return the property paths which are retrieved in bulk for objects of a type. These have to
+        cover what the add_* handlers read, anything else is requested object by object.
+
+        Parameters
+        ----------
+        object_type: type
+            pyVmomi type of the objects
+
+        Returns
+        -------
+        tuple: (list, list) the paths the handlers need and the configured custom object attribute paths
+        """
+
+        custom_paths = list()
+
+        if object_type is vim.VirtualMachine:
+            paths = ["name", "parent", "config", "runtime", "guest", "resourcePool"]
+            custom_paths = self.settings.vm_custom_object_attributes or list()
+        elif object_type is vim.HostSystem:
+            # the whole 'config' of a host is about 1 MB, only its network part is needed
+            paths = ["name", "parent", "summary", "configManager", "config.network"]
+            if self.settings.sync_host_fc_adapters is True:
+                paths.append("config.storageDevice.hostBusAdapter")
+            custom_paths = self.settings.host_custom_object_attributes or list()
+        elif object_type is vim.dvs.DistributedVirtualPortgroup:
+            paths = ["key", "name", "config"]
+        else:
+            paths = ["name", "parent"]
+
+        if object_type in [vim.VirtualMachine, vim.HostSystem] and self.settings.sync_custom_attributes is True:
+            paths.append("customValue")
+
+        return paths, [x for x in custom_paths if x not in paths]
+
+    def prefetch_properties(self, objects, object_type):
+        """
+        Retrieve the properties of objects from vCenter in bulk, see get_prefetch_paths()
+
+        Parameters
+        ----------
+        objects: list
+            managed objects of type 'object_type'
+        object_type: type
+            pyVmomi type of the objects
+
+        Returns
+        -------
+        list: the objects in the same order, bound to the property cache. If the properties could not be
+              retrieved the objects are returned as they are and read their properties one by one.
+        """
+
+        if self.property_cache is None or len(objects) == 0:
+            return objects
+
+        paths, custom_paths = self.get_prefetch_paths(object_type)
+
+        # custom object attribute paths vCenter refused once are read object by object for the rest of the run
+        refused_custom_paths = self.get_run_cache("refused_custom_paths")
+        if refused_custom_paths.get(object_type) == custom_paths:
+            custom_paths = list()
+
+        prefetched_objects = list()
+        for start in range(0, len(objects), self.prefetch_chunk_size):
+            chunk = objects[start:start + self.prefetch_chunk_size]
+
+            try:
+                prefetched_objects.extend(self.property_cache.prefetch(self.session, chunk, object_type,
+                                                                       paths + custom_paths))
+                continue
+            except Exception as e:
+                if len(custom_paths) == 0:
+                    log.warning(f"Unable to retrieve properties of {len(chunk)} {object_type.__name__} "
+                                f"objects in bulk, requesting them one by one: {e}")
+                    prefetched_objects.extend(chunk)
+                    continue
+
+                # a misspelled custom object attribute is a property path vCenter refuses
+                log.warning(f"Unable to retrieve properties of {object_type.__name__} objects in bulk including "
+                            f"the custom object attributes {custom_paths}, retrying without them: {e}")
+
+                refused_custom_paths[object_type] = custom_paths
+                custom_paths = list()
+
+            try:
+                prefetched_objects.extend(self.property_cache.prefetch(self.session, chunk, object_type, paths))
+            except Exception as e:
+                log.warning(f"Unable to retrieve properties of {len(chunk)} {object_type.__name__} "
+                            f"objects in bulk, requesting them one by one: {e}")
+                prefetched_objects.extend(chunk)
+
+        return prefetched_objects
+
+    def iterate_prefetched(self, objects, object_type):
+        """
+        Yield the objects in order after their properties (and tags) were retrieved in bulk, a chunk of
+        prefetch_chunk_size objects at a time. The properties of a chunk are dropped once the next chunk
+        is requested.
+
+        Parameters
+        ----------
+        objects: list
+            managed objects of type 'object_type'
+        object_type: type
+            pyVmomi type of the objects
+        """
+
+        for start in range(0, len(objects), self.prefetch_chunk_size):
+            chunk = self.prefetch_properties(objects[start:start + self.prefetch_chunk_size], object_type)
+
+            if self.vmware_object_tags_needed(object_type):
+                self.prefetch_vmware_object_tags(chunk)
+
+            yield from chunk
+
+            if self.property_cache is not None:
+                self.property_cache.evict(chunk)
+
+    def get_prefetched_value(self, obj, path, fallback=None):
+        """
+        Return a property of an object by its property path. Uses the prefetched value if the path was
+        retrieved in bulk, otherwise reads the property from vCenter.
+
+        Parameters
+        ----------
+        obj: pyVmomi managed object
+            object to read the property of
+        path: str
+            '.' separated property path
+        fallback:
+            returned if the property has no value
+
+        Returns
+        -------
+        the value of the property or fallback
+        """
+
+        if self.property_cache is not None:
+            found, value = self.property_cache.get(obj, path)
+            if found is True:
+                return value if value is not None else fallback
+
+        return grab(obj, path, fallback=fallback)
+
+    def vmware_object_tags_needed(self, object_type):
+        """
+        Check if vCenter tags of objects of this type are needed with the configured tag sources
+
+        Parameters
+        ----------
+        object_type: type
+            pyVmomi type of the objects
+
+        Returns
+        -------
+        bool: True if tags of this object type are synced
+        """
+
+        if self.tag_session is None:
+            return False
+
+        tag_sources = {
+            "cluster": self.settings.cluster_tag_source or list(),
+            "host": self.settings.host_tag_source or list(),
+            "vm": self.settings.vm_tag_source or list()
+        }
+
+        if object_type is vim.VirtualMachine:
+            return "object" in tag_sources["vm"]
+        if object_type is vim.HostSystem:
+            return "object" in tag_sources["host"]
+        if object_type in [vim.ClusterComputeResource, vim.ComputeResource]:
+            return "object" in tag_sources["cluster"] or \
+                any("cluster" in x for x in [tag_sources["host"], tag_sources["vm"]])
+        if object_type is vim.Datacenter:
+            return any("datacenter" in x for x in tag_sources.values())
+        if object_type is vim.Folder:
+            return any("parent_folder_1" in x or "parent_folder_2" in x for x in tag_sources.values())
+
+        return False
+
+    def prefetch_vmware_object_tags(self, objects):
+        """
+        Retrieve the tags attached to a list of objects with one request and store them in the cache
+        get_vmware_object_tags() reads from. Objects stay uncached if the request fails, their tags are
+        then requested one by one.
+
+        Parameters
+        ----------
+        objects: list
+            pyVmomi managed objects
+        """
+
+        if self.tag_session is None or len(objects) == 0:
+            return
+
+        attached_tags_cache = self.get_run_cache("attached_tags")
+
+        object_keys = list()
+        for obj in objects:
+            object_key = (grab(obj, "_wsdlName"), grab(obj, "_moId"))
+            if None not in object_key and object_key not in attached_tags_cache:
+                object_keys.append(object_key)
+
+        if len(object_keys) == 0:
+            return
+
+        # noinspection PyBroadException
+        try:
+            attached_tags = self.tag_session.tagging.TagAssociation.list_attached_tags_on_objects(
+                [DynamicID(type=object_type, id=object_id) for object_type, object_id in object_keys])
+        except Exception as e:
+            log.debug(f"Unable to retrieve vCenter tags of {len(object_keys)} objects at once, "
+                      f"requesting them object by object: {e}")
+            return
+
+        # objects without tags are not part of the answer
+        requested_tags = {object_key: list() for object_key in object_keys}
+
+        for object_tags in attached_tags or list():
+            object_key = (grab(object_tags, "object_id.type"), grab(object_tags, "object_id.id"))
+            if object_key in requested_tags:
+                requested_tags[object_key] = list(grab(object_tags, "tag_ids", fallback=list()))
+
+        attached_tags_cache.update(requested_tags)
 
     def get_vmware_guest_info(self, vmware_object):
         """
@@ -2989,8 +3258,8 @@ class VMWareHandler(SourceBase):
         if len(host_custom_fields) > 0:
             host_data["custom_fields"] = host_custom_fields
 
-        host_config = grab(obj, "config")
-        host_network = grab(host_config, "network")
+        # only the parts of the ~1 MB 'config' of a host which are used are retrieved in bulk
+        host_network = self.get_prefetched_value(obj, "config.network")
 
         # iterate over hosts virtual switches, needed to enrich data on physical interfaces
         self.network_data["vswitch"][name] = dict()
@@ -3213,7 +3482,8 @@ class VMWareHandler(SourceBase):
         fc_hba_data_dict = dict()
         if self.settings.sync_host_fc_adapters is True:
             # only Fibre Channel adapters are synced, block and PCIe adapters are ignored
-            for hba in self.fc_hba_ports(grab(host_config, "storageDevice.hostBusAdapter", fallback=list()), name):
+            for hba in self.fc_hba_ports(self.get_prefetched_value(obj, "config.storageDevice.hostBusAdapter",
+                                                                fallback=list()), name):
 
                 hba_device = get_string_or_none(grab(hba, "device"))
                 if hba_device is None:
