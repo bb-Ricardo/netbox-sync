@@ -1180,7 +1180,7 @@ class VMWareHandler(SourceBase):
         objects_with_matching_macs = dict()
         matching_object = None
 
-        for interface in self.inventory.get_all_items(interface_typ):
+        for interface in self.inventory.get_index_candidates(interface_typ, "mac_address", mac_list):
 
             if grab(interface, "data.mac_address") in mac_list:
 
@@ -1286,7 +1286,7 @@ class VMWareHandler(SourceBase):
         if primary_ip6 is not None:
             primary_ip6 = str(primary_ip6).split("/")[0]
 
-        for device in self.inventory.get_all_items(object_type):
+        for device in self.inventory.get_primary_ip_candidates(object_type, [primary_ip4, primary_ip6]):
 
             if _matches_device_primary_ip(grab(device, "data.primary_ip4"), primary_ip4) is True:
                 log.debug2(f"Found existing host '{device.get_display_name()}' "
