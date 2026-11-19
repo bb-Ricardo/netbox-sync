@@ -1313,7 +1313,7 @@ class VMWareHandler(SourceBase):
             list of NBTag objets retrieved from vCenter for this object
         """
         if obj is None:
-            return
+            return list()
 
         tag_list = list()
         if self.tag_session is not None:
@@ -1324,7 +1324,8 @@ class VMWareHandler(SourceBase):
                     DynamicID(type=grab(obj, "_wsdlName"), id=grab(obj, "_moId")))
             except Exception as e:
                 log.error(f"Unable to retrieve vCenter tags for '{obj.name}': {e}")
-                return
+                # callers extend their tag list with the result, the object's other tag sources still count
+                return tag_list
 
             # vCenter tags and categories by id: most objects share a few hundred tags, so each
             # is fetched once per run (per source) instead of once per object it's attached to
@@ -1388,7 +1389,7 @@ class VMWareHandler(SourceBase):
         """
 
         if obj is None:
-            return
+            return list()
 
         tag_list = list()
 
