@@ -261,6 +261,62 @@ class NetBoxMappings:
         return result
 
 
+class NBDataDict(dict):
+    """
+    The data dict of a NetBoxObject. Behaves like a plain dict but reports every change to its owner,
+    which keeps the indexes of the inventory up to date (see module/netbox/inventory.py).
+    """
+
+    __slots__ = ("_owner",)
+
+    def __init__(self, owner, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._owner = owner
+
+    def _changed(self, key=None):
+        owner = getattr(self, "_owner", None)
+        if owner is not None:
+            owner.data_changed(key)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._changed(key)
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._changed(key)
+
+    def __ior__(self, other):
+        result = super().__ior__(other)
+        self._changed()
+        return result
+
+    def clear(self):
+        super().clear()
+        self._changed()
+
+    def pop(self, key, *args):
+        result = super().pop(key, *args)
+        self._changed(key)
+        return result
+
+    def popitem(self):
+        result = super().popitem()
+        self._changed(result[0])
+        return result
+
+    def setdefault(self, key, default=None):
+        if key in self:
+            return self[key]
+        result = super().setdefault(key, default)
+        self._changed(key)
+        return result
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        self._changed()
+
+
 class NetBoxObject:
     """
     Base class for all NetBox object types. Implements all methods used on a NetBox object.
@@ -352,6 +408,34 @@ class NetBoxObject:
 
         # add data to this object
         self.update(data=data, read_from_netbox=read_from_netbox, source=source)
+
+    def __setattr__(self, key, value):
+
+        # every change to data or the NetBox ID needs to be reported to the inventory indexes
+        if key == "data" and isinstance(value, dict) and \
+                not (isinstance(value, NBDataDict) and getattr(value, "_owner", None) is self):
+            value = NBDataDict(self, value)
+
+        super().__setattr__(key, value)
+
+        if key in ("data", "nb_id"):
+            self.data_changed(None if key == "data" else "__nb_id__")
+
+    def data_changed(self, key=None):
+        """
+        reports a change of the data (key) or the NetBox ID ("__nb_id__") of this object to the inventory
+
+        Parameters
+        ----------
+        key: str
+            name of the changed data key, None if the whole data set changed
+        """
+
+        inventory = self.inventory
+        if inventory is not None:
+            object_data_changed = getattr(inventory, "object_data_changed", None)
+            if object_data_changed is not None:
+                object_data_changed(self, key)
 
     def __repr__(self):
         return "<%s instance '%s' at %s>" % (self.__class__.__name__, self.get_display_name(), id(self))
@@ -2048,7 +2132,7 @@ class NBVM(NetBoxObject):
 
     def get_virtual_disks(self):
         result_list = list()
-        for ip_object in self.inventory.get_all_items(NBVirtualDisk):
+        for ip_object in self.inventory.get_index_candidates(NBVirtualDisk, "virtual_machine", [self]):
             if grab(ip_object, "data.virtual_machine") == self:
                 result_list.append(ip_object)
 
@@ -2084,7 +2168,7 @@ class NBVMInterface(NetBoxObject):
     def get_ip_addresses(self):
 
         result_list = list()
-        for ip_object in self.inventory.get_all_items(NBIPAddress):
+        for ip_object in self.inventory.get_index_candidates(NBIPAddress, "assigned_object_id", [self]):
             if ip_object.data.get("assigned_object_id") == self:
                 result_list.append(ip_object)
 
@@ -2093,7 +2177,7 @@ class NBVMInterface(NetBoxObject):
     def get_mac_addresses(self):
 
         result_list = list()
-        for mac_object in self.inventory.get_all_items(NBMACAddress):
+        for mac_object in self.inventory.get_index_candidates(NBMACAddress, "assigned_object_id", [self]):
             if mac_object.data.get("assigned_object_id") == self:
                 result_list.append(mac_object)
 
@@ -2138,7 +2222,7 @@ class NBInterface(NetBoxObject):
     def get_ip_addresses(self):
 
         result_list = list()
-        for ip_object in self.inventory.get_all_items(NBIPAddress):
+        for ip_object in self.inventory.get_index_candidates(NBIPAddress, "assigned_object_id", [self]):
             if ip_object.data.get("assigned_object_id") == self:
                 result_list.append(ip_object)
 
@@ -2147,7 +2231,7 @@ class NBInterface(NetBoxObject):
     def get_mac_addresses(self):
 
         result_list = list()
-        for mac_object in self.inventory.get_all_items(NBMACAddress):
+        for mac_object in self.inventory.get_index_candidates(NBMACAddress, "assigned_object_id", [self]):
             if mac_object.data.get("assigned_object_id") == self:
                 result_list.append(mac_object)
 

@@ -53,3 +53,15 @@ def test_lookup_sees_objects_added_after_the_first_call(inventory):
 
     assert src.ip_address_objects_for("10.0.0.5") == [first, second]
     assert len(src.ip_address_objects_for("10.0.0.9")) == 1
+
+
+def test_lookup_follows_an_address_change_after_the_first_call(inventory):
+    moved = _add(inventory, "10.0.0.5/24")
+    other = _add(inventory, "10.0.0.6/24")
+    src = _source(inventory)
+    assert src.ip_address_objects_for("10.0.0.5") == [moved]
+
+    moved.update(data={"address": "10.0.0.6/24"})
+
+    assert src.ip_address_objects_for("10.0.0.5") == _scan(inventory, "10.0.0.5") == []
+    assert src.ip_address_objects_for("10.0.0.6") == _scan(inventory, "10.0.0.6") == [moved, other]
