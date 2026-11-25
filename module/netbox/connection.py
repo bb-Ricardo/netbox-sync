@@ -85,6 +85,7 @@ class NetBoxHandler:
         self.url = f"{proto}://{self.settings.host_fqdn}{port}/api/"
 
         self.session = self.create_session()
+        self.setup_branch_header()
 
         # check for minimum version
         api_version = self.get_api_version()
@@ -184,6 +185,107 @@ class NetBoxHandler:
         log.debug("Created new requests Session for NetBox.")
 
         return session
+
+    def setup_branch_header(self):
+        """
+        NetBox Branching support: resolve the configured branch and send its schema ID
+        as 'X-NetBox-Branch' header with every NetBox API request. Branch selection is
+        stateless, hence the header is required on every single request.
+
+        The branch can be selected by schema ID directly or by branch name/ID. Name and
+        ID are resolved to the schema ID via the branching plugin API on the main schema,
+        before any branch header is set.
+        """
+
+        schema_id = self.settings.branch_schema_id
+        branch_name = self.settings.branch_name
+        branch_id = self.settings.branch_id
+
+        if schema_id is None and branch_name is None and branch_id is None:
+            return
+
+        if schema_id is None:
+            schema_id = self.resolve_branch_schema_id(branch_name, branch_id)
+
+        self.session.headers.update({"X-NetBox-Branch": schema_id})
+
+        log.info(f"NetBox Branching enabled: sending header 'X-NetBox-Branch' "
+                 f"with branch schema ID '{schema_id}' on every request")
+
+        # cached data of the main schema must not be mixed with branch data
+        if self.settings.use_caching is True:
+            log.warning("NetBox caching is disabled because a NetBox Branching branch is used. "
+                        "Cached data of the main schema must not be mixed with branch data.")
+            self.settings.use_caching = False
+
+    def resolve_branch_schema_id(self, branch_name, branch_id):
+        """
+        Resolve a branch name or branch ID to its 8-character schema ID via the
+        NetBox Branching plugin API.
+
+        Parameters
+        ----------
+        branch_name: str, None
+            name of the branch to resolve
+        branch_id: int, None
+            NetBox ID of the branch to resolve
+
+        Returns
+        -------
+        str: schema ID of the branch
+        """
+
+        if branch_name is not None:
+            request_url = f"{self.url}plugins/branching/branches/"
+            params = {"name": branch_name}
+        else:
+            request_url = f"{self.url}plugins/branching/branches/{branch_id}/"
+            params = None
+
+        try:
+            response = self.session.get(request_url,
+                                        params=params,
+                                        timeout=self.settings.timeout,
+                                        verify=self.settings.validate_tls_certs)
+        except Exception as e:
+            do_error_exit(f"NetBox connection while resolving the branch via '{request_url}': {e}")
+
+        if response.status_code == 404:
+            do_error_exit(f"Unable to resolve the branch: '{request_url}' returned 404. "
+                          f"Is the netbox-branching plugin installed and enabled in NetBox?")
+
+        if response.status_code == 403:
+            do_error_exit(f"Unable to resolve the branch: '{request_url}' returned 403. "
+                          f"The API token needs permission to read branching branches.")
+
+        if response.status_code != 200:
+            do_error_exit(f"Resolving the branch via '{request_url}' failed: "
+                          f"HTTP {response.status_code} {response.reason}: {response.text}")
+
+        # noinspection PyBroadException
+        try:
+            result = response.json()
+        except Exception as e:
+            do_error_exit(f"Unable to parse branch data returned by '{request_url}': {e}")
+
+        if branch_name is not None:
+            branches = grab(result, "results", fallback=[]) or []
+            if len(branches) == 0:
+                do_error_exit(f"No NetBox branch with name '{branch_name}' exists.")
+            if len(branches) > 1:
+                log.warning(f"Multiple NetBox branches named '{branch_name}' exist. Using the first one.")
+            branch_data = branches[0]
+        else:
+            branch_data = result
+
+        schema_id = grab(branch_data, "schema_id")
+        if schema_id is None:
+            do_error_exit(f"Branch data returned by '{request_url}' contains no 'schema_id': {branch_data}")
+
+        log.info(f"Resolved NetBox branch '{grab(branch_data, 'name', fallback=branch_id)}' "
+                 f"to schema ID '{schema_id}'")
+
+        return schema_id
 
     def finish(self):
 

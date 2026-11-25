@@ -76,6 +76,39 @@ class NetBoxConfig(ConfigBase):
                          description="Specify the client certificate private key belonging to the client cert",
                          config_example="client.key"),
 
+            ConfigOption("branch_schema_id",
+                         str,
+                         description="""Schema ID of a NetBox Branching branch (requires the NetBox
+                         Branching plugin). If set, the header 'X-NetBox-Branch: <schema_id>' is sent
+                         with every NetBox API request, so all reads and writes are performed inside
+                         this branch. The value is the branch's 8-character schema ID shown on the
+                         branch detail page in NetBox. Branch selection is stateless, hence the header
+                         is required on every request. Mutually exclusive with 'branch_name' and
+                         'branch_id'. If none of the three is set, no branch header is sent and
+                         requests target the main schema.
+                         """,
+                         config_example="td5smq0f"),
+
+            ConfigOption("branch_name",
+                         str,
+                         description="""Name of a NetBox Branching branch (requires the NetBox Branching
+                         plugin). Alternative to 'branch_schema_id': the name is resolved to the
+                         branch's schema ID via the plugin API at startup and then sent as
+                         'X-NetBox-Branch' header with every NetBox API request.
+                         Mutually exclusive with 'branch_schema_id' and 'branch_id'.
+                         """,
+                         config_example="my-feature-branch"),
+
+            ConfigOption("branch_id",
+                         int,
+                         description="""NetBox ID of a NetBox Branching branch (requires the NetBox
+                         Branching plugin). Alternative to 'branch_schema_id': the ID is resolved to
+                         the branch's schema ID via the plugin API at startup and then sent as
+                         'X-NetBox-Branch' header with every NetBox API request.
+                         Mutually exclusive with 'branch_schema_id' and 'branch_name'.
+                         """,
+                         config_example=1),
+
             ConfigOption("prune_enabled",
                          bool,
                          description="""Whether items which were created by this program but
@@ -161,6 +194,14 @@ class NetBoxConfig(ConfigBase):
         super().__init__()
 
     def validate_options(self):
+
+        branch_options_set = [option.key for option in self.options
+                              if option.key in ("branch_schema_id", "branch_name", "branch_id")
+                              and option.value is not None]
+        if len(branch_options_set) > 1:
+            log.error(f"Config options {branch_options_set} in '{NetBoxConfig.section_name}' are mutually "
+                      f"exclusive. Set only one of 'branch_schema_id', 'branch_name' or 'branch_id'")
+            self.set_validation_failed()
 
         for option in self.options:
 
