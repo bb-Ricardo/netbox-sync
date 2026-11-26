@@ -23,7 +23,7 @@ from packaging import version
 # noinspection PyUnresolvedReferences
 from pyVim import connect
 # noinspection PyUnresolvedReferences
-from pyVmomi import vim
+from pyVmomi import vim, vmodl
 # noinspection PyUnresolvedReferences
 from pyVmomi.VmomiSupport import VmomiJSONEncoder
 
@@ -115,6 +115,12 @@ class VMWareHandler(SourceBase):
     session = None
     tag_session = None
 
+    # instance UUIDs (lower case) of all VMs in this vCenter, read before the VMs are parsed. None if
+    # they could not be read: then no NetBox VM object is protected as another VM's object.
+    live_vm_uuids = None
+    # NetBox VM objects this run has given to a vCenter VM: object -> the VM's instance UUID (or name)
+    claimed_vms = None
+
     site_name = None
 
     # values a BIOS reports when the vendor left the SMBIOS fields unset, plus the dummy vendor/model
@@ -188,6 +194,8 @@ class VMWareHandler(SourceBase):
         self.processed_host_names = dict()
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
+        self.live_vm_uuids = None
+        self.claimed_vms = dict()
         self.object_cache = dict()
         self.object_path_cache = dict()
         self.parsing_vms_the_first_time = True
@@ -791,6 +799,9 @@ class VMWareHandler(SourceBase):
             else:
                 self.parsing_vms_the_first_time = False
                 log.debug("Iterating over all virtual machines a second time ")
+
+            if view_name == "virtual machine":
+                self.live_vm_uuids = self.collect_vm_instance_uuids(container_view)
 
             for obj in view_objects:
 
@@ -1640,6 +1651,99 @@ class VMWareHandler(SourceBase):
 
             return resolved_name
 
+    def collect_vm_instance_uuids(self, container_view):
+        """
+        Read the instance UUIDs of all VMs in a vCenter view with one property collector request.
+
+        Parameters
+        ----------
+        container_view: vim.view.ContainerView
+            a view of all virtual machines
+
+        Returns
+        -------
+        set, None: the instance UUIDs in lower case, None if vCenter's answer could not be read
+        """
+
+        collector_class = vmodl.query.PropertyCollector
+        filter_spec = collector_class.FilterSpec(
+            objectSet=[collector_class.ObjectSpec(
+                obj=container_view, skip=True,
+                selectSet=[collector_class.TraversalSpec(name="traverseView", path="view", skip=False,
+                                                         type=vim.view.ContainerView)])],
+            propSet=[collector_class.PropertySpec(type=vim.VirtualMachine, pathSet=["config.instanceUuid"],
+                                                  all=False)])
+
+        vm_uuids = set()
+        try:
+            collector = self.session.propertyCollector
+            result = collector.RetrievePropertiesEx([filter_spec], collector_class.RetrieveOptions())
+            while result is not None:
+                for vm_properties in result.objects or list():
+                    for vm_property in vm_properties.propSet or list():
+                        if get_string_or_none(vm_property.val) is not None:
+                            vm_uuids.add(str(vm_property.val).lower())
+                if not result.token:
+                    break
+                result = collector.ContinueRetrievePropertiesEx(result.token)
+        except Exception as e:
+            log.warning(f"Unable to read the instance UUIDs of all VMs: {e}. VMs will be matched to "
+                        f"NetBox objects without them, a VM can take another VM's object.")
+            return None
+
+        log.debug2(f"vCenter reported {len(vm_uuids)} VM instance UUIDs")
+
+        return vm_uuids
+
+    def vm_object_belongs_to_another_vm(self, vm_object, object_data, matched_by):
+        """
+        Check if a NetBox VM object found by name, MAC or IP address belongs to another VM.
+
+        It does if its serial is the instance UUID of another VM which still exists in this vCenter
+        (e.g. a replacement VM got the IP address of the VM it replaces, and the old VM was renamed),
+        or if this run has already given the object to another VM.
+
+        Parameters
+        ----------
+        vm_object: NBVM, None
+            the NetBox VM object which was found
+        object_data: dict
+            data of the vCenter VM, 'serial' is its instance UUID
+        matched_by: str
+            how the object was found, for the log
+
+        Returns
+        -------
+        bool: True if the object must not be used for this VM
+        """
+
+        if vm_object is None:
+            return False
+
+        vm_uuid = get_string_or_none(object_data.get("serial"))
+        vm_uuid = vm_uuid.lower() if vm_uuid is not None else None
+        object_serial = get_string_or_none(grab(vm_object, "data.serial"))
+        object_serial = object_serial.lower() if object_serial is not None else None
+
+        vm_name = object_data.get("name")
+        object_name = vm_object.get_display_name(including_second_key=True)
+
+        if self.live_vm_uuids is not None and object_serial is not None and object_serial != vm_uuid and \
+                object_serial in self.live_vm_uuids:
+            log.warning(f"VM '{vm_name}' matches {vm_object.name} '{object_name}' by {matched_by}, but that "
+                        f"object belongs to another VM in this vCenter (instance UUID {object_serial}). "
+                        f"Not using it for '{vm_name}'.")
+            return True
+
+        claimed_by = (self.claimed_vms or dict()).get(vm_object)
+        if claimed_by is not None and claimed_by != (vm_uuid or vm_name):
+            log.warning(f"VM '{vm_name}' matches {vm_object.name} '{object_name}' by {matched_by}, but that "
+                        f"object was already used for another VM in this run ({claimed_by}). "
+                        f"Not using it for '{vm_name}'.")
+            return True
+
+        return False
+
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None,
                                    fc_hba_data=None):
@@ -1651,6 +1755,9 @@ class VMWareHandler(SourceBase):
             2. try to find by mac addresses interfaces (ESXi host: unless 'disable_host_mac_matching' is set)
             3. try to find by serial number (1st) or asset tag (2nd) (ESXi host)
             4. try to find by primary IP
+
+        A VM is not given a NetBox object which belongs to another VM: one whose serial is the
+        instance UUID of another VM in this vCenter, or one another VM got earlier in this run.
 
         IP addresses for each interface are added here as well. First they will be checked and added
         if all checks pass. For each IP address a matching IP prefix will be searched for. First we
@@ -1734,6 +1841,10 @@ class VMWareHandler(SourceBase):
 
         device_vm_object = self.inventory.get_by_data(object_type, data=object_data)
 
+        if object_type == NBVM and \
+                self.vm_object_belongs_to_another_vm(device_vm_object, object_data, "name and cluster"):
+            device_vm_object = None
+
         if device_vm_object is not None:
             log.debug2("Found a exact matching %s object: %s" %
                        (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
@@ -1758,6 +1869,10 @@ class VMWareHandler(SourceBase):
 
             device_vm_object = self.get_object_based_on_macs(object_type, nic_macs)
 
+            if object_type == NBVM and \
+                    self.vm_object_belongs_to_another_vm(device_vm_object, object_data, "MAC address"):
+                device_vm_object = None
+
         # look for devices with same serial or asset tag
         if object_type == NBDevice:
 
@@ -1779,6 +1894,9 @@ class VMWareHandler(SourceBase):
             log.debug2(f"No match found. Trying to find {object_type.name} based on serial number")
             device_vm_object = self.inventory.get_by_data(object_type, data={"serial": object_data.get("serial")})
 
+            if self.vm_object_belongs_to_another_vm(device_vm_object, object_data, "serial"):
+                device_vm_object = None
+
         if device_vm_object is not None:
             log.debug2("Found a matching %s object: %s" %
                        (object_type.name, device_vm_object.get_display_name(including_second_key=True)))
@@ -1793,6 +1911,10 @@ class VMWareHandler(SourceBase):
             log.debug2(f"No match found. Trying to find {object_type.name} based on primary IP addresses")
 
             device_vm_object = self.get_object_based_on_primary_ip(object_type, p_ipv4, p_ipv6)
+
+            if object_type == NBVM and \
+                    self.vm_object_belongs_to_another_vm(device_vm_object, object_data, "primary IP address"):
+                device_vm_object = None
 
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
@@ -1843,6 +1965,11 @@ class VMWareHandler(SourceBase):
                     del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
+
+        # no other VM can have this object in this run
+        if object_type == NBVM and self.claimed_vms is not None:
+            vm_uuid = get_string_or_none(object_data.get("serial"))
+            self.claimed_vms[device_vm_object] = vm_uuid.lower() if vm_uuid is not None else object_data.get("name")
 
         # add object to cache
         self.add_object_to_cache(vmware_object, device_vm_object)
