@@ -534,6 +534,49 @@ def test_incomplete_protection_survives_into_the_next_run_and_absence_still_clea
     assert ("DELETE", NBIPAddress.name, fresh_ip.nb_id) in deleted
 
 
+def test_orphan_from_a_complete_listing_is_not_pruned_during_a_later_incomplete_listing(inventory, source_settings):
+    source = make_source(inventory, "vcenter", source_settings)
+    source.inventory_complete = True
+    vm, nic, ip = vm_with_ip(inventory, name="gone-vm", address="10.4.0.5/24")
+    for obj in (vm, nic, ip):
+        stamp(obj, NetBoxHandler.primary_tag, source.source_tag)
+
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag in vm.get_tags()
+    assert NetBoxHandler.orphaned_tag in ip.get_tags()
+    assert source.source_tag not in vm.get_tags()
+    assert source.source_tag not in ip.get_tags()
+    saved = (vm.get_tags(), nic.get_tags(), ip.get_tags())
+
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.inventory_complete = False
+    vm, nic, ip = restore_vm(inventory, "gone-vm", "10.4.0.5/24", *saved)
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert vm.retention_reason == "incomplete"
+    assert ip.retention_reason == "incomplete"
+    age(vm, 40)
+    age(nic, 40)
+    age(ip, 40)
+    assert prune_deletes(handler) == []
+    saved = (vm.get_tags(), nic.get_tags(), ip.get_tags())
+
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.inventory_complete = True
+    vm, nic, ip = restore_vm(inventory, "gone-vm", "10.4.0.5/24", *saved)
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert vm.retain_from_prune is False
+    assert ip.retain_from_prune is False
+    age(vm, 40)
+    age(ip, 40)
+    deleted = prune_deletes(handler)
+    assert ("DELETE", NBVM.name, vm.nb_id) in deleted
+    assert ("DELETE", NBIPAddress.name, ip.nb_id) in deleted
+
+
 TOOLS_RUNNING_WITH_IP = SimpleNamespace(
     guest=SimpleNamespace(toolsRunningStatus="guestToolsRunning",
                           net=[SimpleNamespace(ipAddress=["10.0.0.5"])]))

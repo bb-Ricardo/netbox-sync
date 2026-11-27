@@ -550,6 +550,14 @@ class NetBoxInventory:
                 getattr(decision.source, "inventory_complete", True) is False:
             return "incomplete"
 
+        # Normal orphaning removes the source tag. A later incomplete listing
+        # then cannot tell which source owned the object, so it must not treat
+        # that earlier absence as confirmed and delete it. A following complete
+        # listing can prune it again.
+        if decision.status == "none" and self._has_tag(obj, f"{primary_tag_name}: Orphaned") and \
+                self._any_source_listing_incomplete():
+            return "incomplete"
+
         if decision.status == "none" and isinstance(obj, (NBVM, NBDevice, NBIPAddress)) and \
                 self._has_tag(obj, primary_tag_name) and \
                 self._has_tag(obj, f"{primary_tag_name}: Orphaned") is False:
@@ -557,6 +565,14 @@ class NetBoxInventory:
             return "ambiguous"
 
         return None
+
+    def _any_source_listing_incomplete(self):
+        for source in self.source_list:
+            if grab(source, "settings.enabled", fallback=True) is False:
+                continue
+            if getattr(source, "inventory_complete", True) is False:
+                return True
+        return False
 
     def tag_all_the_things(self, netbox_handler):
         """
