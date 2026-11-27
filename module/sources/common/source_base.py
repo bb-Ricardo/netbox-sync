@@ -344,6 +344,23 @@ class SourceBase:
 
         return return_data
 
+    def get_vmware_guest_info(self, vmware_object):
+        """
+        Return the guest info of a VMware VM. Reading it is a round trip to vCenter, sources which already
+        retrieved it can return their copy.
+
+        Parameters
+        ----------
+        vmware_object: vim.VirtualMachine
+            the VM
+
+        Returns
+        -------
+        vim.vm.GuestInfo, None: the guest info
+        """
+
+        return grab(vmware_object, "guest")
+
     def return_longest_matching_prefix_for_ip(self, ip_to_match=None, site_name=None) -> Optional[NBPrefix]:
         """
         This is a lazy approach to find the longest matching prefix to an IP address.
@@ -531,10 +548,14 @@ class SourceBase:
 
             interface_object.update(data={"primary_mac_address": primary_mac_address_object}, source=self)
 
+        vmware_guest_info = None
+        if type(device_object) == NBVM:
+            vmware_guest_info = self.get_vmware_guest_info(vmware_object)
+
         # skip handling of IPs for VMs with not installed/running guest tools
         skip_ip_handling = False
         if type(device_object) == NBVM and vmware_object is not None and \
-                grab(vmware_object, 'guest.toolsRunningStatus') != "guestToolsRunning":
+                grab(vmware_guest_info, 'toolsRunningStatus') != "guestToolsRunning":
             log.debug(f"VM '{device_object.name}' guest tool status is 'NotRunning', skipping IP handling")
             skip_ip_handling = True
 
@@ -810,7 +831,7 @@ class SourceBase:
         # (seen on old TMOS releases), not a statement that every address is gone. Keep what is
         # in NetBox instead of tearing it off on every run. A real removal still reports the
         # interface, just without an address, so that case is unaffected
-        reported_interfaces = grab(vmware_object, "guest.net")
+        reported_interfaces = grab(vmware_guest_info, "net")
         if type(device_object) == NBVM and isinstance(reported_interfaces, list) and \
                 len(reported_interfaces) == 0:
             log.debug(f"VM '{device_object.name}' guest tools report no network interface at all, "
