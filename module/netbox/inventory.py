@@ -292,7 +292,9 @@ class NetBoxInventory:
 
     def _get_index(self, object_type):
         """
-        return the index of an object type, (re)build it if it doesn't match the current list of objects
+        return the index of an object type. It is rebuilt if the list of objects was replaced or its
+        length changed, e.g. by appending to it outside add_object(); a change in place that keeps the
+        length is not noticed
 
         Parameters
         ----------

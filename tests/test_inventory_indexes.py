@@ -320,6 +320,12 @@ def test_mac_and_primary_ip_candidates(base):
     vm2.data["primary_ip4"] = {"id": 99}
     assert inv.get_primary_ip_candidates(NBVM, ["10.0.0.2"]) == [vm2]
 
+    # the primary IPv6 address is looked up as well
+    inv.load_from_netbox(NBIPAddress, [{"id": 2, "address": "2001:db8::5/64", "last_updated": TS}])
+    vm1.data["primary_ip6"] = inv.get_by_id(NBIPAddress, nb_id=2)
+    # vm2 is still a candidate through its unresolved primary IPv4
+    assert inv.get_primary_ip_candidates(NBVM, [None, "2001:db8::5"]) == [vm1, vm2]
+
 
 def test_randomized_mutations_match_scans(base):
     """mutate objects in every possible way and compare all indexed lookups with the scans"""
