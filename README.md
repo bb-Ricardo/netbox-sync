@@ -353,7 +353,11 @@ When Tools are running and a reported NIC has no addresses, that empty list is t
 
 An IP is owned by its own `Source:` tags. Several configured source tags on one device are provenance, such as VMware and Redfish on the same ESXi host, and are not an ownership conflict. A `Source:` tag that matches no configured source, or more than one source tag on the IP itself, leaves that record unchanged and is logged. A synced address with no source tag can be removed only by the single source tagged on its parent. A source whose listing did not finish does not orphan or delete the records that belong to it. The sync does not pick whichever source ran last.
 
-An unassigned address is reused only when it is the only record of that address in the same VRF. An assigned duplicate blocks that claim. Roles that NetBox allows to repeat, such as `anycast` and `vip`, do not compete and are not taken. Whether a phpIPAM address is deleted after its VM is confirmed absent is a separate decision. An unknown observation protects a phpIPAM address the same as any other address.
+An address that is still assigned to a VM the sync has orphaned, because that VM is absent, is orphaned with it. A VM that is merely powered off, or whose guest IP data is unknown, keeps its addresses. `decommissioning` by itself is not the signal: that status can be set by hand. An address that moved to a VM seen this run stays there, and a skipped or ambiguous claim is not treated as unclaimed. phpIPAM and other non-source tags stay on the record until it is deleted. An unknown observation protects a phpIPAM address the same as any other address.
+
+The IP does not necessarily spend `prune_delay_in_days` orphaned on its own. It may be deleted earlier through its interface when the parent VM has already met the VM's pruning delay. A detected incomplete VMware listing keeps a source-less address. A successful-looking but silently incomplete vCenter response can remain invisible; the delay reduces that risk and does not remove it.
+
+An unassigned address is reused only when it is the only record of that address in the same VRF. An assigned duplicate blocks that claim. Roles that NetBox allows to repeat, such as `anycast` and `vip`, do not compete and are not taken.
 
 Objects subjected to pruning:
 * devices

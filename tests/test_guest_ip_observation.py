@@ -1476,3 +1476,294 @@ def test_a_later_empty_nic_supersedes_an_earlier_confirmation_for_a_new_claimant
         for step in order:
             steps[step]()
         kept(old_vm, old_nic, ip, new_vm, new_nic)
+
+
+def _absent_vm(inventory, source_settings, vm_tags, ip_tags, status="active"):
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    vm, nic, ip = vm_with_ip(inventory, name="gone-vm", address="10.4.0.5/24")
+    vm.data["status"] = status
+    vm.nb_id = 51
+    nic.nb_id = 52
+    ip.nb_id = 53
+    stamp(vm, *vm_tags)
+    stamp(nic, NetBoxHandler.primary_tag)
+    stamp(ip, *ip_tags)
+    return source, vm, nic, ip
+
+
+def test_source_less_ip_on_an_absent_vm_is_orphaned_with_it(inventory, source_settings):
+    """A parent that only becomes orphaned this run, and one that already is."""
+
+    for already in (False, True):
+        vm_tags = [NetBoxHandler.primary_tag, "Source: vcenter"]
+        if already:
+            vm_tags.append(NetBoxHandler.orphaned_tag)
+        source, vm, nic, ip = _absent_vm(
+            inventory, source_settings, vm_tags,
+            [NetBoxHandler.primary_tag, "phpIPAM"], status="decommissioning")
+        handler = make_handler(inventory)
+        inventory.tag_all_the_things(handler)
+        assert NetBoxHandler.orphaned_tag in vm.get_tags()
+        assert NetBoxHandler.orphaned_tag in ip.get_tags()
+        assert "phpIPAM" in ip.get_tags()
+        assert source.source_tag not in ip.get_tags()
+        assert prune_deletes(handler) == []
+
+
+def test_orphaned_absent_vm_and_ip_are_deleted_after_the_delay(inventory, source_settings):
+    source, vm, nic, ip = _absent_vm(
+        inventory, source_settings,
+        [NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag],
+        [NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag, "phpIPAM"])
+    age(vm, 40)
+    age(ip, 40)
+    deleted = prune_deletes(make_handler(inventory))
+    assert ("DELETE", NBIPAddress.name, ip.nb_id) in deleted
+    assert ("DELETE", NBVMInterface.name, nic.nb_id) in deleted
+    assert ("DELETE", NBVM.name, vm.nb_id) in deleted
+    assert "phpIPAM" in ip.get_tags()
+
+
+def test_a_young_ip_can_be_removed_with_an_already_due_vm(inventory, source_settings):
+    source, vm, nic, ip = _absent_vm(
+        inventory, source_settings,
+        [NetBoxHandler.primary_tag, "Source: vcenter"],
+        [NetBoxHandler.primary_tag, "phpIPAM"])
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    # The tag write did not refresh last_updated. The VM was already due.
+    age(vm, 40)
+    vm.orphan_tag_added_this_run = False
+    assert ip.orphan_tag_added_this_run is True
+    deleted = prune_deletes(handler)
+    assert ("DELETE", NBIPAddress.name, ip.nb_id) not in deleted
+    assert ("DELETE", NBVMInterface.name, nic.nb_id) in deleted
+    assert ("DELETE", NBVM.name, vm.nb_id) in deleted
+
+
+def test_failed_orphan_tag_write_does_not_prune_from_the_old_timestamp(inventory, source_settings):
+    source, vm, nic, ip = _absent_vm(
+        inventory, source_settings,
+        [NetBoxHandler.primary_tag, "Source: vcenter"],
+        [NetBoxHandler.primary_tag, "phpIPAM"])
+    age(vm, 40)
+    age(ip, 40)
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert ip.orphan_tag_added_this_run is True
+    assert prune_deletes(handler) == []
+
+    # A successful PATCH replaces last_updated. The new timestamp is young.
+    ip.data["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    vm.data["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    assert prune_deletes(handler) == []
+
+
+def test_powered_off_vm_that_is_still_present_keeps_its_ip(inventory, source_settings):
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    vm, nic, ip = vm_with_ip(inventory, name="off-vm", address="10.4.0.8/24")
+    vm.data["status"] = "offline"
+    vm.source = source
+    for obj in (vm, nic, ip):
+        stamp(obj, NetBoxHandler.primary_tag, source.source_tag)
+    vm.source = source
+    ip.add_tags(NetBoxHandler.orphaned_tag)
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+
+
+def test_decommissioning_status_alone_does_not_orphan_a_seen_vms_ip(inventory, source_settings):
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    vm, nic, ip = vm_with_ip(inventory, name="hand-status", address="10.4.0.9/24")
+    vm.data["status"] = "decommissioning"
+    vm.source = source
+    stamp(vm, NetBoxHandler.primary_tag, source.source_tag)
+    stamp(ip, NetBoxHandler.primary_tag, "phpIPAM")
+    vm.source = source
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+
+
+def test_tools_unavailable_vm_is_not_orphaned_with_its_ip(inventory, source_settings):
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    vm, nic, ip = vm_with_ip(inventory, name="tools-down", address="10.4.0.7/24")
+    vm.source = source
+    for obj in (vm, nic, ip):
+        stamp(obj, NetBoxHandler.primary_tag, source.source_tag)
+    vm.source = source
+    vm.guest_ip_observations = {source.source_tag: "unknown"}
+    ip.unverified_retain = True
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+    assert vm.data["primary_ip4"] is ip
+    assert ip.get_interface() is nic
+
+
+def test_incomplete_vmware_listing_keeps_a_source_less_ip_on_an_orphaned_vm(inventory, source_settings):
+    source, vm, nic, ip = _absent_vm(
+        inventory, source_settings,
+        [NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag],
+        [NetBoxHandler.primary_tag, "phpIPAM"])
+    source.inventory_complete = False
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert ip.retention_reason == "incomplete"
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+    age(vm, 40)
+    age(ip, 40)
+    assert prune_deletes(make_handler(inventory)) == []
+
+
+def test_conflicting_ip_tags_are_not_orphaned_or_moved(inventory, source_settings):
+    one = make_source(inventory, "one", source_settings)
+    two = make_source(inventory, "two", source_settings)
+    vm, nic, ip = vm_with_ip(inventory, name="conflict-vm", address="10.4.1.1/24")
+    stamp(vm, NetBoxHandler.primary_tag, one.source_tag)
+    stamp(ip, NetBoxHandler.primary_tag, one.source_tag, two.source_tag)
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+    assert ip.get_interface() is nic
+
+
+def test_unrelated_source_less_ip_is_not_orphaned(inventory, source_settings):
+    make_source(inventory, "vcenter", source_settings).source_type = "vmware"
+    vm, nic, ip = vm_with_ip(inventory, name="loose-vm", address="10.4.1.2/24")
+    vm.source = make_source(inventory, "other", source_settings)
+    stamp(vm, NetBoxHandler.primary_tag)
+    stamp(ip, NetBoxHandler.primary_tag, "phpIPAM")
+    vm.source = inventory.source_list[-1]
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+
+
+def test_moved_ip_is_not_orphaned_with_the_absent_vm(inventory, source_settings):
+    for old_first in (True, False):
+        begin_next_run(inventory)
+        settings = _settings(source_settings, set_primary_ip="when-undefined")
+        old = make_source(inventory, "old-vcenter", settings)
+        new = make_source(inventory, "new-vcenter", settings)
+        old.source_type = "vmware"
+        new.source_type = "vmware"
+        old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, old)
+        new_vm.data["primary_ip4"] = None
+        old_vm.nb_id = 61
+        old_nic.nb_id = 62
+        ip.nb_id = 63
+        new_vm.nb_id = 64
+        new_nic.nb_id = 65
+
+        def absent():
+            old_vm.guest_ip_observations = {old.source_tag: "complete"}
+            old_vm.guest_reported_ips = {old.source_tag: set()}
+
+        def claim():
+            _report_vm(_vmware_handler(inventory, new), new_vm, [ADDRESS], ADDRESS)
+
+        if old_first:
+            absent()
+            claim()
+        else:
+            claim()
+            absent()
+        inventory.settle_deferred_ip_moves()
+        inventory.tag_all_the_things(make_handler(inventory))
+        assert ip.get_interface() is new_nic
+        assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+        assert new_vm.data["primary_ip4"] is ip
+        payloads = _writes(inventory)
+        assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is True
+        assert any(item[3].get("assigned_object_id") == new_nic.nb_id
+                   for item in payloads if item[1] == NBIPAddress.name and isinstance(item[3], dict))
+
+
+def test_a_skipped_enabled_claim_is_not_orphaned_and_a_resolved_one_is_cleared(inventory, source_settings):
+    begin_next_run(inventory)
+    old = make_source(inventory, "old-vcenter", source_settings)
+    new = make_source(inventory, "new-vcenter", source_settings)
+    old.source_type = "vmware"
+    new.source_type = "vmware"
+    old_vm, old_nic, ip = vm_with_ip(inventory, name="old-enabled", address=ADDRESS)
+    new_vm, new_nic, extra = vm_with_ip(inventory, name="new-enabled", address="10.9.9.9/24")
+    extra.data["assigned_object_id"] = None
+    extra.data["assigned_object_type"] = None
+    for obj in (old_vm, old_nic, ip):
+        stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+    stamp(new_vm, NetBoxHandler.primary_tag, new.source_tag)
+    stamp(new_nic, NetBoxHandler.primary_tag, new.source_tag)
+    other = inventory.add_object(NBVMInterface, data={
+        "name": "eth9", "virtual_machine": new_vm, "enabled": True,
+    }, read_from_netbox=True)
+    inventory.note_unresolved_claim(ip, other)
+
+    _report_on(new, new_vm, new_nic, [ADDRESS])
+    assert new_nic in ip.unresolved_claims.values()
+    assert other in ip.unresolved_claims.values()
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+    assert ip.get_interface() is old_nic
+
+    begin_next_run(inventory)
+    old = make_source(inventory, "old-vcenter", source_settings)
+    new = make_source(inventory, "new-vcenter", source_settings)
+    old.source_type = "vmware"
+    new.source_type = "vmware"
+    old_vm, old_nic, ip = vm_with_ip(inventory, name="old-enabled", address=ADDRESS)
+    old_nic.data["enabled"] = False
+    new_vm, new_nic, extra = vm_with_ip(inventory, name="new-enabled", address="10.9.9.9/24")
+    extra.data["assigned_object_id"] = None
+    extra.data["assigned_object_type"] = None
+    new_vm.data["primary_ip4"] = None
+    for obj in (old_vm, old_nic, ip):
+        stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+    stamp(new_vm, NetBoxHandler.primary_tag, new.source_tag)
+    stamp(new_nic, NetBoxHandler.primary_tag, new.source_tag)
+    inventory.note_unresolved_claim(ip, new_nic)
+    old_vm.guest_ip_observations = {old.source_tag: "complete"}
+    old_vm.guest_reported_ips = {old.source_tag: set()}
+    _report_on(new, new_vm, new_nic, [ADDRESS])
+    inventory.settle_deferred_ip_moves()
+    assert new_nic not in (getattr(ip, "unresolved_claims", None) or {}).values()
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert ip.get_interface() is new_nic
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+
+
+def test_two_claimants_are_not_orphaned_in_either_order(inventory, source_settings, caplog):
+    caplog.set_level(logging.WARNING, logger="NetBox-Sync")
+    for first_b in (False, True):
+        caplog.clear()
+        begin_next_run(inventory)
+        old = make_source(inventory, "old-vcenter", source_settings)
+        first = make_source(inventory, "claim-a", source_settings)
+        second = make_source(inventory, "claim-b", source_settings)
+        for source in (old, first, second):
+            source.source_type = "vmware"
+        old_vm, old_nic, ip = vm_with_ip(inventory, name="held-vm", address=ADDRESS)
+        old_nic.data["enabled"] = False
+        vm_a, nic_a, extra_a = vm_with_ip(inventory, name="vm-a", address="10.9.1.1/24")
+        vm_b, nic_b, extra_b = vm_with_ip(inventory, name="vm-b", address="10.9.1.2/24")
+        for extra in (extra_a, extra_b):
+            extra.data["assigned_object_id"] = None
+            extra.data["assigned_object_type"] = None
+        for obj in (old_vm, old_nic, ip):
+            stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+        stamp(vm_a, NetBoxHandler.primary_tag, first.source_tag)
+        stamp(nic_a, NetBoxHandler.primary_tag, first.source_tag)
+        stamp(vm_b, NetBoxHandler.primary_tag, second.source_tag)
+        stamp(nic_b, NetBoxHandler.primary_tag, second.source_tag)
+        old_vm.guest_ip_observations = {old.source_tag: "complete"}
+        old_vm.guest_reported_ips = {old.source_tag: set()}
+        order = [(second, vm_b, nic_b), (first, vm_a, nic_a)] if first_b else [
+            (first, vm_a, nic_a), (second, vm_b, nic_b)]
+        for source, vm, nic in order:
+            _report_vm(_vmware_handler(inventory, source), vm, [ADDRESS], ADDRESS)
+        inventory.settle_deferred_ip_moves()
+        inventory.tag_all_the_things(make_handler(inventory))
+        assert ip.get_interface() is old_nic
+        assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+        assert inventory.has_unresolved_claim(ip)
+        assert "more than one interface requested it" in caplog.text

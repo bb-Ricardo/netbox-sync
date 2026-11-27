@@ -1158,6 +1158,7 @@ class SourceBase:
                         log_msg += " IP assignment skipped because it is unclear which one is the correct one!"
 
                     this_log_handler(log_msg)
+                    self.inventory.note_unresolved_claim(ip, interface_object)
                     skip_this_ip = True
                     break
 
@@ -1251,6 +1252,7 @@ class SourceBase:
                 self.release_ip_retention(this_ip_object)
                 this_ip_object.update(data=nic_ip_data, source=self)
 
+            self.inventory.resolve_unresolved_claim(this_ip_object, nic_ip_data.get("assigned_object_id"))
             ip_address_objects.append(this_ip_object)
 
         # the caller states whether it discovered anything; interface_ips is only its

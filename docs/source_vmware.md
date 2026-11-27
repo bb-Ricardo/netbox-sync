@@ -135,8 +135,19 @@ This is still a policy choice. It does not claim that Tools can never return a
 temporarily incomplete list for one NIC.
 
 A VM that is absent from a finished vCenter listing is not given an unknown observation.
-It keeps the ordinary orphan and prune lifecycle. If the vCenter session or the VM
-listing does not finish, existing VMs from that source are left unchanged.
+It keeps the ordinary orphan and prune lifecycle. An address still assigned to that VM
+is orphaned with it, including an address that no longer has its own `Source:` tag.
+An address that moved to a VM seen this run stays there. A claim that was skipped, or
+that more than one interface still holds, is not treated as unclaimed. A VM that is
+only powered off keeps the existing protection. `decommissioning` alone does not mean
+the VM was orphaned. phpIPAM tags stay until the record is deleted.
+
+The address does not necessarily spend `prune_delay_in_days` orphaned on its own. It
+may be deleted earlier through its interface when the parent VM has already met the
+VM's pruning delay. If the vCenter session or the VM listing does not finish, existing
+VMs from that source are left unchanged. A source-less address is also kept when any
+enabled VMware listing failed. A silently incomplete but successful-looking response
+can remain invisible; the delay reduces that risk and does not remove it.
 
 #### 5b. Resolve the tenant of a VM
 

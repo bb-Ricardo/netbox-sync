@@ -813,6 +813,16 @@ class NetBoxHandler:
                 if self.orphaned_tag not in this_object_tags:
                     continue
 
+                # The orphan tag was added in memory this run. Prune only after a
+                # successful write has replaced last_updated. A failed PATCH leaves
+                # the old timestamp, and that must not delete the object.
+                if getattr(this_object, "orphan_tag_added_this_run", False) is True and \
+                        grab(this_object, "data.last_updated") == \
+                        getattr(this_object, "orphan_tag_last_updated_at_add", None):
+                    log.debug2(f"Not pruning {this_object.name} '{this_object.get_display_name()}': "
+                               f"the orphan tag write has not updated last_updated.")
+                    continue
+
                 # Same decision as orphan tagging. A failed tag-removal update
                 # leaves the orphan tag stored; the in-memory flag still blocks
                 # the delete. The age check below uses last_updated, which moves
