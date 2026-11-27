@@ -29,6 +29,9 @@ class SourceBase:
     source_tag = None
     settings = None
     init_successful = False
+    # False when this source did not finish a complete listing. Orphaning and
+    # pruning then keep the records that belong to it.
+    inventory_complete = True
     name = None
 
     def ip_address_objects_for(self, address: str) -> list:
@@ -54,6 +57,49 @@ class SourceBase:
 
     def can_reassign_stale_ip(self, ip, device_vm_object):
         return False
+
+    def may_remove_ip_assignments(self, device_object, ip=None):
+        """
+        Whether this source may unassign one IP address of device_object.
+
+        The owning source is taken from source-tag metadata. An unknown guest-IP
+        observation from that owner blocks removal. Another source cannot clear
+        that condition, and a missing or conflicting owner fails safe. An IP
+        whose source tag disagrees with its parent is conflicting metadata.
+        """
+
+        if device_object is None or self.inventory is None:
+            return True
+
+        observations = getattr(device_object, "guest_ip_observations", None) or {}
+        if observations.get(self.source_tag) == "unknown":
+            return False
+
+        subjects = [device_object]
+        if ip is not None:
+            subjects.append(ip)
+
+        for subject in subjects:
+            decision = self.inventory.resolve_owner(subject)
+            if decision.status == "ambiguous":
+                self.inventory.report_ambiguous_owner(subject, decision)
+                return False
+
+            # A previously synced object with no source tag is missing metadata.
+            # An object that has never been tagged can still be reconciled.
+            if decision.status == "none" and primary_tag_name in subject.get_tags():
+                self.inventory.report_ambiguous_owner(subject, decision)
+                return False
+
+            if decision.status == "owner" and decision.source is not None and \
+                    decision.source.source_tag != self.source_tag:
+                return False
+
+            if decision.status == "owner" and decision.source is not None and \
+                    observations.get(decision.source.source_tag) == "unknown":
+                return False
+
+        return True
 
     @classmethod
     def implements(cls, source_type):
@@ -800,12 +846,14 @@ class SourceBase:
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
+                this_ip_object.unverified_retain = False
 
             # update IP address with additional data if not already present
             else:
 
                 log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
 
+                this_ip_object.unverified_retain = False
                 this_ip_object.update(data=nic_ip_data, source=self)
 
             ip_address_objects.append(this_ip_object)
@@ -825,9 +873,22 @@ class SourceBase:
                       f"keeping the addresses currently assigned in NetBox")
             skip_ip_removal = True
 
+        # An unknown observation, or a source that says it did not discover host
+        # addresses, keeps the assignments it already has. Leave source unset so
+        # this is not recorded as a fresh discovery.
+        if interface_object is not None and (skip_ip_handling is True or skip_ip_removal is True):
+            for retained_ip in interface_object.get_ip_addresses():
+                retained_ip.unverified_retain = True
+
         for current_ip in interface_object.get_ip_addresses():
 
             if skip_ip_handling is True or skip_ip_removal is True:
+                continue
+
+            # A source that does not own this VM must not unassign an address, and
+            # neither may the owner while its own guest-IP observation is unknown.
+            # The check is by source identity, so processing order does not matter.
+            if self.may_remove_ip_assignments(device_object, ip=current_ip) is False:
                 continue
 
             current_ip_role = current_ip.get_role()
@@ -847,6 +908,7 @@ class SourceBase:
 
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
                          f"therefore removed from this interface")
+                current_ip.unverified_retain = False
                 current_ip.remove_interface_association()
 
         matching_untagged_vlan = None

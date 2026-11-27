@@ -813,6 +813,15 @@ class NetBoxHandler:
                 if self.orphaned_tag not in this_object_tags:
                     continue
 
+                # Same decision as orphan tagging. A failed tag-removal update
+                # leaves the orphan tag stored; the in-memory flag still blocks
+                # the delete. The age check below uses last_updated, which moves
+                # when a tag write succeeds. There is no separate orphan clock.
+                if getattr(this_object, "retain_from_prune", False) is True:
+                    log.debug2(f"Not pruning {this_object.name} '{this_object.get_display_name()}' "
+                               f"({this_object.retention_reason}).")
+                    continue
+
                 date_last_update = grab(this_object, "data.last_updated")
 
                 if date_last_update is None:
@@ -850,6 +859,17 @@ class NetBoxHandler:
 
                     # delete device/VM interfaces first. interfaces have no last_updated attribute
                     if isinstance(this_object, (NBVM, NBDevice)):
+
+                        retained_interface = None
+                        for object_interface in self.inventory.get_all_interfaces(this_object):
+                            if getattr(object_interface, "retain_from_prune", False) is True:
+                                retained_interface = object_interface
+                                break
+
+                        if retained_interface is not None:
+                            log.info(f"Not deleting {this_object.name} '{this_object.get_display_name()}' "
+                                     f"because {retained_interface.get_display_name()} still holds a retained IP.")
+                            continue
 
                         log.info(f"Before the '{this_object.name}' can be deleted, all interfaces must be deleted.")
 

@@ -347,6 +347,12 @@ Prune objects in NetBox if they are no longer present in any source.
 First they will be marked as Orphaned and after X (config option) days they will be
 deleted from NetBox.
 
+An address is orphaned only when the observation that failed to report it is treated as trustworthy. While VMware Tools are not running, or `guest.net` is missing or empty, the VM's existing IP assignments and primary IP stay in place and a stale orphan tag is cleared. That hold ends when a later complete inventory shows the VM is gone, or when Tools are running and a reported NIC has no addresses. The empty-NIC case keeps the current removal behavior; it is a policy choice, not a guarantee that Tools never returns a short list for one NIC. The age check uses the object's `last_updated` value, which moves when the orphan tag is written. There is no separate orphan clock.
+
+This deployment expects one authoritative source per VM. The owner is the single `Source:` tag that matches a configured source. If that tag is missing, there is more than one, or an IP's source tag disagrees with its parent, the sync does not unassign, orphan, or delete the object, and it logs the ambiguity. It does not pick whichever source ran last. A source whose VM listing did not finish is treated the same way: its existing VMs and addresses are kept.
+
+These follow-ups are not part of this hold: choosing between duplicate IP records, a primary IP whose unset is still only queued, and whether a phpIPAM address is deleted after its VM is confirmed absent. An unknown observation protects a phpIPAM address the same as any other address.
+
 Objects subjected to pruning:
 * devices
 * VMs

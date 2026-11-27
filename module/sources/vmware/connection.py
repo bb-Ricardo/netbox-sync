@@ -171,6 +171,7 @@ class VMWareHandler(SourceBase):
 
         if self.session is None:
             log.info(f"Source '{name}' is currently unavailable. Skipping")
+            self.inventory_complete = False
             return
 
         self.create_api_session()
@@ -766,6 +767,7 @@ class VMWareHandler(SourceBase):
 
             if self.session is None:
                 log.error("Recreating session failed")
+                self.inventory_complete = False
                 break
 
             view_data = {
@@ -778,12 +780,16 @@ class VMWareHandler(SourceBase):
                 container_view = self.session.viewManager.CreateContainerView(**view_data)
             except Exception as e:
                 log.error(f"Problem creating vCenter view for '{view_name}s': {e}")
+                if view_name in ("virtual machine", "offline virtual machine"):
+                    self.inventory_complete = False
                 continue
 
             view_objects = grab(container_view, "view")
 
             if view_objects is None:
                 log.error(f"Creating vCenter view for '{view_name}s' failed!")
+                if view_name in ("virtual machine", "offline virtual machine"):
+                    self.inventory_complete = False
                 continue
 
             if view_name != "offline virtual machine":
@@ -1642,7 +1648,7 @@ class VMWareHandler(SourceBase):
 
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None,
-                                   fc_hba_data=None):
+                                   fc_hba_data=None, guest_ip_observation=None):
         """
         Add/update device/VM object in inventory based on gathered data.
 
@@ -1843,6 +1849,20 @@ class VMWareHandler(SourceBase):
                     del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
+
+        # Record the guest-IP observation on the resolved VM before any interface
+        # reconciliation. Interfaces this run never walks stay covered by it.
+        if object_type == NBVM and guest_ip_observation is not None:
+            observations = getattr(device_vm_object, "guest_ip_observations", None)
+            if not isinstance(observations, dict):
+                device_vm_object.guest_ip_observations = {}
+                observations = device_vm_object.guest_ip_observations
+            observations[self.source_tag] = guest_ip_observation
+            if guest_ip_observation == "unknown" and \
+                    getattr(device_vm_object, "_logged_guest_ip_unknown", False) is False:
+                device_vm_object._logged_guest_ip_unknown = True
+                log.info(f"VMware guest IP data unavailable for '{device_vm_object.get_display_name()}'; "
+                         f"existing NetBox IP assignments retained")
 
         # add object to cache
         self.add_object_to_cache(vmware_object, device_vm_object)
@@ -3330,6 +3350,32 @@ class VMWareHandler(SourceBase):
 
         return name, vm_description
 
+    @staticmethod
+    def guest_ip_observation_state(vmware_object):
+        """
+        'unknown' when guest IP data cannot prove an address was removed.
+        'complete' when Tools are running and the guest reported at least one NIC.
+
+        A reported NIC with an empty address list, while this returns 'complete',
+        keeps the current upstream policy and is treated as a removal. That is a
+        policy choice, not a guarantee that Tools never returns a short list.
+        """
+
+        tools_status = grab(vmware_object, "guest.toolsRunningStatus")
+        guest_net = grab(vmware_object, "guest.net")
+        if tools_status != "guestToolsRunning" or guest_net is None:
+            return "unknown"
+
+        try:
+            guest_net_empty = len(guest_net) == 0
+        except TypeError:
+            guest_net_empty = False
+
+        if guest_net_empty:
+            return "unknown"
+
+        return "complete"
+
     def add_virtual_machine(self, obj):
         """
         Parse a vCenter VM  add to NetBox once all data is gathered.
@@ -3901,7 +3947,8 @@ class VMWareHandler(SourceBase):
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
                                         nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6,
-                                        vmware_object=obj, disk_data=disk_data)
+                                        vmware_object=obj, disk_data=disk_data,
+                                        guest_ip_observation=self.guest_ip_observation_state(obj))
 
         return
 

@@ -120,6 +120,18 @@ synced with `sync_vm_dummy_interfaces = True`, or for the VMs whose name matches
 
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
+When Tools are not running, or the guest NIC list is missing or empty, existing NetBox
+IP assignments and the primary IP are retained and are not orphaned from that run. The
+sync logs `VMware guest IP data unavailable for '{name}'; existing NetBox IP assignments retained`.
+Cached addresses in `guest.net` are not treated as a fresh verification.
+
+When Tools are running and `guest.net` lists a NIC with no addresses, that empty list is
+still treated as a removal. This matches the previous behavior. It does not claim that
+Tools can never return a temporarily incomplete list for one NIC.
+
+A VM that is absent from a finished vCenter listing is not given an unknown observation.
+It keeps the ordinary orphan and prune lifecycle. If the vCenter session or the VM
+listing does not finish, existing VMs from that source are left unchanged.
 
 #### 5b. Resolve the tenant of a VM
 

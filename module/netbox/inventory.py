@@ -18,6 +18,15 @@ from module.common.support import perform_ptr_lookups
 log = get_logger()
 
 
+class OwnerResolution:
+    """How the source that owns a VM, device, or IP was identified."""
+
+    def __init__(self, status, source=None, tags=None):
+        self.status = status
+        self.source = source
+        self.tags = list(tags or [])
+
+
 class NetBoxInventory:
     """
     Singleton class to manage an inventory of NetBoxObject objects
@@ -42,6 +51,7 @@ class NetBoxInventory:
 
         # object types read from NetBox in this run
         self.loaded_types = set()
+        self._ambiguous_owner_reports = set()
 
         for object_type in NetBoxObject.__subclasses__():
 
@@ -366,6 +376,188 @@ class NetBoxInventory:
 
         return None
 
+    def _configured_sources_by_tag(self):
+        sources = {}
+        for source in self.source_list:
+            tag = getattr(source, "source_tag", None)
+            if tag:
+                sources[tag] = source
+        return sources
+
+    @staticmethod
+    def _source_tag_names(obj):
+        if obj is None:
+            return []
+
+        names = []
+        for tag in obj.get_tags():
+            if isinstance(tag, str) and tag.startswith("Source:"):
+                names.append(tag)
+        return names
+
+    def _resolve_parent_owner(self, parent):
+        """
+        The owner is the single known Source tag, or the single source that
+        resolved this object during the current run. Anything else is ambiguous
+        or absent. Processing order is not a tie-break.
+        """
+
+        configured = self._configured_sources_by_tag()
+        tags = self._source_tag_names(parent)
+        unknown_tags = [tag for tag in tags if tag not in configured]
+        known_sources = []
+        for tag in tags:
+            source = configured.get(tag)
+            if source is not None and source not in known_sources:
+                known_sources.append(source)
+
+        if unknown_tags or len(known_sources) > 1:
+            return OwnerResolution("ambiguous", None, tags)
+
+        if len(known_sources) == 1:
+            return OwnerResolution("owner", known_sources[0], tags)
+
+        observations = getattr(parent, "guest_ip_observations", None) or {}
+        resolvers = []
+        for tag in observations:
+            source = configured.get(tag)
+            if source is not None and source not in resolvers:
+                resolvers.append(source)
+
+        if len(resolvers) == 1 and len(observations) == 1:
+            return OwnerResolution("owner", resolvers[0], tags)
+
+        if observations:
+            return OwnerResolution("ambiguous", None, list(observations.keys()))
+
+        return OwnerResolution("none", None, tags)
+
+    def resolve_owner(self, obj):
+        """
+        Identify the source that owns obj.
+
+        An IP with no source tag uses its parent. An IP tag that disagrees with
+        that parent, or any tag of the form 'Source:' that matches no configured
+        source, is ambiguous.
+        """
+
+        if isinstance(obj, NBIPAddress):
+            parent = obj.get_device_vm()
+            parent_decision = self._resolve_parent_owner(parent) if parent is not None \
+                else OwnerResolution("none", None, [])
+            configured = self._configured_sources_by_tag()
+            ip_tags = self._source_tag_names(obj)
+            unknown_tags = [tag for tag in ip_tags if tag not in configured]
+            known_sources = []
+            for tag in ip_tags:
+                source = configured.get(tag)
+                if source is not None and source not in known_sources:
+                    known_sources.append(source)
+
+            if unknown_tags or len(known_sources) > 1:
+                return OwnerResolution("ambiguous", None, parent_decision.tags + ip_tags)
+
+            if len(known_sources) == 1:
+                if parent_decision.status == "ambiguous":
+                    return parent_decision
+                if parent_decision.status == "owner" and parent_decision.source is not known_sources[0]:
+                    return OwnerResolution("ambiguous", None, parent_decision.tags + ip_tags)
+                return OwnerResolution("owner", known_sources[0], ip_tags)
+
+            return parent_decision
+
+        if isinstance(obj, (NBVMInterface, NBInterface)):
+            parent = obj.data.get("virtual_machine") if isinstance(obj, NBVMInterface) else obj.data.get("device")
+            if parent is not None:
+                return self._resolve_parent_owner(parent)
+
+        return self._resolve_parent_owner(obj)
+
+    def report_ambiguous_owner(self, obj, decision):
+        if not hasattr(self, "_ambiguous_owner_reports"):
+            self._ambiguous_owner_reports = set()
+
+        if id(obj) in self._ambiguous_owner_reports:
+            return
+
+        self._ambiguous_owner_reports.add(id(obj))
+        tag_list = ", ".join(decision.tags) if decision.tags else "(no source tag)"
+        log.warning(f"Ambiguous source ownership for {obj.name} '{obj.get_display_name()}'; "
+                    f"tags: {tag_list}. Not unassigning, orphaning, or deleting it.")
+
+    def _owner_observation_is_unknown(self, parent):
+        if parent is None:
+            return False
+
+        observations = getattr(parent, "guest_ip_observations", None) or {}
+        decision = self._resolve_parent_owner(parent)
+        if decision.status == "owner" and decision.source is not None:
+            return observations.get(decision.source.source_tag) == "unknown"
+
+        return False
+
+    def _has_tag(self, obj, tag_name):
+        return tag_name in obj.get_tags()
+
+    def retention_reason(self, obj, _seen=None):
+        """
+        Why orphaning and pruning must leave obj alone this run.
+
+        'unknown' is a guest-IP observation and clears a stale orphan tag.
+        'ambiguous' and 'incomplete' block a new orphan tag and any delete.
+        None means the ordinary lifecycle applies.
+
+        Returns
+        -------
+        str, None
+        """
+
+        if obj is None:
+            return None
+
+        if _seen is None:
+            _seen = set()
+        if id(obj) in _seen:
+            return None
+        _seen.add(id(obj))
+
+        if not isinstance(obj, (NBVM, NBDevice, NBIPAddress, NBVMInterface, NBInterface)):
+            return None
+
+        if getattr(obj, "unverified_retain", False) is True:
+            return "unknown"
+
+        if isinstance(obj, NBIPAddress) and self._owner_observation_is_unknown(obj.get_device_vm()):
+            return "unknown"
+
+        if isinstance(obj, (NBVMInterface, NBInterface)):
+            parent = obj.data.get("virtual_machine") if isinstance(obj, NBVMInterface) else obj.data.get("device")
+            if self._owner_observation_is_unknown(parent):
+                for ip in obj.get_ip_addresses():
+                    if ip.get_device_vm() is parent:
+                        return "unknown"
+            for ip in obj.get_ip_addresses():
+                reason = self.retention_reason(ip, _seen)
+                if reason is not None:
+                    return reason
+
+        decision = self.resolve_owner(obj)
+        if decision.status == "ambiguous":
+            self.report_ambiguous_owner(obj, decision)
+            return "ambiguous"
+
+        if decision.status == "owner" and decision.source is not None and \
+                getattr(decision.source, "inventory_complete", True) is False:
+            return "incomplete"
+
+        if decision.status == "none" and isinstance(obj, (NBVM, NBDevice, NBIPAddress)) and \
+                self._has_tag(obj, primary_tag_name) and \
+                self._has_tag(obj, f"{primary_tag_name}: Orphaned") is False:
+            self.report_ambiguous_owner(obj, decision)
+            return "ambiguous"
+
+        return None
+
     def tag_all_the_things(self, netbox_handler):
         """
         Tag all items which have been created/updated/inherited by this program
@@ -384,6 +576,13 @@ class NetBoxInventory:
         all_sources_tags = [x.source_tag for x in self.source_list]
         disabled_sources_tags = \
             [x.source_tag for x in self.source_list if grab(x, "settings.enabled", fallback=False) is False]
+
+        # Decide retention before any source tag is removed. Prune reads the same
+        # flag, including when a later tag write does not succeed.
+        for object_type in NetBoxObject.__subclasses__():
+            for this_object in self.get_all_items(object_type):
+                this_object.retention_reason = self.retention_reason(this_object)
+                this_object.retain_from_prune = this_object.retention_reason is not None
 
         for object_type in NetBoxObject.__subclasses__():
 
@@ -437,6 +636,15 @@ class NetBoxInventory:
                     if getattr(this_object, "prune", False) is False:
                         # or just remove primary tag if pruning is disabled
                         this_object.remove_tags(netbox_handler.orphaned_tag)
+                        continue
+
+                    # Unknown guest data clears a stale orphan tag. Missing or
+                    # conflicting ownership, and an unfinished source listing,
+                    # add no orphan tag. Pruning honours the same flag.
+                    if getattr(this_object, "retain_from_prune", False) is True:
+                        if this_object.retention_reason == "unknown" and \
+                                netbox_handler.orphaned_tag in this_object.get_tags():
+                            this_object.remove_tags(netbox_handler.orphaned_tag)
                         continue
 
                     # don't mark IPs as orphaned if vm/device is only switched off
