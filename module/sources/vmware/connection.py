@@ -1613,7 +1613,9 @@ class VMWareHandler(SourceBase):
 
         for custom_object_attribute in custom_object_attributes:
 
-            attribute_data = self.get_prefetched_value(obj, custom_object_attribute, fallback="NOT FOUND")
+            # read with grab(), which walks list indexes and managed objects like guest.net.0.ipAddress,
+            # on top of the properties retrieved in bulk
+            attribute_data = grab(obj, custom_object_attribute, fallback="NOT FOUND")
 
             if attribute_data == "NOT FOUND":
                 log.warning(f"This object has no attribute '{custom_object_attribute}' or attribute is undefined.")
@@ -2186,7 +2188,8 @@ class VMWareHandler(SourceBase):
     def get_prefetch_paths(self, object_type):
         """
         Return the property paths which are retrieved in bulk for objects of a type. These have to
-        cover what the add_* handlers read, anything else is requested object by object.
+        cover what the add_* handlers read, anything else is requested object by object. Custom object
+        attribute paths are not part of it, they are read with grab() from these properties.
 
         Parameters
         ----------
@@ -2195,20 +2198,16 @@ class VMWareHandler(SourceBase):
 
         Returns
         -------
-        tuple: (list, list) the paths the handlers need and the configured custom object attribute paths
+        list: the paths the handlers need
         """
-
-        custom_paths = list()
 
         if object_type is vim.VirtualMachine:
             paths = ["name", "parent", "config", "runtime", "guest", "resourcePool"]
-            custom_paths = self.settings.vm_custom_object_attributes or list()
         elif object_type is vim.HostSystem:
             # the whole 'config' of a host is about 1 MB, only its network part is needed
             paths = ["name", "parent", "summary", "configManager", "config.network"]
             if self.settings.sync_host_fc_adapters is True:
                 paths.append("config.storageDevice.hostBusAdapter")
-            custom_paths = self.settings.host_custom_object_attributes or list()
         elif object_type is vim.dvs.DistributedVirtualPortgroup:
             paths = ["key", "name", "config"]
         else:
@@ -2217,7 +2216,7 @@ class VMWareHandler(SourceBase):
         if object_type in [vim.VirtualMachine, vim.HostSystem] and self.settings.sync_custom_attributes is True:
             paths.append("customValue")
 
-        return paths, [x for x in custom_paths if x not in paths]
+        return paths
 
     def prefetch_properties(self, objects, object_type):
         """
@@ -2239,34 +2238,11 @@ class VMWareHandler(SourceBase):
         if self.property_cache is None or len(objects) == 0:
             return objects
 
-        paths, custom_paths = self.get_prefetch_paths(object_type)
-
-        # custom object attribute paths vCenter refused once are read object by object for the rest of the run
-        refused_custom_paths = self.get_run_cache("refused_custom_paths")
-        if refused_custom_paths.get(object_type) == custom_paths:
-            custom_paths = list()
+        paths = self.get_prefetch_paths(object_type)
 
         prefetched_objects = list()
         for start in range(0, len(objects), self.prefetch_chunk_size):
             chunk = objects[start:start + self.prefetch_chunk_size]
-
-            try:
-                prefetched_objects.extend(self.property_cache.prefetch(self.session, chunk, object_type,
-                                                                       paths + custom_paths))
-                continue
-            except Exception as e:
-                if len(custom_paths) == 0:
-                    log.warning(f"Unable to retrieve properties of {len(chunk)} {object_type.__name__} "
-                                f"objects in bulk, requesting them one by one: {e}")
-                    prefetched_objects.extend(chunk)
-                    continue
-
-                # a misspelled custom object attribute is a property path vCenter refuses
-                log.warning(f"Unable to retrieve properties of {object_type.__name__} objects in bulk including "
-                            f"the custom object attributes {custom_paths}, retrying without them: {e}")
-
-                refused_custom_paths[object_type] = custom_paths
-                custom_paths = list()
 
             try:
                 prefetched_objects.extend(self.property_cache.prefetch(self.session, chunk, object_type, paths))

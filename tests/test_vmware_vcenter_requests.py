@@ -148,6 +148,33 @@ def test_an_unknown_custom_object_attribute_does_not_break_the_sync(vcsim, inven
         assert uuids[name] in vm.data.get("custom_fields", dict()).values()
 
 
+def test_custom_object_attributes_walk_list_indexes_and_managed_objects(vcsim, inventory, load_config,
+                                                                       vmware_settings, sdk):
+    from pyVmomi import vim
+    from module.netbox.object_classes import NBVM
+    from module.sources import instantiate_sources
+
+    load_config(vmware_settings + "vm_custom_object_attributes = runtime.host.name, guest.net.0.macAddress\n")
+    source = instantiate_sources()[0]
+    inventory.resolve_relations()
+    source.apply()
+
+    view = sdk.viewManager.CreateContainerView(sdk.rootFolder, [vim.VirtualMachine], True)
+    expected = {vm.name: (vm.runtime.host.name, vm.guest.net[0].macAddress if vm.guest.net else None)
+                for vm in view.view}
+    view.Destroy()
+
+    synced = {vm.get_display_name(): vm.data.get("custom_fields", dict()) for vm in inventory.get_all_items(NBVM)}
+    assert set(synced) == set(expected)
+    with_guest_net = [name for name, (_, mac) in expected.items() if mac is not None]
+    assert len(with_guest_net) > 0
+    for name, (host_name, mac) in expected.items():
+        values = synced[name].values()
+        assert host_name in values, name
+        if mac is not None:
+            assert mac in values, name
+
+
 def test_a_vm_queued_for_reevaluation_is_parsed_again(vmware_source, monkeypatch):
     from pyVmomi import vim
 
@@ -348,32 +375,3 @@ def test_attached_tags_are_retrieved_in_bulk(inventory, bulk_fails):
     assert results == [["name-t1", "name-t2"], [], ["name-t1"]]
     assert tagging.calls["list_attached_tags_on_objects"] == 1
     assert tagging.calls["list_attached_tags"] == (3 if bulk_fails else 0)
-
-
-def test_an_invalid_custom_object_attribute_path_is_retried_without_it(inventory):
-    # vCenter answers a PropertyCollector request with an invalid property path with an
-    # InvalidProperty fault for the whole request, vcsim just leaves the path out
-    from pyVmomi import vim
-
-    class _RefusingCache:
-        def __init__(self):
-            self.requests = list()
-
-        def prefetch(self, _session, objects, _object_type, paths):
-            self.requests.append(list(paths))
-            if "config.doesNotExist" in paths:
-                raise vim.fault.InvalidProperty(name="config.doesNotExist")
-            return [f"prefetched-{x}" for x in objects]
-
-    handler = _bare_handler(inventory, sync_custom_attributes=False,
-                            vm_custom_object_attributes=["config.doesNotExist", "config.uuid"])
-    handler.property_cache = _RefusingCache()
-    handler.prefetch_chunk_size = 2
-
-    assert handler.prefetch_properties(["vm-1", "vm-2", "vm-3"], vim.VirtualMachine) == \
-        ["prefetched-vm-1", "prefetched-vm-2", "prefetched-vm-3"]
-
-    base_paths = handler.get_prefetch_paths(vim.VirtualMachine)[0]
-    with_custom = base_paths + ["config.doesNotExist", "config.uuid"]
-    # the refused paths are not tried again for the next chunk
-    assert handler.property_cache.requests == [with_custom, base_paths, base_paths]
