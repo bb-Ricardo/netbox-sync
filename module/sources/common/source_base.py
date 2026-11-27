@@ -34,20 +34,11 @@ class SourceBase:
     def ip_address_objects_for(self, address: str) -> list:
         """
         Return the inventory's IP address objects for an address (without prefix length), in
-        inventory order. The inventory only ever appends, so the index catches up with the
-        objects added since the last call instead of scanning every IP address per lookup.
+        inventory order, from the inventory's address index instead of scanning every IP address
+        per lookup. The index follows every change of an object's address, see the indexes in
+        module/netbox/inventory.py.
         """
-        all_ips = self.inventory.get_all_items(NBIPAddress)
-        index = self.__dict__.setdefault("_ip_index", dict())
-        indexed = self.__dict__.get("_ip_index_size", 0)
-        if indexed > len(all_ips):  # a different inventory list: start over
-            index.clear()
-            indexed = 0
-        for ip in all_ips[indexed:]:
-            key = grab(ip, "data.address", fallback="").split("/")[0]
-            index.setdefault(key, list()).append(ip)
-        self._ip_index_size = len(all_ips)
-        return index.get(address, list())
+        return self.inventory.get_index_candidates(NBIPAddress, "address", [address])
 
     def set_source_tag(self):
         self.source_tag = f"Source: {self.name}"
@@ -388,7 +379,7 @@ class SourceBase:
         current_longest_matching_prefix_length = 0
         current_longest_matching_prefix = None
 
-        for prefix in self.inventory.get_all_items(NBPrefix):
+        for prefix in self.inventory.get_prefix_candidates(ip_to_match):
 
             if not prefix.matches_site(site_object):
                 continue
@@ -523,7 +514,8 @@ class SourceBase:
 
             # if a new interface or not matching assigned MAC address, try to find an existing unassigned mac address
             if primary_mac_address_object is None:
-                for mac_address_object in self.inventory.get_all_items(NBMACAddress):
+                for mac_address_object in self.inventory.get_index_candidates(NBMACAddress, "mac_address",
+                                                                              [interface_mac_address]):
                     # an object already assigned to this very interface is the one we want, not a duplicate
                     if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
                             grab(mac_address_object, "data.assigned_object_id") in (None, interface_object)):
