@@ -130,7 +130,9 @@ the removal signal. The removal waits until the end of the run. A later report o
 address on the same NIC drops it, and a later empty report drops an earlier confirmation.
 Exactly one other interface may receive the address; the primary IP then follows
 `set_primary_ip` and the old primary is cleared. More than one requesting interface leaves
-the address and its primary where they are. Source order does not choose the winner.
+the address and its primary where they are. A skipped report that is still unresolved
+counts as a requesting interface, so the address is not moved while that claim remains.
+Resolving one interface clears only that claim. Source order does not choose the winner.
 This is still a policy choice. It does not claim that Tools can never return a
 temporarily incomplete list for one NIC.
 

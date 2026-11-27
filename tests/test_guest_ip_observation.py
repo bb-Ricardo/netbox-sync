@@ -1707,9 +1707,10 @@ def test_moved_ip_is_not_orphaned_with_the_absent_vm(inventory, source_settings)
 def test_a_skipped_disabled_interface_claim_is_kept_on_an_active_orphaned_vm(inventory, source_settings):
     """
     The old NIC is enabled and the new one is disabled, so the report is skipped.
-    The parent is already orphaned and still active. The skip is a claim: it is
-    not orphaned, and a later assignment clears only that interface.
-    """
+        The parent is already orphaned and still active. The skip is a claim: it is
+        not orphaned. A later report clears only that interface's claim and does
+        not take the address while another claim remains.
+        """
 
     for disabled_first in (True, False):
         begin_next_run(inventory)
@@ -1762,12 +1763,94 @@ def test_a_skipped_disabled_interface_claim_is_kept_on_an_active_orphaned_vm(inv
         new_nic.data["enabled"] = True
         old_nic.data["enabled"] = False
         _report_on(new, new_vm, new_nic, [ADDRESS])
+        inventory.settle_deferred_ip_moves()
         assert new_nic not in ip.unresolved_claims.values()
         assert other in ip.unresolved_claims.values()
+        assert ip.get_interface() is old_nic
+        assert old_vm.data["primary_ip4"] is ip
+        assert "primary_ip4" not in old_vm.unset_items
         inventory.tag_all_the_things(handler)
-        assert ip.get_interface() is new_nic
         assert NetBoxHandler.orphaned_tag not in ip.get_tags()
         assert other in ip.unresolved_claims.values()
+        payloads = _writes(inventory)
+        assert not any(item[3].get("assigned_object_id") == new_nic.nb_id
+                       for item in payloads if item[1] == NBIPAddress.name and isinstance(item[3], dict))
+        assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is False
+
+
+def test_one_resolved_claim_does_not_move_the_ip_while_another_remains(inventory, source_settings, caplog):
+    """
+    Two disabled reports are unresolved claims. When one interface becomes
+    enabled, that claim is cleared, but the address and primary stay. Either
+    claimant writes the same payload.
+    """
+
+    caplog.set_level(logging.WARNING, logger="NetBox-Sync")
+    for enable_first in (True, False):
+        caplog.clear()
+        begin_next_run(inventory)
+        settings = _settings(source_settings, set_primary_ip="always")
+        old = make_source(inventory, "old-vcenter", settings)
+        first = make_source(inventory, "claim-a", settings)
+        second = make_source(inventory, "claim-b", settings)
+        for source in (old, first, second):
+            source.source_type = "vmware"
+        old_vm, old_nic, ip = vm_with_ip(inventory, name="held-vm", address=ADDRESS)
+        old_vm.nb_id = 81
+        old_nic.nb_id = 82
+        ip.nb_id = 83
+        for obj in (old_vm, old_nic, ip):
+            stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+        vm_a, nic_a, extra_a = vm_with_ip(inventory, name="vm-a", address="10.9.1.1/24")
+        vm_b, nic_b, extra_b = vm_with_ip(inventory, name="vm-b", address="10.9.1.2/24")
+        for extra in (extra_a, extra_b):
+            extra.data["assigned_object_id"] = None
+            extra.data["assigned_object_type"] = None
+        nic_a.data["enabled"] = False
+        nic_b.data["enabled"] = False
+        vm_a.nb_id = 84
+        nic_a.nb_id = 85
+        vm_b.nb_id = 86
+        nic_b.nb_id = 87
+        vm_a.data["primary_ip4"] = None
+        vm_b.data["primary_ip4"] = None
+        stamp(vm_a, NetBoxHandler.primary_tag, first.source_tag)
+        stamp(nic_a, NetBoxHandler.primary_tag, first.source_tag)
+        stamp(vm_b, NetBoxHandler.primary_tag, second.source_tag)
+        stamp(nic_b, NetBoxHandler.primary_tag, second.source_tag)
+
+        _report_on(first, vm_a, nic_a, [ADDRESS])
+        _report_on(second, vm_b, nic_b, [ADDRESS])
+        assert nic_a in ip.unresolved_claims.values()
+        assert nic_b in ip.unresolved_claims.values()
+        assert ip.get_interface() is old_nic
+
+        old_nic.data["enabled"] = False
+        old_vm.guest_ip_observations = {old.source_tag: "complete"}
+        old_vm.guest_reported_ips = {old.source_tag: set()}
+        old.add_update_interface(
+            interface_object=old_nic, device_object=old_vm,
+            interface_data={"name": old_nic.data["name"]},
+            interface_ips=[], vmware_object=TOOLS_RUNNING_EMPTY_NIC)
+        if enable_first:
+            winner, winner_vm, winner_nic, loser_nic = first, vm_a, nic_a, nic_b
+        else:
+            winner, winner_vm, winner_nic, loser_nic = second, vm_b, nic_b, nic_a
+        winner_nic.data["enabled"] = True
+        _report_on(winner, winner_vm, winner_nic, [ADDRESS])
+        inventory.settle_deferred_ip_moves()
+
+        assert ip.get_interface() is old_nic
+        assert old_vm.data["primary_ip4"] is ip
+        assert "primary_ip4" not in old_vm.unset_items
+        assert winner_vm.data.get("primary_ip4") is None
+        assert winner_nic not in ip.unresolved_claims.values()
+        assert loser_nic in ip.unresolved_claims.values()
+        assert "another interface still has an unresolved claim" in caplog.text
+        payloads = _writes(inventory)
+        assert not any(isinstance(item[3], dict) and item[3].get("assigned_object_id") == winner_nic.nb_id
+                       for item in payloads if item[1] == NBIPAddress.name)
+        assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is False
 
 
 def test_a_skipped_enabled_claim_is_not_orphaned_and_a_resolved_one_is_cleared(inventory, source_settings):

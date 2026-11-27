@@ -376,6 +376,16 @@ class SourceBase:
             if not (item.get("interface") is interface_object and self._same_source(item.get("source")))
         ]
 
+    def _move_waits_for_other_claims(self, ip, interface_object):
+        """True when some other interface already claims ip and this move must wait."""
+
+        if self.inventory.unresolved_claims_except(ip, interface_object):
+            return True
+        for request in getattr(ip, "deferred_moves", None) or []:
+            if request.get("interface") is not interface_object:
+                return True
+        return False
+
     def _defer_ip_move(self, ip, interface_object, device_object, address):
         """
         Remember one request to move ip onto interface_object.
@@ -1191,7 +1201,10 @@ class SourceBase:
                     move = self._may_move_assigned_ip(this_ip_object, device_object)
                     if move == "reject":
                         continue
-                    if move == "defer":
+                    # An allowed move is still one claimant. Another skipped claim,
+                    # or a move already deferred for a different interface, has to
+                    # be seen at settlement before this address changes hands.
+                    if move == "defer" or self._move_waits_for_other_claims(this_ip_object, interface_object):
                         self._defer_ip_move(this_ip_object, interface_object, device_object,
                                             ip_object.compressed)
                         continue

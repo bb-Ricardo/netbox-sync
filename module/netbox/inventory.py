@@ -719,6 +719,14 @@ class NetBoxInventory:
         claims = getattr(ip, "unresolved_claims", None)
         return isinstance(claims, dict) and len(claims) > 0
 
+    def unresolved_claims_except(self, ip, interface):
+        """Claims recorded for interfaces other than interface."""
+
+        claims = getattr(ip, "unresolved_claims", None)
+        if not isinstance(claims, dict):
+            return []
+        return [item for item in claims.values() if item is not interface]
+
     def _any_source_listing_incomplete(self):
         for source in self.source_list:
             if grab(source, "settings.enabled", fallback=True) is False:
@@ -777,10 +785,12 @@ class NetBoxInventory:
         Resolve every competing report from this run, then the old assignment.
 
         A VMware move is not applied while another interface may still report
-        the same address. The old interface's removal is held with those
-        reports. One eligible interface receives the address. Several eligible
-        interfaces leave the current assignment and its primary in place, with
-        nothing queued for the write.
+        the same address. A skipped report is one of those reports: it stays an
+        unresolved claim, and a deferred request does not win while that claim
+        remains. The old interface's removal is held with those reports. One
+        eligible interface receives the address. Several eligible interfaces,
+        or one eligible interface and a remaining claim, leave the current
+        assignment and its primary in place, with nothing queued for the write.
         """
 
         for ip in list(self.get_all_items(NBIPAddress)):
@@ -827,6 +837,11 @@ class NetBoxInventory:
             return
 
         if len(grouped) == 0:
+            # A skipped report is not an empty one. Do not unassign the address,
+            # or clear its primary, while another interface still claims it.
+            if self.unresolved_claims_except(ip, ip.get_interface()):
+                self._keep_current_assignment(ip)
+                return
             self._apply_pending_ip_removal(ip, removals)
             return
 
@@ -850,6 +865,14 @@ class NetBoxInventory:
             if decision == "defer":
                 source._report_left_assignment(
                     ip, "its current source has not reported whether the address is still assigned")
+            return
+
+        # This report is resolved. A different interface's skipped claim is not,
+        # and it is not permission to take the address from its current assignment.
+        if self.unresolved_claims_except(ip, interface):
+            self.resolve_unresolved_claim(ip, interface)
+            self._keep_current_assignment(ip)
+            source._report_left_assignment(ip, "another interface still has an unresolved claim")
             return
 
         # The source that held the address has now omitted it, so its
