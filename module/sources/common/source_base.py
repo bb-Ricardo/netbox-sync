@@ -58,6 +58,31 @@ class SourceBase:
     def can_reassign_stale_ip(self, ip, device_vm_object):
         return False
 
+    def retain_existing_ip(self, ip):
+        """
+        Remember that this source could not verify ip. Another source must not
+        clear that mark by writing a shared flag.
+        """
+
+        retained = getattr(ip, "retained_by", None)
+        if not isinstance(retained, set):
+            retained = set()
+            ip.retained_by = retained
+        if self.source_tag:
+            retained.add(self.source_tag)
+        ip.unverified_retain = True
+
+    def release_ip_retention(self, ip):
+        """Drop only this source's unverified mark."""
+
+        retained = getattr(ip, "retained_by", None)
+        if isinstance(retained, set) and self.source_tag:
+            retained.discard(self.source_tag)
+        else:
+            retained = set()
+            ip.retained_by = retained
+        ip.unverified_retain = bool(retained)
+
     def may_remove_ip_assignments(self, device_object, ip=None):
         """
         Whether this source may unassign one IP address of device_object.
@@ -80,6 +105,12 @@ class SourceBase:
             subjects.append(ip)
 
         for subject in subjects:
+            # Tags that all name this source are its own ownership, including
+            # when a test or caller did not register the handler on source_list.
+            source_tags = self.inventory._source_tag_names(subject)
+            if source_tags and all(tag == self.source_tag for tag in source_tags):
+                continue
+
             decision = self.inventory.resolve_owner(subject)
             if decision.status == "ambiguous":
                 self.inventory.report_ambiguous_owner(subject, decision)
@@ -799,6 +830,14 @@ class SourceBase:
             if skip_this_ip is True:
                 continue
 
+            # The removal loop is not the only destructive path. Matching an
+            # existing address and updating it can move it to another interface
+            # and replace its source. That decision belongs here, before either
+            # change, and it stays with the source that owns the VM.
+            if isinstance(this_ip_object, NBIPAddress) and \
+                    self.may_remove_ip_assignments(device_object, ip=this_ip_object) is False:
+                continue
+
             nic_ip_data = {
                 "address": ip_object.compressed,
                 "assigned_object_id": interface_object,
@@ -846,14 +885,14 @@ class SourceBase:
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
-                this_ip_object.unverified_retain = False
+                self.release_ip_retention(this_ip_object)
 
             # update IP address with additional data if not already present
             else:
 
                 log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
 
-                this_ip_object.unverified_retain = False
+                self.release_ip_retention(this_ip_object)
                 this_ip_object.update(data=nic_ip_data, source=self)
 
             ip_address_objects.append(this_ip_object)
@@ -878,7 +917,7 @@ class SourceBase:
         # this is not recorded as a fresh discovery.
         if interface_object is not None and (skip_ip_handling is True or skip_ip_removal is True):
             for retained_ip in interface_object.get_ip_addresses():
-                retained_ip.unverified_retain = True
+                self.retain_existing_ip(retained_ip)
 
         for current_ip in interface_object.get_ip_addresses():
 
@@ -908,7 +947,7 @@ class SourceBase:
 
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
                          f"therefore removed from this interface")
-                current_ip.unverified_retain = False
+                self.release_ip_retention(current_ip)
                 current_ip.remove_interface_association()
 
         matching_untagged_vlan = None

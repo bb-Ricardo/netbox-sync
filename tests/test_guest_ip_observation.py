@@ -456,6 +456,132 @@ def test_incomplete_source_listing_does_not_orphan_or_prune(inventory, source_se
     handler = make_handler(inventory)
     inventory.tag_all_the_things(handler)
     assert vm.retain_from_prune is True
+    assert source.source_tag in vm.get_tags()
+    assert source.source_tag in ip.get_tags()
     age(vm, 40)
     age(ip, 40)
     assert prune_deletes(handler) == []
+
+
+def begin_next_run(inventory):
+    """Drop in-memory flags the way a later process would when it reloads NetBox."""
+
+    version = inventory.netbox_api_version
+    inventory.base_structure = {}
+    inventory.source_list = []
+    inventory.init()
+    inventory.netbox_api_version = version
+
+
+def restore_vm(inventory, name, address, vm_tags, nic_tags, ip_tags):
+    vm, nic, ip = vm_with_ip(inventory, name=name, address=address)
+    stamp(vm, *vm_tags)
+    stamp(nic, *nic_tags)
+    stamp(ip, *ip_tags)
+    return vm, nic, ip
+
+
+def test_incomplete_protection_survives_into_the_next_run_and_absence_still_cleans_up(inventory, source_settings):
+    source = make_source(inventory, "vcenter", source_settings)
+    source.inventory_complete = False
+    fresh_vm, fresh_nic, fresh_ip = vm_with_ip(inventory, name="fresh-vm", address="10.2.0.5/24")
+    old_vm, old_nic, old_ip = vm_with_ip(inventory, name="old-vm", address="10.2.0.6/24")
+    for obj in (fresh_vm, fresh_nic, fresh_ip):
+        stamp(obj, NetBoxHandler.primary_tag, source.source_tag)
+    for obj in (old_vm, old_nic, old_ip):
+        stamp(obj, NetBoxHandler.primary_tag, source.source_tag, NetBoxHandler.orphaned_tag)
+
+    inventory.tag_all_the_things(make_handler(inventory))
+    saved = {
+        "fresh": (fresh_vm.get_tags(), fresh_nic.get_tags(), fresh_ip.get_tags()),
+        "old": (old_vm.get_tags(), old_nic.get_tags(), old_ip.get_tags()),
+    }
+    assert source.source_tag in saved["fresh"][0]
+    assert source.source_tag in saved["old"][2]
+    assert NetBoxHandler.orphaned_tag not in saved["fresh"][0]
+
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.inventory_complete = False
+    fresh_vm, fresh_nic, fresh_ip = restore_vm(inventory, "fresh-vm", "10.2.0.5/24", *saved["fresh"])
+    old_vm, old_nic, old_ip = restore_vm(inventory, "old-vm", "10.2.0.6/24", *saved["old"])
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert fresh_vm.retention_reason == "incomplete"
+    assert old_ip.retention_reason == "incomplete"
+    assert source.source_tag in fresh_vm.get_tags()
+    age(old_vm, 40)
+    age(old_ip, 40)
+    assert prune_deletes(handler) == []
+    saved = {
+        "fresh": (fresh_vm.get_tags(), fresh_nic.get_tags(), fresh_ip.get_tags()),
+        "old": (old_vm.get_tags(), old_nic.get_tags(), old_ip.get_tags()),
+    }
+
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.inventory_complete = True
+    fresh_vm, fresh_nic, fresh_ip = restore_vm(inventory, "fresh-vm", "10.2.0.5/24", *saved["fresh"])
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert NetBoxHandler.orphaned_tag in fresh_vm.get_tags()
+    assert NetBoxHandler.orphaned_tag in fresh_ip.get_tags()
+    assert fresh_vm.retain_from_prune is False
+    age(fresh_vm, 40)
+    age(fresh_ip, 40)
+    deleted = prune_deletes(handler)
+    assert ("DELETE", NBVM.name, fresh_vm.nb_id) in deleted
+    assert ("DELETE", NBIPAddress.name, fresh_ip.nb_id) in deleted
+
+
+TOOLS_RUNNING_WITH_IP = SimpleNamespace(
+    guest=SimpleNamespace(toolsRunningStatus="guestToolsRunning",
+                          net=[SimpleNamespace(ipAddress=["10.0.0.5"])]))
+
+
+def test_other_source_cannot_move_or_claim_an_ip_while_the_owner_is_unknown(inventory, source_settings):
+    def build():
+        begin_next_run(inventory)
+        owner = make_source(inventory, "owner", source_settings)
+        other = make_source(inventory, "other", source_settings)
+        vm, eth0, ip = vm_with_ip(inventory, name="shared-vm")
+        eth1 = inventory.add_object(NBVMInterface, data={
+            "name": "eth1", "virtual_machine": vm, "enabled": True,
+        }, read_from_netbox=True)
+        eth1.nb_id = 24
+        for obj in (vm, eth0, eth1, ip):
+            stamp(obj, NetBoxHandler.primary_tag, owner.source_tag)
+        vm.guest_ip_observations = {owner.source_tag: "unknown"}
+        owner.retain_existing_ip(ip)
+        return owner, other, vm, eth0, eth1, ip
+
+    def owner_pass(owner, vm, eth0):
+        owner.add_update_interface(
+            interface_object=eth0, device_object=vm, interface_data={"name": "eth0"},
+            interface_ips=[], vmware_object=TOOLS_DOWN)
+
+    def other_pass(other, vm, nic, ips):
+        other.add_update_interface(
+            interface_object=nic, device_object=vm, interface_data={"name": nic.data["name"]},
+            interface_ips=ips, vmware_object=TOOLS_RUNNING_WITH_IP)
+
+    for first_other in (True, False):
+        for nic_name, ips in (("eth1", ["10.0.0.5/24"]), ("eth0", ["10.0.0.5/24"])):
+            owner, other, vm, eth0, eth1, ip = build()
+            nic = eth1 if nic_name == "eth1" else eth0
+            steps = []
+            if first_other:
+                steps = [lambda: other_pass(other, vm, nic, ips), lambda: owner_pass(owner, vm, eth0)]
+            else:
+                steps = [lambda: owner_pass(owner, vm, eth0), lambda: other_pass(other, vm, nic, ips)]
+            for step in steps:
+                step()
+
+            assert ip.get_interface() is eth0
+            assert "assigned_object_id" not in ip.updated_items
+            assert ip.source is not other
+            assert owner.source_tag in ip.retained_by
+            assert ip.unverified_retain is True
+            inventory.tag_all_the_things(make_handler(inventory))
+            assert other.source_tag not in ip.get_tags()
+            assert owner.source_tag in ip.get_tags()

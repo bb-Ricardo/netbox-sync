@@ -627,6 +627,15 @@ class NetBoxInventory:
                     if netbox_handler.primary_tag not in this_object_tags:
                         continue
 
+                    # Retention is decided from the source tags still stored on the
+                    # object. Removing those tags first makes the next run, loaded
+                    # from NetBox, forget why the object was protected.
+                    if getattr(this_object, "retain_from_prune", False) is True:
+                        if this_object.retention_reason == "unknown" and \
+                                netbox_handler.orphaned_tag in this_object.get_tags():
+                            this_object.remove_tags(netbox_handler.orphaned_tag)
+                        continue
+
                     if bool(set(this_object_tags).intersection(all_sources_tags)) is True:
                         for source_tag in all_sources_tags:
                             this_object.remove_tags(source_tag)
@@ -636,15 +645,6 @@ class NetBoxInventory:
                     if getattr(this_object, "prune", False) is False:
                         # or just remove primary tag if pruning is disabled
                         this_object.remove_tags(netbox_handler.orphaned_tag)
-                        continue
-
-                    # Unknown guest data clears a stale orphan tag. Missing or
-                    # conflicting ownership, and an unfinished source listing,
-                    # add no orphan tag. Pruning honours the same flag.
-                    if getattr(this_object, "retain_from_prune", False) is True:
-                        if this_object.retention_reason == "unknown" and \
-                                netbox_handler.orphaned_tag in this_object.get_tags():
-                            this_object.remove_tags(netbox_handler.orphaned_tag)
                         continue
 
                     # don't mark IPs as orphaned if vm/device is only switched off
