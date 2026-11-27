@@ -2443,7 +2443,8 @@ class VMWareHandler(SourceBase):
                 tenant_name = self.get_object_relation(resource_pool_path, "vm_tenant_resource_pool_relation")
 
             if tenant_name is None:
-                resource_pool_name = get_string_or_none(self.get_object_name(self.get_cached_property(vm, "resourcePool")))
+                resource_pool = self.get_cached_property(vm, "resourcePool")
+                resource_pool_name = get_string_or_none(self.get_object_name(resource_pool))
                 if resource_pool_name is not None:
                     tenant_name = self.get_object_relation(resource_pool_name,
                                                            "vm_tenant_resource_pool_relation")

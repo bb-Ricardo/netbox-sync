@@ -68,6 +68,29 @@ def test_a_vm_parsed_in_the_first_run_is_not_requested_again_in_the_second(vmwar
     assert set(config_reads) == {1}
 
 
+def test_a_vm_queued_for_reevaluation_is_parsed_again(vmware_source, monkeypatch):
+    from pyVmomi import vim
+
+    parsed_again = set()
+    get_vm_name_and_description = vmware_source.get_vm_name_and_description
+
+    def record(name):
+        if vmware_source.parsing_objects_to_reevaluate:
+            parsed_again.add(name)
+        return get_vm_name_and_description(name)
+
+    monkeypatch.setattr(vmware_source, "get_vm_name_and_description", record)
+    vmware_source.apply()
+
+    queued = {vmware_source.get_object_name(obj) for obj in vmware_source.objects_to_reevaluate
+              if isinstance(obj, vim.VirtualMachine)}
+    if len(queued) == 0:
+        pytest.skip("no VM of this capture is queued for reevaluation")
+
+    # the managed object id check must not skip a VM in the reevaluation run
+    assert queued <= parsed_again
+
+
 #
 # unit tests without vcsim
 #
