@@ -1376,3 +1376,103 @@ def test_a_later_report_on_the_same_nic_cancels_a_held_removal(inventory, source
             assert _payload_clears(payloads, NBIPAddress.name, ip.nb_id, "assigned_object_id") is True
             assert _payload_clears(payloads, NBIPAddress.name, ip.nb_id, "assigned_object_type") is True
             assert _payload_clears(payloads, NBVM.name, vm.nb_id, "primary_ip4") is True
+
+
+def test_a_later_empty_nic_supersedes_an_earlier_confirmation_for_a_new_claimant(inventory, source_settings):
+    """
+    confirmed_by keeps the earlier report. Move eligibility follows the later
+    one. Present then empty lets the new VM take the address; empty then
+    present keeps the old assignment. The claimant may arrive before that
+    later report.
+    """
+
+    def prepare():
+        begin_next_run(inventory)
+        settings = _settings(source_settings, set_primary_ip="when-undefined")
+        old = make_source(inventory, "old-vcenter", settings)
+        new = make_source(inventory, "new-vcenter", settings)
+        old.source_type = "vmware"
+        new.source_type = "vmware"
+        old_vm, old_nic, ip = vm_with_ip(inventory, name="old-vm", address=ADDRESS)
+        old_nic.data["enabled"] = False
+        old_vm.nb_id = 11
+        old_nic.nb_id = 21
+        ip.nb_id = 31
+        new_vm, new_nic, extra = vm_with_ip(inventory, name="new-vm", address="10.9.9.9/24")
+        extra.data["assigned_object_id"] = None
+        extra.data["assigned_object_type"] = None
+        new_vm.data["primary_ip4"] = None
+        new_vm.nb_id = 12
+        new_nic.nb_id = 22
+        for obj in (old_vm, old_nic, ip):
+            stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+        stamp(new_vm, NetBoxHandler.primary_tag, new.source_tag)
+        stamp(new_nic, NetBoxHandler.primary_tag, new.source_tag)
+        old_handler = _vmware_handler(inventory, old)
+        new_handler = _vmware_handler(inventory, new)
+
+        def report_old(addresses, tools):
+            old_handler.add_device_vm_to_inventory(
+                NBVM,
+                object_data={"name": old_vm.data["name"], "status": "active", "cluster": old_vm.data["cluster"]},
+                vnic_data={"eth0": {"name": "eth0", "enabled": False}},
+                nic_ips={"eth0": addresses},
+                p_ipv4=addresses[0] if addresses else None,
+                vmware_object=tools,
+                guest_ip_observation="complete",
+            )
+
+        def claim():
+            new_handler.add_device_vm_to_inventory(
+                NBVM,
+                object_data={"name": new_vm.data["name"], "status": "active", "cluster": new_vm.data["cluster"]},
+                vnic_data={"eth0": {"name": "eth0", "enabled": True}},
+                nic_ips={"eth0": [ADDRESS]},
+                p_ipv4=ADDRESS,
+                vmware_object=TOOLS_RUNNING_WITH_IP,
+                guest_ip_observation="complete",
+            )
+
+        steps = {
+            "present": lambda: report_old([ADDRESS], TOOLS_RUNNING_WITH_IP),
+            "empty": lambda: report_old([], TOOLS_RUNNING_EMPTY_NIC),
+            "claim": claim,
+        }
+        return old_vm, old_nic, ip, new_vm, new_nic, steps
+
+    def moved(old_vm, old_nic, ip, new_vm, new_nic):
+        inventory.settle_deferred_ip_moves()
+        assert ip.get_interface() is new_nic
+        assert ip not in old_nic.get_ip_addresses()
+        assert new_vm.data["primary_ip4"] is ip
+        assert "primary_ip4" in old_vm.unset_items
+        assert "assigned_object_id" not in ip.unset_items
+        payloads = _writes(inventory)
+        assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is True
+        assert any(item[0] == "PATCH" and item[1] == NBIPAddress.name and isinstance(item[3], dict)
+                   and item[3].get("assigned_object_id") == new_nic.nb_id for item in payloads)
+
+    def kept(old_vm, old_nic, ip, new_vm, new_nic):
+        inventory.settle_deferred_ip_moves()
+        assert ip.get_interface() is old_nic
+        assert new_vm.data.get("primary_ip4") is None
+        assert old_vm.data["primary_ip4"] is ip
+        assert "assigned_object_id" not in ip.unset_items
+        assert "primary_ip4" not in old_vm.unset_items
+        payloads = _writes(inventory)
+        assert _payload_clears(payloads, NBIPAddress.name, ip.nb_id, "assigned_object_id") is False
+        assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is False
+        assert ip.get_interface() is old_nic
+        assert old_vm.data["primary_ip4"] is ip
+
+    for order in (("present", "empty", "claim"), ("present", "claim", "empty")):
+        old_vm, old_nic, ip, new_vm, new_nic, steps = prepare()
+        for step in order:
+            steps[step]()
+        moved(old_vm, old_nic, ip, new_vm, new_nic)
+
+    for order in (("empty", "present", "claim"), ("empty", "claim", "present")):
+        old_vm, old_nic, ip, new_vm, new_nic, steps = prepare()
+        for step in order:
+            steps[step]()
+        kept(old_vm, old_nic, ip, new_vm, new_nic)

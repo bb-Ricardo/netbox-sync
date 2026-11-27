@@ -707,8 +707,6 @@ class NetBoxInventory:
                 removals = []
             if len(requests) == 0 and len(removals) == 0:
                 continue
-            ip.deferred_moves = None
-            ip.pending_removals = None
 
             grouped = []
             for request in requests:
@@ -721,60 +719,70 @@ class NetBoxInventory:
                 else:
                     group["requests"].append(request)
 
-            reporter = next((request.get("source") for request in requests if request.get("source") is not None), None)
-            if len(grouped) > 1:
-                if reporter is not None:
-                    reporter._report_left_assignment(ip, "more than one interface requested it")
-                else:
-                    log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: "
-                                f"more than one interface requested it.")
-                self._keep_current_assignment(ip)
-                continue
+            try:
+                self._settle_one_ip(ip, requests, removals, grouped)
+            finally:
+                # Clear after the decision. Move eligibility reads the held
+                # removal, and clearing it first makes the earlier confirmation
+                # look current again.
+                ip.deferred_moves = None
+                ip.pending_removals = None
 
-            if len(grouped) == 0:
-                self._apply_pending_ip_removal(ip, removals)
-                continue
+    def _settle_one_ip(self, ip, requests, removals, grouped):
+        reporter = next((request.get("source") for request in requests if request.get("source") is not None), None)
+        if len(grouped) > 1:
+            if reporter is not None:
+                reporter._report_left_assignment(ip, "more than one interface requested it")
+            else:
+                log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: "
+                            f"more than one interface requested it.")
+            self._keep_current_assignment(ip)
+            return
 
-            group = grouped[0]
-            request = group["requests"][0]
-            source = request.get("source")
-            interface = group["interface"]
-            if source is None:
-                self._keep_current_assignment(ip)
-                continue
+        if len(grouped) == 0:
+            self._apply_pending_ip_removal(ip, removals)
+            return
 
-            device = request.get("device")
-            if device is None:
-                device = interface.data.get("virtual_machine") or interface.data.get("device")
-            decision = source._may_move_assigned_ip(ip, device, settle=True)
-            if decision != "allow":
-                self._keep_current_assignment(ip)
-                if decision == "defer":
-                    source._report_left_assignment(
-                        ip, "its current source has not reported whether the address is still assigned")
-                continue
+        group = grouped[0]
+        request = group["requests"][0]
+        source = request.get("source")
+        interface = group["interface"]
+        if source is None:
+            self._keep_current_assignment(ip)
+            return
 
-            # The source that held the address has now omitted it, so its
-            # earlier unverified mark no longer applies. The move replaces the
-            # held removal; that removal must not also be written.
-            tag = source._responsible_guest_tag(ip)
-            retained = getattr(ip, "retained_by", None)
-            if isinstance(retained, set) and tag:
-                retained.discard(tag)
-                ip.unverified_retain = bool(retained)
-            source.release_ip_retention(ip)
-            ip.update(data={
-                "address": request.get("address") or grab(ip, "data.address"),
-                "assigned_object_id": interface,
-            }, source=source)
+        device = request.get("device")
+        if device is None:
+            device = interface.data.get("virtual_machine") or interface.data.get("device")
+        decision = source._may_move_assigned_ip(ip, device, settle=True)
+        if decision != "allow":
+            self._keep_current_assignment(ip)
+            if decision == "defer":
+                source._report_left_assignment(
+                    ip, "its current source has not reported whether the address is still assigned")
+            return
 
-            version = next((item.get("primary_version") for item in group["requests"]
-                            if item.get("primary_version") in (4, 6)), None)
-            primary_source = next((item.get("source") for item in group["requests"]
-                                   if item.get("primary_version") in (4, 6) and item.get("source") is not None),
-                                  source)
-            if version is not None and primary_source is not None:
-                primary_source.assign_primary_ip(ip.get_device_vm() or device, ip, version)
+        # The source that held the address has now omitted it, so its
+        # earlier unverified mark no longer applies. The move replaces the
+        # held removal; that removal must not also be written.
+        tag = source._responsible_guest_tag(ip)
+        retained = getattr(ip, "retained_by", None)
+        if isinstance(retained, set) and tag:
+            retained.discard(tag)
+            ip.unverified_retain = bool(retained)
+        source.release_ip_retention(ip)
+        ip.update(data={
+            "address": request.get("address") or grab(ip, "data.address"),
+            "assigned_object_id": interface,
+        }, source=source)
+
+        version = next((item.get("primary_version") for item in group["requests"]
+                        if item.get("primary_version") in (4, 6)), None)
+        primary_source = next((item.get("source") for item in group["requests"]
+                               if item.get("primary_version") in (4, 6) and item.get("source") is not None),
+                              source)
+        if version is not None and primary_source is not None:
+            primary_source.assign_primary_ip(ip.get_device_vm() or device, ip, version)
 
     def tag_all_the_things(self, netbox_handler):
         """

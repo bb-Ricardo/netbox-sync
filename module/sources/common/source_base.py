@@ -215,6 +215,10 @@ class SourceBase:
         state = self._guest_move_state(ip, target_device=device_object)
         if state == "pending":
             return "defer"
+        if state == "kept" and settle is False and self._responsible_guest_tag(ip) is not None:
+            # Record the request. A later empty report from the current NIC can
+            # still make it eligible; settlement reads the latest report.
+            return "defer"
         if state == "kept":
             self._report_left_assignment(ip, "its current source still reports the address")
             return "reject"
@@ -256,8 +260,13 @@ class SourceBase:
         # still supply the report.
         if state != "complete":
             return "pending"
-        if tag in (getattr(ip, "confirmed_by", None) or set()):
+        # confirmed_by keeps every confirmation from this run. Only the latest
+        # report for this interface counts: a later empty NIC supersedes it.
+        latest = self._latest_assignment_report(ip, tag)
+        if latest == "present":
             return "kept"
+        if latest == "absent":
+            return "allow"
         reported = (getattr(parent, "guest_reported_ips", None) or {}).get(tag) if parent is not None else None
         # A complete flag with no address list is not evidence this address is gone.
         if reported is None:
@@ -266,6 +275,38 @@ class SourceBase:
         if address in reported and target_device is not parent:
             return "kept"
         return "allow"
+
+    def _latest_assignment_report(self, ip, tag):
+        """
+        'present' or 'absent' for the newest sequenced report of ip's current
+        interface by tag, or None when this run has not sequenced one.
+        """
+
+        interface = ip.get_interface()
+        latest_sequence = -1
+        latest = None
+        for mark in getattr(ip, "assignment_confirmations", None) or []:
+            if mark.get("interface") is not interface:
+                continue
+            mark_tag = mark.get("tag") or getattr(mark.get("source"), "source_tag", None)
+            if mark_tag != tag:
+                continue
+            sequence = mark.get("sequence", 0)
+            if sequence >= latest_sequence:
+                latest_sequence = sequence
+                latest = "present"
+        for item in getattr(ip, "pending_removals", None) or []:
+            if item.get("interface") is not interface:
+                continue
+            if getattr(item.get("source"), "source_tag", None) != tag:
+                continue
+            sequence = item.get("sequence", 0)
+            if sequence >= latest_sequence:
+                latest_sequence = sequence
+                latest = "absent"
+        if latest is None and tag in (getattr(ip, "confirmed_by", None) or set()):
+            return "present"
+        return latest
 
     def _next_report_sequence(self, ip):
         sequence = getattr(ip, "report_sequence", 0) + 1
