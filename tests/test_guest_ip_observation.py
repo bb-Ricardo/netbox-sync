@@ -433,15 +433,16 @@ def test_ambiguous_owner_blocks_deletion_and_is_reported(inventory, source_setti
     inventory.tag_all_the_things(handler)
     assert NetBoxHandler.orphaned_tag not in missing.get_tags()
     assert NetBoxHandler.orphaned_tag not in both.get_tags()
-    assert NetBoxHandler.orphaned_tag not in disagreed.get_tags()
+    assert "assigned_object_id" not in disagreed.unset_items
 
     age(missing, 40)
     age(both, 40)
-    age(disagreed, 40)
+    age(missing_ip, 40)
+    age(both_ip, 40)
     assert prune_deletes(handler) == []
     assert "missing-owner" in caplog.text
-    assert "two-owners" in caplog.text
     assert "10.9.0.5/24" in caplog.text
+    assert "tagged for a different source" in caplog.text
     assert "(no source tag)" in caplog.text
     assert source.source_tag in caplog.text and other.source_tag in caplog.text
 
@@ -628,3 +629,131 @@ def test_other_source_cannot_move_or_claim_an_ip_while_the_owner_is_unknown(inve
             inventory.tag_all_the_things(make_handler(inventory))
             assert other.source_tag not in ip.get_tags()
             assert owner.source_tag in ip.get_tags()
+
+
+def test_shared_host_same_interface_is_seen_without_taking_ownership(inventory, source_settings, caplog):
+    for first in ("vmware", "redfish"):
+        caplog.clear()
+        begin_next_run(inventory)
+        vmware = make_source(inventory, "vmware", source_settings)
+        redfish = make_source(inventory, "redfish", source_settings)
+        device, nic, ip = device_with_ip(inventory)
+        nic.data["name"] = "vmk0"
+        stamp(device, NetBoxHandler.primary_tag, vmware.source_tag, redfish.source_tag)
+        stamp(nic, NetBoxHandler.primary_tag, vmware.source_tag)
+        stamp(ip, NetBoxHandler.primary_tag, vmware.source_tag)
+        ip.retained_by = {vmware.source_tag, "Source: keeper"}
+        ip.unverified_retain = True
+
+        def report(actor):
+            actor.add_update_interface(
+                interface_object=nic, device_object=device, interface_data={"name": "vmk0"},
+                interface_ips=["10.1.0.5/24"], vmware_object=TOOLS_RUNNING_WITH_IP)
+
+        order = (vmware, redfish) if first == "vmware" else (redfish, vmware)
+        for actor in order:
+            report(actor)
+
+        assert ip.get_interface() is nic
+        assert ip.source is not redfish
+        assert "Source: keeper" in ip.retained_by
+        assert ip.unverified_retain is True
+        assert "Unresolved source metadata" not in caplog.text
+        inventory.tag_all_the_things(make_handler(inventory))
+        assert vmware.source_tag in ip.get_tags()
+        assert redfish.source_tag not in ip.get_tags()
+
+
+def test_seen_ip_is_not_pruned_when_orphan_tag_removal_fails(inventory, source_settings):
+    vmware = make_source(inventory, "vmware", source_settings)
+    device, nic, ip = device_with_ip(inventory)
+    stamp(device, NetBoxHandler.primary_tag, vmware.source_tag)
+    stamp(nic, NetBoxHandler.primary_tag, vmware.source_tag)
+    stamp(ip, NetBoxHandler.primary_tag, vmware.source_tag, NetBoxHandler.orphaned_tag)
+    ip.seen_this_run = True
+    ip.remove_tags = lambda *args, **kwargs: None
+
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert NetBoxHandler.orphaned_tag in ip.get_tags()
+    assert ip.retain_from_prune is True
+    age(ip, 40)
+    assert prune_deletes(handler) == []
+
+
+def test_horizon_reuses_one_unassigned_orphan_ip(inventory, source_settings):
+    begin_next_run(inventory)
+    vmware = make_source(inventory, "vmware", source_settings)
+    vm, nic, ip = vm_with_ip(inventory, name="horizon-vm")
+    ip.data["assigned_object_id"] = None
+    ip.data["assigned_object_type"] = None
+    stamp(vm, NetBoxHandler.primary_tag, vmware.source_tag)
+    stamp(nic, NetBoxHandler.primary_tag, vmware.source_tag)
+    stamp(ip, NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag, "phpIPAM")
+
+    vmware.add_update_interface(
+        interface_object=nic, device_object=vm, interface_data={"name": "eth0"},
+        interface_ips=["10.0.0.5/24"], vmware_object=TOOLS_RUNNING_WITH_IP)
+
+    assert ip.get_interface() is nic
+    assert ip.source is vmware
+    inventory.tag_all_the_things(make_handler(inventory))
+    assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+    assert "phpIPAM" in ip.get_tags()
+    assert vmware.source_tag in ip.get_tags()
+
+
+def test_duplicate_unassigned_ips_are_not_chosen(inventory, source_settings, caplog):
+    vmware = make_source(inventory, "vmware", source_settings)
+    vm, nic, ip = vm_with_ip(inventory, name="dup-vm")
+    other = inventory.add_object(NBIPAddress, data={"address": "10.0.0.5/24"}, read_from_netbox=True)
+    for obj in (ip, other):
+        obj.data["assigned_object_id"] = None
+        obj.data["assigned_object_type"] = None
+        stamp(obj, NetBoxHandler.primary_tag)
+    stamp(vm, NetBoxHandler.primary_tag, vmware.source_tag)
+    stamp(nic, NetBoxHandler.primary_tag, vmware.source_tag)
+
+    vmware.add_update_interface(
+        interface_object=nic, device_object=vm, interface_data={"name": "eth0"},
+        interface_ips=["10.0.0.5/24"], vmware_object=TOOLS_RUNNING_WITH_IP)
+
+    assert ip.get_interface() is None
+    assert other.get_interface() is None
+    assert "more than one unassigned record" in caplog.text
+
+
+def test_shared_parent_incomplete_listing_waits_for_a_complete_absence(inventory, source_settings):
+    vmware = make_source(inventory, "vmware", source_settings)
+    redfish = make_source(inventory, "redfish", source_settings)
+    vmware.inventory_complete = False
+    device, nic, ip = device_with_ip(inventory)
+    stamp(device, NetBoxHandler.primary_tag, vmware.source_tag, redfish.source_tag)
+    stamp(nic, NetBoxHandler.primary_tag, vmware.source_tag)
+    stamp(ip, NetBoxHandler.primary_tag, vmware.source_tag)
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert device.retention_reason == "incomplete"
+    assert ip.retention_reason == "incomplete"
+    age(device, 40)
+    age(ip, 40)
+    assert prune_deletes(handler) == []
+    saved_device = device.get_tags()
+    saved_nic = nic.get_tags()
+    saved_ip = ip.get_tags()
+
+    begin_next_run(inventory)
+    vmware = make_source(inventory, "vmware", source_settings)
+    redfish = make_source(inventory, "redfish", source_settings)
+    device, nic, ip = device_with_ip(inventory)
+    stamp(device, *saved_device)
+    stamp(nic, *saved_nic)
+    stamp(ip, *saved_ip)
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert device.retain_from_prune is False
+    age(device, 40)
+    age(ip, 40)
+    deleted = prune_deletes(handler)
+    assert ("DELETE", NBDevice.name, device.nb_id) in deleted
+    assert ("DELETE", NBIPAddress.name, ip.nb_id) in deleted

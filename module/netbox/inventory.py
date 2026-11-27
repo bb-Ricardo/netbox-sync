@@ -21,9 +21,10 @@ log = get_logger()
 class OwnerResolution:
     """How the source that owns a VM, device, or IP was identified."""
 
-    def __init__(self, status, source=None, tags=None):
+    def __init__(self, status, source=None, tags=None, sources=None):
         self.status = status
         self.source = source
+        self.sources = list(sources if sources is not None else ([source] if source is not None else []))
         self.tags = list(tags or [])
 
 
@@ -411,8 +412,13 @@ class NetBoxInventory:
             if source is not None and source not in known_sources:
                 known_sources.append(source)
 
-        if unknown_tags or len(known_sources) > 1:
+        if unknown_tags:
             return OwnerResolution("ambiguous", None, tags)
+
+        # Several configured sources on one device are provenance. VMware and
+        # Redfish both tag an ESXi host; that is not an ownership conflict.
+        if len(known_sources) > 1:
+            return OwnerResolution("shared", None, tags, sources=known_sources)
 
         if len(known_sources) == 1:
             return OwnerResolution("owner", known_sources[0], tags)
@@ -454,14 +460,12 @@ class NetBoxInventory:
                 if source is not None and source not in known_sources:
                     known_sources.append(source)
 
+            # The IP's own tags decide. A parent with several source tags does
+            # not make this address ambiguous, and it is not copied into the warning.
             if unknown_tags or len(known_sources) > 1:
-                return OwnerResolution("ambiguous", None, parent_decision.tags + ip_tags)
+                return OwnerResolution("ambiguous", None, ip_tags)
 
             if len(known_sources) == 1:
-                if parent_decision.status == "ambiguous":
-                    return parent_decision
-                if parent_decision.status == "owner" and parent_decision.source is not known_sources[0]:
-                    return OwnerResolution("ambiguous", None, parent_decision.tags + ip_tags)
                 return OwnerResolution("owner", known_sources[0], ip_tags)
 
             return parent_decision
@@ -482,19 +486,71 @@ class NetBoxInventory:
 
         self._ambiguous_owner_reports.add(id(obj))
         tag_list = ", ".join(decision.tags) if decision.tags else "(no source tag)"
-        log.warning(f"Ambiguous source ownership for {obj.name} '{obj.get_display_name()}'; "
-                    f"tags: {tag_list}. Not unassigning, orphaning, or deleting it.")
+        log.warning(f"Unresolved source metadata for {obj.name} '{obj.get_display_name()}'; "
+                    f"tags: {tag_list}. Left the current record unchanged.")
+
+    def assignment_hold(self, ip, acting_source_tag=None):
+        """
+        Why the current assignment of ip must stay where it is.
+
+        'unknown' means the source responsible for that assignment recorded an
+        unknown guest-IP observation. 'undetermined' means that source cannot
+        be identified. None means a move may follow the existing rules.
+        """
+
+        configured = set(self._configured_sources_by_tag())
+        if acting_source_tag:
+            configured.add(acting_source_tag)
+
+        def classify(tags):
+            ordered = []
+            for tag in tags:
+                if tag not in ordered:
+                    ordered.append(tag)
+            unknown = [tag for tag in ordered if tag not in configured]
+            known = [tag for tag in ordered if tag in configured]
+            return unknown, known
+
+        ip_unknown, ip_known = classify(self._source_tag_names(ip))
+        parent = ip.get_device_vm()
+        observations = getattr(parent, "guest_ip_observations", None) or {} if parent is not None else {}
+
+        if ip_unknown or len(ip_known) > 1:
+            return "undetermined"
+
+        if len(ip_known) == 1:
+            if observations.get(ip_known[0]) == "unknown":
+                return "unknown"
+            return None
+
+        if parent is None:
+            return None
+
+        parent_unknown, parent_known = classify(self._source_tag_names(parent))
+        if parent_unknown:
+            return "undetermined"
+        if len(parent_known) > 1:
+            if any(observations.get(tag) == "unknown" for tag in parent_known):
+                return "undetermined"
+            return None
+        if len(parent_known) == 1 and observations.get(parent_known[0]) == "unknown":
+            return "unknown"
+        return None
 
     def _owner_observation_is_unknown(self, parent):
         if parent is None:
             return False
 
         observations = getattr(parent, "guest_ip_observations", None) or {}
+        if "unknown" not in observations.values():
+            return False
+
         decision = self._resolve_parent_owner(parent)
         if decision.status == "owner" and decision.source is not None:
             return observations.get(decision.source.source_tag) == "unknown"
-
-        return False
+        if decision.status == "shared":
+            return any(observations.get(source.source_tag) == "unknown" for source in decision.sources)
+        return True
 
     def _has_tag(self, obj, tag_name):
         return tag_name in obj.get_tags()
@@ -527,8 +583,16 @@ class NetBoxInventory:
         if getattr(obj, "unverified_retain", False) is True:
             return "unknown"
 
-        if isinstance(obj, NBIPAddress) and self._owner_observation_is_unknown(obj.get_device_vm()):
-            return "unknown"
+        if isinstance(obj, NBIPAddress):
+            hold = self.assignment_hold(obj)
+            if hold == "unknown":
+                return "unknown"
+            if hold == "undetermined":
+                self.report_ambiguous_owner(obj, OwnerResolution("undetermined", None, self._source_tag_names(obj)))
+                return "ambiguous"
+
+        if getattr(obj, "seen_this_run", False) is True:
+            return "seen"
 
         if isinstance(obj, (NBVMInterface, NBInterface)):
             parent = obj.data.get("virtual_machine") if isinstance(obj, NBVMInterface) else obj.data.get("device")
@@ -548,6 +612,10 @@ class NetBoxInventory:
 
         if decision.status == "owner" and decision.source is not None and \
                 getattr(decision.source, "inventory_complete", True) is False:
+            return "incomplete"
+
+        if decision.status == "shared" and any(getattr(source, "inventory_complete", True) is False
+                                                for source in decision.sources):
             return "incomplete"
 
         # Normal orphaning removes the source tag. A later incomplete listing
@@ -647,7 +715,7 @@ class NetBoxInventory:
                     # object. Removing those tags first makes the next run, loaded
                     # from NetBox, forget why the object was protected.
                     if getattr(this_object, "retain_from_prune", False) is True:
-                        if this_object.retention_reason == "unknown" and \
+                        if this_object.retention_reason in ("unknown", "seen") and \
                                 netbox_handler.orphaned_tag in this_object.get_tags():
                             this_object.remove_tags(netbox_handler.orphaned_tag)
                         continue

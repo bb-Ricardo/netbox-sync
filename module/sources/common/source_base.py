@@ -100,37 +100,111 @@ class SourceBase:
         if observations.get(self.source_tag) == "unknown":
             return False
 
-        subjects = [device_object]
-        if ip is not None:
-            subjects.append(ip)
+        if ip is None or ip.get_interface() is None:
+            return True
 
-        for subject in subjects:
-            # Tags that all name this source are its own ownership, including
-            # when a test or caller did not register the handler on source_list.
-            source_tags = self.inventory._source_tag_names(subject)
-            if source_tags and all(tag == self.source_tag for tag in source_tags):
-                continue
+        hold = self.inventory.assignment_hold(ip, acting_source_tag=self.source_tag)
+        if hold == "unknown":
+            return False
+        if hold == "undetermined":
+            self._report_left_assignment(ip, "the source responsible for its current assignment cannot be determined")
+            return False
 
-            decision = self.inventory.resolve_owner(subject)
-            if decision.status == "ambiguous":
-                self.inventory.report_ambiguous_owner(subject, decision)
-                return False
+        foreign_tags = [tag for tag in self._source_tags(ip) if tag != self.source_tag]
+        if foreign_tags:
+            self._report_left_assignment(ip, "it is tagged for a different source")
+            return False
 
-            # A previously synced object with no source tag is missing metadata.
-            # An object that has never been tagged can still be reconciled.
-            if decision.status == "none" and primary_tag_name in subject.get_tags():
-                self.inventory.report_ambiguous_owner(subject, decision)
-                return False
-
-            if decision.status == "owner" and decision.source is not None and \
-                    decision.source.source_tag != self.source_tag:
-                return False
-
-            if decision.status == "owner" and decision.source is not None and \
-                    observations.get(decision.source.source_tag) == "unknown":
+        if not self._source_tags(ip):
+            parent = ip.get_device_vm()
+            parent_tags = self._source_tags(parent) if parent is not None else []
+            synced = primary_tag_name in ip.get_tags()
+            # A synced address with no source tag and no single parent source cannot
+            # be removed safely. An address this run just created has neither, and an
+            # authoritative empty NIC may still drop it.
+            if synced and len(parent_tags) != 1:
+                self._report_left_assignment(
+                    ip, "the source responsible for its current assignment cannot be determined")
                 return False
 
         return True
+
+    def _source_tags(self, obj):
+        tags = []
+        for tag in self.inventory._source_tag_names(obj):
+            if tag not in tags:
+                tags.append(tag)
+        return tags
+
+    def _source_may_refresh_ip(self, ip):
+        """This source may write the IP only when that does not take it from another source."""
+
+        tags = self._source_tags(ip)
+        if not tags:
+            return True
+        return all(tag == self.source_tag for tag in tags)
+
+    def _may_claim_unassigned_ip(self, ip, device_object, vrf):
+        """
+        Reuse one unassigned record. Duplicate matches, conflicting tags, a
+        non-unique role, or an unknown observation are not a claim.
+        """
+
+        observations = getattr(device_object, "guest_ip_observations", None) or {}
+        if observations.get(self.source_tag) == "unknown":
+            self._report_left_assignment(ip, "the reporting guest IP observation is unknown")
+            return False
+
+        if ip.get_role() in self.non_unique_ip_roles:
+            self._report_left_assignment(ip, f"its role '{ip.get_role()}' can exist on more than one interface")
+            return False
+
+        tags = self._source_tags(ip)
+        configured = set(self.inventory._configured_sources_by_tag())
+        configured.add(self.source_tag)
+        unknown = [tag for tag in tags if tag not in configured]
+        known = [tag for tag in tags if tag in configured and tag != self.source_tag]
+        if unknown or known:
+            self._report_left_assignment(ip, "its source tags conflict with this report")
+            return False
+
+        address = grab(ip, "data.address", fallback="").split("/")[0]
+        matches = []
+        for other in self.ip_address_objects_for(address):
+            if not grab(other, "data.address", fallback="").startswith(f"{address}/"):
+                continue
+            if vrf != grab(other, "data.vrf"):
+                continue
+            if other.get_interface() is not None:
+                continue
+            if other.get_role() in self.non_unique_ip_roles:
+                continue
+            matches.append(other)
+        if len(matches) > 1:
+            self._report_left_assignment(ip, "more than one unassigned record matches this address")
+            return False
+
+        return True
+
+    def _may_move_assigned_ip(self, ip, device_object):
+        """Move only after a trustworthy observation of the assignment that holds the IP now."""
+
+        observations = getattr(device_object, "guest_ip_observations", None) or {}
+        if observations.get(self.source_tag) == "unknown":
+            self._report_left_assignment(ip, "the reporting guest IP observation is unknown")
+            return False
+
+        hold = self.inventory.assignment_hold(ip, acting_source_tag=self.source_tag)
+        if hold == "unknown":
+            self._report_left_assignment(ip, "guest IP data for the source that holds it is unavailable")
+            return False
+        if hold == "undetermined":
+            self._report_left_assignment(ip, "the source responsible for its current assignment cannot be determined")
+            return False
+        return True
+
+    def _report_left_assignment(self, ip, detail):
+        log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: {detail}.")
 
     @classmethod
     def implements(cls, source_type):
@@ -830,13 +904,19 @@ class SourceBase:
             if skip_this_ip is True:
                 continue
 
-            # The removal loop is not the only destructive path. Matching an
-            # existing address and updating it can move it to another interface
-            # and replace its source. That decision belongs here, before either
-            # change, and it stays with the source that owns the VM.
-            if isinstance(this_ip_object, NBIPAddress) and \
-                    self.may_remove_ip_assignments(device_object, ip=this_ip_object) is False:
-                continue
+            # Seeing an address is not permission to own it or move it.
+            if isinstance(this_ip_object, NBIPAddress):
+                current_nic = this_ip_object.get_interface()
+                if current_nic == interface_object:
+                    this_ip_object.seen_this_run = True
+                    if not self._source_may_refresh_ip(this_ip_object):
+                        ip_address_objects.append(this_ip_object)
+                        continue
+                elif current_nic is None:
+                    if not self._may_claim_unassigned_ip(this_ip_object, device_object, possible_ip_vrf):
+                        continue
+                elif not self._may_move_assigned_ip(this_ip_object, device_object):
+                    continue
 
             nic_ip_data = {
                 "address": ip_object.compressed,
