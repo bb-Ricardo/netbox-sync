@@ -126,8 +126,13 @@ sync logs `VMware guest IP data unavailable for '{name}'; existing NetBox IP ass
 Cached addresses in `guest.net` are not treated as a fresh verification.
 
 When Tools are running and `guest.net` lists a NIC with no addresses, that empty list is
-still treated as a removal. This matches the previous behavior. It does not claim that
-Tools can never return a temporarily incomplete list for one NIC.
+the removal signal. The removal waits until the end of the run. A later report of the
+address on the same NIC drops it, and a later empty report drops an earlier confirmation.
+Exactly one other interface may receive the address; the primary IP then follows
+`set_primary_ip` and the old primary is cleared. More than one requesting interface leaves
+the address and its primary where they are. Source order does not choose the winner.
+This is still a policy choice. It does not claim that Tools can never return a
+temporarily incomplete list for one NIC.
 
 A VM that is absent from a finished vCenter listing is not given an unknown observation.
 It keeps the ordinary orphan and prune lifecycle. If the vCenter session or the VM

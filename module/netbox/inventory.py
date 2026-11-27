@@ -398,9 +398,9 @@ class NetBoxInventory:
 
     def _resolve_parent_owner(self, parent):
         """
-        The owner is the single known Source tag, or the single source that
-        resolved this object during the current run. Anything else is ambiguous
-        or absent. Processing order is not a tie-break.
+        The owner is the single known Source tag. Several known tags on one
+        device are shared provenance, not a conflict. An unknown Source tag is
+        ambiguous. No tag is absent. Processing order is not a tie-break.
         """
 
         configured = self._configured_sources_by_tag()
@@ -442,9 +442,9 @@ class NetBoxInventory:
         """
         Identify the source that owns obj.
 
-        An IP with no source tag uses its parent. An IP tag that disagrees with
-        that parent, or any tag of the form 'Source:' that matches no configured
-        source, is ambiguous.
+        An IP is decided by its own Source tags. No source tag on the IP uses
+        its parent. Several known tags on the IP, or a Source tag that matches
+        no configured source, is ambiguous. Several tags on the parent are not.
         """
 
         if isinstance(obj, NBIPAddress):
