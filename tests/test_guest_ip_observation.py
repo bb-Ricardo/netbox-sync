@@ -720,7 +720,7 @@ def test_duplicate_unassigned_ips_are_not_chosen(inventory, source_settings, cap
 
     assert ip.get_interface() is None
     assert other.get_interface() is None
-    assert "more than one unassigned record" in caplog.text
+    assert "more than one record matches this address in the same VRF" in caplog.text
 
 
 def test_shared_parent_incomplete_listing_waits_for_a_complete_absence(inventory, source_settings):
@@ -757,3 +757,294 @@ def test_shared_parent_incomplete_listing_waits_for_a_complete_absence(inventory
     deleted = prune_deletes(handler)
     assert ("DELETE", NBDevice.name, device.nb_id) in deleted
     assert ("DELETE", NBIPAddress.name, ip.nb_id) in deleted
+
+
+ADDRESS = "10.0.0.5/24"
+HOST = "10.0.0.5"
+
+
+def _vmware_pair(inventory, source_settings):
+    begin_next_run(inventory)
+    old = make_source(inventory, "old-vcenter", source_settings)
+    new = make_source(inventory, "new-vcenter", source_settings)
+    old.source_type = "vmware"
+    new.source_type = "vmware"
+    return old, new
+
+
+def _disabled_assignment(inventory, tag_the_ip, old):
+    """An address on a disabled NIC, and a second VM whose NIC is enabled."""
+
+    old_vm, old_nic, ip = vm_with_ip(inventory, name="old-vm", address=ADDRESS)
+    old_nic.data["enabled"] = False
+    new_vm, new_nic, other = vm_with_ip(inventory, name="new-vm", address="10.9.9.9/24")
+    other.data["assigned_object_id"] = None
+    other.data["assigned_object_type"] = None
+    for obj in (old_vm, old_nic):
+        stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+    if tag_the_ip:
+        stamp(ip, NetBoxHandler.primary_tag, old.source_tag)
+    else:
+        stamp(ip, NetBoxHandler.primary_tag)
+    stamp(new_vm, NetBoxHandler.primary_tag, old.source_tag)
+    stamp(new_nic, NetBoxHandler.primary_tag, old.source_tag)
+    return old_vm, old_nic, ip, new_vm, new_nic
+
+
+def _report_on(source, vm, nic, addresses):
+    source.add_update_interface(
+        interface_object=nic, device_object=vm, interface_data={"name": nic.data["name"]},
+        interface_ips=addresses, vmware_object=TOOLS_RUNNING_WITH_IP)
+
+
+def test_complete_guest_report_records_addresses_and_unknown_clears_them(inventory, source_settings, caplog):
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    vm, nic, ip = vm_with_ip(inventory)
+    stamp(vm, NetBoxHandler.primary_tag, source.source_tag)
+    stamp(nic, NetBoxHandler.primary_tag, source.source_tag)
+    stamp(ip, NetBoxHandler.primary_tag, source.source_tag)
+
+    caplog.set_level(logging.INFO, logger="NetBox-Sync")
+    handler = object.__new__(VMWareHandler)
+    handler.inventory = inventory
+    handler.name = source.name
+    handler.source_tag = source.source_tag
+    handler.settings = source_settings
+
+    handler.add_device_vm_to_inventory(
+        NBVM,
+        object_data={"name": "vm1", "status": "active", "cluster": vm.data["cluster"]},
+        vnic_data={"eth0": {"name": "eth0", "enabled": True}},
+        nic_ips={"eth0": [ADDRESS]},
+        vmware_object=TOOLS_RUNNING_WITH_IP,
+        guest_ip_observation="complete",
+    )
+    assert vm.guest_ip_observations[source.source_tag] == "complete"
+    assert vm.guest_reported_ips[source.source_tag] == {HOST}
+
+    handler.add_device_vm_to_inventory(
+        NBVM,
+        object_data={"name": "vm1", "status": "active", "cluster": vm.data["cluster"]},
+        vnic_data={"eth0": {"name": "eth0", "enabled": True}},
+        nic_ips={"eth0": []},
+        vmware_object=TOOLS_DOWN,
+        guest_ip_observation="unknown",
+    )
+    assert vm.guest_ip_observations[source.source_tag] == "unknown"
+    assert source.source_tag not in vm.guest_reported_ips
+
+
+def test_disabled_interface_ip_is_not_moved_until_the_old_source_says_it_is_gone(inventory, source_settings):
+    """
+    No guest observation is not a complete observation. A later unknown cancels
+    a move that the other source already requested, whichever source ran first.
+    A complete report that omits the address lets the move finish, in either order.
+    """
+
+    def run(tag_the_ip, new_first, mark):
+        old, new = _vmware_pair(inventory, source_settings)
+        old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, tag_the_ip, old)
+
+        def report_new():
+            _report_on(new, new_vm, new_nic, [ADDRESS])
+
+        if new_first:
+            report_new()
+            assert ip.get_interface() is old_nic
+            assert ip.deferred_move["interface"] is new_nic
+            mark(old_vm, old)
+        else:
+            mark(old_vm, old)
+            report_new()
+        inventory.settle_deferred_ip_moves()
+        return old_vm, old_nic, ip, new_nic
+
+    def unknown(vm, source):
+        vm.guest_ip_observations = {source.source_tag: "unknown"}
+
+    def omitted(vm, source):
+        vm.guest_ip_observations = {source.source_tag: "complete"}
+        vm.guest_reported_ips = {source.source_tag: set()}
+
+    def still_present(vm, source):
+        vm.guest_ip_observations = {source.source_tag: "complete"}
+        vm.guest_reported_ips = {source.source_tag: {HOST}}
+
+    def bare_complete(vm, source):
+        vm.guest_ip_observations = {source.source_tag: "complete"}
+
+    for tag_the_ip in (True, False):
+        for new_first in (True, False):
+            _old_vm, old_nic, ip, _new_nic = run(tag_the_ip, new_first, unknown)
+            assert ip.get_interface() is old_nic
+            assert getattr(ip, "deferred_move", None) is None
+            assert "assigned_object_id" not in ip.updated_items
+
+            _old_vm, old_nic, ip, _new_nic = run(tag_the_ip, new_first, still_present)
+            assert ip.get_interface() is old_nic
+            assert "assigned_object_id" not in ip.updated_items
+
+            _old_vm, old_nic, ip, _new_nic = run(tag_the_ip, new_first, bare_complete)
+            assert ip.get_interface() is old_nic
+            assert "assigned_object_id" not in ip.updated_items
+
+            old_vm, old_nic, ip, new_nic = run(tag_the_ip, new_first, omitted)
+            assert ip.get_interface() is new_nic
+            assert ip not in old_nic.get_ip_addresses()
+            assert "primary_ip4" in old_vm.unset_items
+            assert "assigned_object_id" not in ip.unset_items
+
+
+def test_same_source_still_moves_an_address_its_complete_report_omitted(inventory, source_settings):
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, source)
+
+    _report_on(source, new_vm, new_nic, [ADDRESS])
+    assert ip.get_interface() is old_nic
+
+    old_vm.guest_ip_observations = {source.source_tag: "complete"}
+    old_vm.guest_reported_ips = {source.source_tag: set()}
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is new_nic
+
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, source)
+    old_vm.guest_ip_observations = {source.source_tag: "complete"}
+    old_vm.guest_reported_ips = {source.source_tag: {"10.9.0.8"}}
+    _report_on(source, new_vm, new_nic, [ADDRESS])
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is new_nic
+
+
+def test_a_later_report_on_the_old_interface_cancels_the_deferred_move(inventory, source_settings):
+    old, new = _vmware_pair(inventory, source_settings)
+    old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, old)
+    _report_on(new, new_vm, new_nic, [ADDRESS])
+    assert ip.deferred_move["interface"] is new_nic
+
+    old_vm.guest_ip_observations = {old.source_tag: "complete"}
+    old_vm.guest_reported_ips = {old.source_tag: set()}
+    _report_on(old, old_vm, old_nic, [ADDRESS])
+    inventory.settle_deferred_ip_moves()
+
+    assert old.source_tag in ip.confirmed_by
+    assert ip.get_interface() is old_nic
+    assert "assigned_object_id" not in ip.updated_items
+
+
+def test_an_assigned_duplicate_blocks_claiming_the_unassigned_record(inventory, source_settings, caplog):
+    caplog.set_level(logging.WARNING, logger="NetBox-Sync")
+
+    for unassigned_first in (True, False):
+        caplog.clear()
+        begin_next_run(inventory)
+        source = make_source(inventory, "vmware", source_settings)
+        source.source_type = "vmware"
+        if unassigned_first:
+            unassigned = inventory.add_object(NBIPAddress, data={"address": ADDRESS}, read_from_netbox=True)
+            stamp(unassigned, NetBoxHandler.primary_tag)
+        vm, nic, assigned = vm_with_ip(inventory, name="assigned-vm")
+        nic.data["enabled"] = False
+        if not unassigned_first:
+            unassigned = inventory.add_object(NBIPAddress, data={"address": ADDRESS}, read_from_netbox=True)
+            stamp(unassigned, NetBoxHandler.primary_tag)
+        for obj in (vm, nic, assigned):
+            stamp(obj, NetBoxHandler.primary_tag, source.source_tag)
+        new_vm, new_nic, _other = vm_with_ip(inventory, name="claimer", address="10.9.9.9/24")
+        stamp(new_vm, NetBoxHandler.primary_tag, source.source_tag)
+        stamp(new_nic, NetBoxHandler.primary_tag, source.source_tag)
+
+        assert source._may_claim_unassigned_ip(unassigned, new_vm, None) is False
+        before = len(list(inventory.get_all_items(NBIPAddress)))
+        _report_on(source, new_vm, new_nic, [ADDRESS])
+
+        assert unassigned.get_interface() is None
+        assert assigned.get_interface() is nic
+        assert len(list(inventory.get_all_items(NBIPAddress))) == before
+        assert "more than one record matches this address in the same VRF" in caplog.text
+
+
+def test_a_non_unique_role_does_not_block_the_one_regular_unassigned_address(inventory, source_settings):
+    source = make_source(inventory, "vmware", source_settings)
+    source.source_type = "vmware"
+    vm, nic, vip = vm_with_ip(inventory, name="vip-vm")
+    vip.data["role"] = "vip"
+    unassigned = inventory.add_object(NBIPAddress, data={"address": ADDRESS}, read_from_netbox=True)
+    stamp(vip, NetBoxHandler.primary_tag, source.source_tag)
+    stamp(unassigned, NetBoxHandler.primary_tag)
+    stamp(vm, NetBoxHandler.primary_tag, source.source_tag)
+    stamp(nic, NetBoxHandler.primary_tag, source.source_tag)
+    new_vm, new_nic, _other = vm_with_ip(inventory, name="regular-vm", address="10.9.9.9/24")
+    stamp(new_vm, NetBoxHandler.primary_tag, source.source_tag)
+    stamp(new_nic, NetBoxHandler.primary_tag, source.source_tag)
+
+    assert source._may_claim_unassigned_ip(unassigned, new_vm, None) is True
+    _report_on(source, new_vm, new_nic, [ADDRESS])
+    assert unassigned.get_interface() is new_nic
+    assert vip.get_interface() is nic
+
+
+def test_only_the_parent_source_may_remove_a_source_less_ip(inventory, source_settings, caplog):
+    caplog.set_level(logging.WARNING, logger="NetBox-Sync")
+
+    def build(observation=None):
+        begin_next_run(inventory)
+        owner = make_source(inventory, "owner", source_settings)
+        other = make_source(inventory, "other", source_settings)
+        owner.source_type = "vmware"
+        vm, nic, ip = vm_with_ip(inventory, name="parent-vm", address="10.8.0.5/24")
+        stamp(vm, NetBoxHandler.primary_tag, owner.source_tag)
+        stamp(nic, NetBoxHandler.primary_tag, owner.source_tag)
+        stamp(ip, NetBoxHandler.primary_tag)
+        if observation is not None:
+            vm.guest_ip_observations = {owner.source_tag: observation}
+            if observation == "complete":
+                vm.guest_reported_ips = {owner.source_tag: set()}
+        return owner, other, vm, nic, ip
+
+    def empty(actor, vm, nic, tools):
+        actor.add_update_interface(
+            interface_object=nic, device_object=vm, interface_data={"name": "eth0"},
+            interface_ips=[], vmware_object=tools)
+
+    # No observation yet, and a complete observation: a different source still
+    # may not remove the address. The parent source may, once it is not unknown.
+    for observation in (None, "complete"):
+        owner, other, vm, nic, ip = build(observation)
+        assert other.may_remove_ip_assignments(vm, ip=ip) is False
+        assert owner.may_remove_ip_assignments(vm, ip=ip) is True
+        assert "only its parent source can remove it" in caplog.text
+        caplog.clear()
+
+    for other_first in (True, False):
+        owner, other, vm, nic, ip = build("complete")
+        if other_first:
+            empty(other, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
+            assert "assigned_object_id" not in ip.unset_items
+            empty(owner, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
+        else:
+            empty(owner, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
+            assert "assigned_object_id" in ip.unset_items
+            empty(other, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
+        assert "assigned_object_id" in ip.unset_items
+
+    for other_first in (True, False):
+        owner, other, vm, nic, ip = build("unknown")
+        steps = [other, owner] if other_first else [owner, other]
+        for actor in steps:
+            empty(actor, vm, nic, TOOLS_DOWN if actor is owner else TOOLS_RUNNING_EMPTY_NIC)
+        assert "assigned_object_id" not in ip.unset_items
+        assert ip.get_interface() is nic
+
+    owner, other, vm, nic, ip = build(None)
+    stamp(vm, other.source_tag)
+    assert owner.may_remove_ip_assignments(vm, ip=ip) is False
+    assert other.may_remove_ip_assignments(vm, ip=ip) is False
+    empty(other, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
+    empty(owner, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
+    assert "assigned_object_id" not in ip.unset_items

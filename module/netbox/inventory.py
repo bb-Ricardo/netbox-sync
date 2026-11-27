@@ -642,6 +642,48 @@ class NetBoxInventory:
                 return True
         return False
 
+    def settle_deferred_ip_moves(self):
+        """
+        Apply moves that waited for the source holding the address.
+
+        A report that arrives before that source has been read is not applied
+        yet. Once every source has run, the same rule either assigns the
+        address or leaves it. Setting an unknown observation after the first
+        report therefore cancels the move instead of leaving it in place.
+        """
+
+        for ip in list(self.get_all_items(NBIPAddress)):
+            move = getattr(ip, "deferred_move", None)
+            if not isinstance(move, dict):
+                continue
+
+            source = move.get("source")
+            interface = move.get("interface")
+            ip.deferred_move = None
+            if source is None or interface is None:
+                continue
+
+            device = interface.data.get("virtual_machine") or interface.data.get("device")
+            decision = source._may_move_assigned_ip(ip, device)
+            if decision != "allow":
+                if decision == "defer":
+                    source._report_left_assignment(
+                        ip, "its current source has not reported whether the address is still assigned")
+                continue
+
+            # The source that held the address has now omitted it, so its
+            # earlier unverified mark no longer applies.
+            tag = source._responsible_guest_tag(ip)
+            retained = getattr(ip, "retained_by", None)
+            if isinstance(retained, set) and tag:
+                retained.discard(tag)
+                ip.unverified_retain = bool(retained)
+            source.release_ip_retention(ip)
+            ip.update(data={
+                "address": move.get("address") or grab(ip, "data.address"),
+                "assigned_object_id": interface,
+            }, source=source)
+
     def tag_all_the_things(self, netbox_handler):
         """
         Tag all items which have been created/updated/inherited by this program

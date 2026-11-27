@@ -1858,6 +1858,19 @@ class VMWareHandler(SourceBase):
                 device_vm_object.guest_ip_observations = {}
                 observations = device_vm_object.guest_ip_observations
             observations[self.source_tag] = guest_ip_observation
+            reported = getattr(device_vm_object, "guest_reported_ips", None)
+            if not isinstance(reported, dict):
+                device_vm_object.guest_reported_ips = {}
+                reported = device_vm_object.guest_reported_ips
+            if guest_ip_observation == "complete":
+                addresses = set()
+                for interface_addresses in (nic_ips or {}).values():
+                    for address in interface_addresses or []:
+                        addresses.add(str(address).split("/")[0])
+                reported[self.source_tag] = addresses
+            else:
+                # An unknown pass must not leave an earlier address list behind.
+                reported.pop(self.source_tag, None)
             if guest_ip_observation == "unknown" and \
                     getattr(device_vm_object, "_logged_guest_ip_unknown", False) is False:
                 device_vm_object._logged_guest_ip_unknown = True

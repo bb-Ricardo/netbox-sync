@@ -119,6 +119,11 @@ class SourceBase:
             parent = ip.get_device_vm()
             parent_tags = self._source_tags(parent) if parent is not None else []
             synced = primary_tag_name in ip.get_tags()
+            # A single parent source may remove the address only when it is the
+            # source acting now. Another source must not use that fallback.
+            if len(parent_tags) == 1 and parent_tags[0] != self.source_tag:
+                self._report_left_assignment(ip, "only its parent source can remove it")
+                return False
             # A synced address with no source tag and no single parent source cannot
             # be removed safely. An address this run just created has neither, and an
             # authoritative empty NIC may still drop it.
@@ -175,33 +180,89 @@ class SourceBase:
                 continue
             if vrf != grab(other, "data.vrf"):
                 continue
-            if other.get_interface() is not None:
-                continue
+            # Non-unique roles are allowed to repeat and do not compete for this claim.
             if other.get_role() in self.non_unique_ip_roles:
                 continue
             matches.append(other)
-        if len(matches) > 1:
-            self._report_left_assignment(ip, "more than one unassigned record matches this address")
+        if len(matches) != 1 or matches[0] is not ip:
+            self._report_left_assignment(ip, "more than one record matches this address in the same VRF")
             return False
 
         return True
 
     def _may_move_assigned_ip(self, ip, device_object):
-        """Move only after a trustworthy observation of the assignment that holds the IP now."""
+        """
+        Move only after the source that holds the IP has reported, trustworthily,
+        that the old assignment no longer has it.
+
+        No observation yet is not a complete observation. The move is deferred
+        so the opposite source order can still apply or cancel it.
+        """
 
         observations = getattr(device_object, "guest_ip_observations", None) or {}
         if observations.get(self.source_tag) == "unknown":
             self._report_left_assignment(ip, "the reporting guest IP observation is unknown")
-            return False
+            return "reject"
 
         hold = self.inventory.assignment_hold(ip, acting_source_tag=self.source_tag)
         if hold == "unknown":
             self._report_left_assignment(ip, "guest IP data for the source that holds it is unavailable")
-            return False
+            return "reject"
         if hold == "undetermined":
             self._report_left_assignment(ip, "the source responsible for its current assignment cannot be determined")
-            return False
-        return True
+            return "reject"
+        state = self._guest_move_state(ip)
+        if state == "pending":
+            return "defer"
+        if state == "kept":
+            self._report_left_assignment(ip, "its current source still reports the address")
+            return "reject"
+        return "allow"
+
+    def _responsible_guest_tag(self, ip):
+        """Source tag that must report on the assignment currently holding ip, if that source tracks guest data."""
+
+        configured = self.inventory._configured_sources_by_tag()
+        tags = self._source_tags(ip)
+        if len(tags) == 1 and tags[0] in configured and getattr(configured[tags[0]], "source_type", None) == "vmware":
+            return tags[0]
+        if tags:
+            return None
+        parent = ip.get_device_vm()
+        parent_tags = self._source_tags(parent) if parent is not None else []
+        if len(parent_tags) == 1 and parent_tags[0] in configured and \
+                getattr(configured[parent_tags[0]], "source_type", None) == "vmware":
+            return parent_tags[0]
+        return None
+
+    def _guest_move_state(self, ip):
+        """
+        'pending' until the responsible VMware source reports.
+        'kept' when that report is complete and still includes this address.
+        'allow' when there is no guest-observation source, or the complete report omitted the address.
+        """
+
+        tag = self._responsible_guest_tag(ip)
+        if tag is None:
+            return "allow"
+        parent = ip.get_device_vm()
+        observations = getattr(parent, "guest_ip_observations", None) or {} if parent is not None else {}
+        state = observations.get(tag)
+        # Missing and unknown are not a complete report. Unknown is also rejected
+        # by assignment_hold; a missing key stays pending so source order can
+        # still supply the report.
+        if state != "complete":
+            return "pending"
+        if tag in (getattr(ip, "confirmed_by", None) or set()):
+            return "kept"
+        reported = (getattr(parent, "guest_reported_ips", None) or {}).get(tag) if parent is not None else None
+        # A complete flag with no address list is not evidence this address is gone.
+        if reported is None:
+            return "pending"
+        address = grab(ip, "data.address", fallback="").split("/")[0]
+        if address in reported:
+            return "kept"
+        return "allow"
 
     def _report_left_assignment(self, ip, detail):
         log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: {detail}.")
@@ -909,14 +970,33 @@ class SourceBase:
                 current_nic = this_ip_object.get_interface()
                 if current_nic == interface_object:
                     this_ip_object.seen_this_run = True
+                    confirmed = getattr(this_ip_object, "confirmed_by", None)
+                    if not isinstance(confirmed, set):
+                        this_ip_object.confirmed_by = set()
+                        confirmed = this_ip_object.confirmed_by
+                    # The source that holds the address has just reported it here.
+                    # That is evidence the assignment still has it, even when this
+                    # source must not take ownership of the record.
+                    confirmed.add(self.source_tag)
                     if not self._source_may_refresh_ip(this_ip_object):
                         ip_address_objects.append(this_ip_object)
                         continue
                 elif current_nic is None:
                     if not self._may_claim_unassigned_ip(this_ip_object, device_object, possible_ip_vrf):
                         continue
-                elif not self._may_move_assigned_ip(this_ip_object, device_object):
-                    continue
+                else:
+                    move = self._may_move_assigned_ip(this_ip_object, device_object)
+                    if move == "reject":
+                        continue
+                    if move == "defer":
+                        this_ip_object.deferred_move = {
+                            "interface": interface_object,
+                            "source": self,
+                            "address": ip_object.compressed,
+                        }
+                        log.debug(f"Deferred moving IP address '{this_ip_object.get_display_name()}' "
+                                  f"until the source that holds it reports whether the address is still assigned.")
+                        continue
 
             nic_ip_data = {
                 "address": ip_object.compressed,
