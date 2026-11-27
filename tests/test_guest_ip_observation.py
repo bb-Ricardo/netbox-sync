@@ -1308,3 +1308,71 @@ def test_competing_claims_follow_the_whole_run_not_source_order(inventory, sourc
     inventory.settle_deferred_ip_moves()
     assert "assigned_object_id" in ip.unset_items
     assert "primary_ip4" in old_vm.unset_items
+
+
+def test_a_later_report_on_the_same_nic_cancels_a_held_removal(inventory, source_settings):
+    """
+    An empty NIC holds a removal. A later report of the address on that NIC
+    retires the hold. The opposite order still removes it. Both go through the
+    interface method and the write.
+    """
+
+    def prepare():
+        begin_next_run(inventory)
+        source = make_source(inventory, "vcenter", source_settings)
+        source.source_type = "vmware"
+        vm, nic, ip = vm_with_ip(inventory, name="same-nic")
+        vm.nb_id = 11
+        nic.nb_id = 22
+        ip.nb_id = 33
+        for obj in (vm, nic, ip):
+            stamp(obj, NetBoxHandler.primary_tag, source.source_tag)
+        handler = _vmware_handler(inventory, source)
+
+        def report(addresses, tools, observation):
+            handler.add_device_vm_to_inventory(
+                NBVM,
+                object_data={"name": vm.data["name"], "status": "active", "cluster": vm.data["cluster"]},
+                vnic_data={"eth0": {"name": "eth0", "enabled": True}},
+                nic_ips={"eth0": addresses},
+                p_ipv4=addresses[0] if addresses else None,
+                vmware_object=tools,
+                guest_ip_observation=observation,
+            )
+
+        return vm, nic, ip, report
+
+    for order in ("empty-then-present", "present-then-empty"):
+        vm, nic, ip, report = prepare()
+        empty = lambda: report([], TOOLS_RUNNING_EMPTY_NIC, "complete")
+        present = lambda: report([ADDRESS], TOOLS_RUNNING_WITH_IP, "complete")
+        if order == "empty-then-present":
+            empty()
+            assert ip.pending_removals
+            assert "assigned_object_id" not in ip.unset_items
+            present()
+            assert not ip.pending_removals
+            inventory.settle_deferred_ip_moves()
+            assert ip.get_interface() is nic
+            assert vm.data["primary_ip4"] is ip
+            assert "assigned_object_id" not in ip.unset_items
+            assert "primary_ip4" not in vm.unset_items
+            payloads = _writes(inventory)
+            assert _payload_clears(payloads, NBIPAddress.name, ip.nb_id, "assigned_object_id") is False
+            assert _payload_clears(payloads, NBVM.name, vm.nb_id, "primary_ip4") is False
+            assert ip.get_interface() is nic
+            assert vm.data["primary_ip4"] is ip
+        else:
+            present()
+            assert not getattr(ip, "pending_removals", None)
+            empty()
+            assert ip.pending_removals
+            assert "assigned_object_id" not in ip.unset_items
+            inventory.settle_deferred_ip_moves()
+            assert "assigned_object_id" in ip.unset_items
+            assert "assigned_object_type" in ip.unset_items
+            assert "primary_ip4" in vm.unset_items
+            payloads = _writes(inventory)
+            assert _payload_clears(payloads, NBIPAddress.name, ip.nb_id, "assigned_object_id") is True
+            assert _payload_clears(payloads, NBIPAddress.name, ip.nb_id, "assigned_object_type") is True
+            assert _payload_clears(payloads, NBVM.name, vm.nb_id, "primary_ip4") is True

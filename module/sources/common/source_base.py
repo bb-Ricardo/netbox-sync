@@ -267,6 +267,11 @@ class SourceBase:
             return "kept"
         return "allow"
 
+    def _next_report_sequence(self, ip):
+        sequence = getattr(ip, "report_sequence", 0) + 1
+        ip.report_sequence = sequence
+        return sequence
+
     def _defer_guest_removal(self, ip, interface_object, device_object):
         """
         Hold an authoritative removal of a VMware-owned address until every
@@ -279,18 +284,56 @@ class SourceBase:
         if not isinstance(pending, list):
             pending = []
             ip.pending_removals = pending
+        sequence = self._next_report_sequence(ip)
         for item in pending:
-            if item.get("interface") is interface_object and item.get("source") is self:
+            if item.get("interface") is interface_object and self._same_source(item.get("source")):
                 item["device"] = device_object
+                item["sequence"] = sequence
                 return True
         pending.append({
             "source": self,
             "device": device_object,
             "interface": interface_object,
+            "sequence": sequence,
         })
         log.debug(f"Deferred removing IP address '{ip.get_display_name()}' from "
                   f"'{interface_object.get_display_name()}' until every report of this address is known.")
         return True
+
+    def _same_source(self, other):
+        if other is self:
+            return True
+        return getattr(other, "source_tag", None) == self.source_tag and self.source_tag is not None
+
+    def _note_assignment_confirmed(self, ip, interface_object):
+        """
+        This source reports the address on its current interface.
+
+        That supersedes an earlier held removal of the same assignment. A later
+        empty report records a new removal after this confirmation.
+        """
+
+        responsible = self._responsible_guest_tag(ip)
+        if responsible not in (None, self.source_tag):
+            return
+        sequence = self._next_report_sequence(ip)
+        marks = getattr(ip, "assignment_confirmations", None)
+        if not isinstance(marks, list):
+            marks = []
+            ip.assignment_confirmations = marks
+        marks.append({
+            "interface": interface_object,
+            "source": self,
+            "tag": self.source_tag,
+            "sequence": sequence,
+        })
+        pending = getattr(ip, "pending_removals", None)
+        if not isinstance(pending, list):
+            return
+        ip.pending_removals = [
+            item for item in pending
+            if not (item.get("interface") is interface_object and self._same_source(item.get("source")))
+        ]
 
     def _defer_ip_move(self, ip, interface_object, device_object, address):
         """
@@ -1091,8 +1134,10 @@ class SourceBase:
                         confirmed = this_ip_object.confirmed_by
                     # The source that holds the address has just reported it here.
                     # That is evidence the assignment still has it, even when this
-                    # source must not take ownership of the record.
+                    # source must not take ownership of the record. It also retires
+                    # a removal this source held from an earlier empty report.
                     confirmed.add(self.source_tag)
+                    self._note_assignment_confirmed(this_ip_object, interface_object)
                     if not self._source_may_refresh_ip(this_ip_object):
                         ip_address_objects.append(this_ip_object)
                         continue

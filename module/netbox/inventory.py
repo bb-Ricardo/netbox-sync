@@ -656,17 +656,32 @@ class NetBoxInventory:
             if grab(device, f"data.{attribute}") is ip and attribute in device.unset_items:
                 device.unset_items.remove(attribute)
 
-    def _apply_pending_ip_removal(self, ip, removals):
-        if not removals:
-            return
-        removal = removals[-1]
+    def _pending_removal_still_applies(self, ip, removal):
+        """A later confirmation of this assignment by the same source retires the hold."""
+
         source = removal.get("source")
-        device = removal.get("device")
         interface = removal.get("interface")
-        if source is None or interface is None:
+        if source is None or interface is None or ip.get_interface() is not interface:
+            return False
+        sequence = removal.get("sequence", 0)
+        tag = getattr(source, "source_tag", None)
+        for mark in getattr(ip, "assignment_confirmations", None) or []:
+            if mark.get("interface") is not interface or mark.get("sequence", 0) <= sequence:
+                continue
+            if mark.get("source") is source or (tag is not None and mark.get("tag") == tag):
+                return False
+        device = removal.get("device")
+        if device is None:
+            device = interface.data.get("virtual_machine") or interface.data.get("device")
+        return source.may_remove_ip_assignments(device, ip=ip) is True
+
+    def _apply_pending_ip_removal(self, ip, removals):
+        applicable = [item for item in removals if self._pending_removal_still_applies(ip, item)]
+        if not applicable:
             return
-        if source.may_remove_ip_assignments(device, ip=ip) is False:
-            return
+        removal = applicable[-1]
+        source = removal.get("source")
+        interface = removal.get("interface")
         log.info(f"{ip.name} is no longer assigned to {interface.get_display_name()} and "
                  f"therefore removed from this interface")
         source.release_ip_retention(ip)
