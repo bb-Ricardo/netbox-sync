@@ -1544,6 +1544,8 @@ def test_a_young_ip_can_be_removed_with_an_already_due_vm(inventory, source_sett
 
 
 def test_failed_orphan_tag_write_does_not_prune_from_the_old_timestamp(inventory, source_settings):
+    """The guard is the direct IP prune. It does not apply until the tag write refreshes last_updated."""
+
     source, vm, nic, ip = _absent_vm(
         inventory, source_settings,
         [NetBoxHandler.primary_tag, "Source: vcenter"],
@@ -1559,6 +1561,28 @@ def test_failed_orphan_tag_write_does_not_prune_from_the_old_timestamp(inventory
     ip.data["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     vm.data["last_updated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     assert prune_deletes(handler) == []
+
+
+def test_failed_ip_tag_write_does_not_stop_an_already_due_vm(inventory, source_settings):
+    """
+    Direct IP deletion waits for the tag write. An already-due parent still
+    deletes its interface, and that delete can remove the assigned IP in NetBox.
+    """
+
+    source, vm, nic, ip = _absent_vm(
+        inventory, source_settings,
+        [NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag],
+        [NetBoxHandler.primary_tag, "phpIPAM"], status="active")
+    age(vm, 40)
+    age(ip, 40)
+    handler = make_handler(inventory)
+    inventory.tag_all_the_things(handler)
+    assert ip.orphan_tag_added_this_run is True
+    assert getattr(vm, "orphan_tag_added_this_run", False) is False
+    deleted = prune_deletes(handler)
+    assert ("DELETE", NBIPAddress.name, ip.nb_id) not in deleted
+    assert ("DELETE", NBVMInterface.name, nic.nb_id) in deleted
+    assert ("DELETE", NBVM.name, vm.nb_id) in deleted
 
 
 def test_powered_off_vm_that_is_still_present_keeps_its_ip(inventory, source_settings):
@@ -1678,6 +1702,72 @@ def test_moved_ip_is_not_orphaned_with_the_absent_vm(inventory, source_settings)
         assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is True
         assert any(item[3].get("assigned_object_id") == new_nic.nb_id
                    for item in payloads if item[1] == NBIPAddress.name and isinstance(item[3], dict))
+
+
+def test_a_skipped_disabled_interface_claim_is_kept_on_an_active_orphaned_vm(inventory, source_settings):
+    """
+    The old NIC is enabled and the new one is disabled, so the report is skipped.
+    The parent is already orphaned and still active. The skip is a claim: it is
+    not orphaned, and a later assignment clears only that interface.
+    """
+
+    for disabled_first in (True, False):
+        begin_next_run(inventory)
+        old = make_source(inventory, "old-vcenter", source_settings)
+        new = make_source(inventory, "new-vcenter", source_settings)
+        old.source_type = "vmware"
+        new.source_type = "vmware"
+        old_vm, old_nic, ip = vm_with_ip(inventory, name="active-orphan", address=ADDRESS)
+        old_vm.data["status"] = "active"
+        old_vm.nb_id = 71
+        old_nic.nb_id = 72
+        ip.nb_id = 73
+        stamp(old_vm, NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag)
+        stamp(old_nic, NetBoxHandler.primary_tag)
+        stamp(ip, NetBoxHandler.primary_tag, "phpIPAM")
+        age(old_vm, 40)
+        new_vm, new_nic, extra = vm_with_ip(inventory, name="disabled-claim", address="10.9.9.9/24")
+        extra.data["assigned_object_id"] = None
+        extra.data["assigned_object_type"] = None
+        new_nic.data["enabled"] = False
+        stamp(new_vm, NetBoxHandler.primary_tag, new.source_tag)
+        stamp(new_nic, NetBoxHandler.primary_tag, new.source_tag)
+        other = inventory.add_object(NBVMInterface, data={
+            "name": "eth9", "virtual_machine": new_vm, "enabled": True,
+        }, read_from_netbox=True)
+
+        def disabled_report():
+            new_nic.data["enabled"] = False
+            _report_on(new, new_vm, new_nic, [ADDRESS])
+
+        def other_claim():
+            inventory.note_unresolved_claim(ip, other)
+
+        if disabled_first:
+            disabled_report()
+            other_claim()
+        else:
+            other_claim()
+            disabled_report()
+
+        assert new_nic in ip.unresolved_claims.values()
+        assert other in ip.unresolved_claims.values()
+        assert ip.get_interface() is old_nic
+        handler = make_handler(inventory)
+        inventory.tag_all_the_things(handler)
+        assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+        assert "phpIPAM" in ip.get_tags()
+        assert prune_deletes(handler) == []
+
+        new_nic.data["enabled"] = True
+        old_nic.data["enabled"] = False
+        _report_on(new, new_vm, new_nic, [ADDRESS])
+        assert new_nic not in ip.unresolved_claims.values()
+        assert other in ip.unresolved_claims.values()
+        inventory.tag_all_the_things(handler)
+        assert ip.get_interface() is new_nic
+        assert NetBoxHandler.orphaned_tag not in ip.get_tags()
+        assert other in ip.unresolved_claims.values()
 
 
 def test_a_skipped_enabled_claim_is_not_orphaned_and_a_resolved_one_is_cleared(inventory, source_settings):

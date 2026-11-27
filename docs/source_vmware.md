@@ -144,7 +144,8 @@ the VM was orphaned. phpIPAM tags stay until the record is deleted.
 
 The address does not necessarily spend `prune_delay_in_days` orphaned on its own. It
 may be deleted earlier through its interface when the parent VM has already met the
-VM's pruning delay. If the vCenter session or the VM listing does not finish, existing
+VM's pruning delay. A failed orphan-tag write skips that direct IP prune. It does not
+stop an already-due parent from deleting its interface, which can delete the assigned IP. If the vCenter session or the VM listing does not finish, existing
 VMs from that source are left unchanged. A source-less address is also kept when any
 enabled VMware listing failed. A silently incomplete but successful-looking response
 can remain invisible; the delay reduces that risk and does not remove it.

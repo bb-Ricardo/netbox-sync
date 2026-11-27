@@ -1129,6 +1129,7 @@ class SourceBase:
                     log.debug(f"Current interface '{current_ip_nic.get_display_name()}' for IP '{ip_object}'"
                               f" is enabled and this one '{interface_object.get_display_name()}' is disabled. "
                               f"IP assignment skipped!")
+                    self.inventory.note_unresolved_claim(ip, interface_object)
                     skip_this_ip = True
                     break
 
