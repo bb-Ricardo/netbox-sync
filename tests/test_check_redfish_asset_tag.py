@@ -94,7 +94,7 @@ def test_asset_tag_of_another_device_is_not_set(check_redfish_source):
     assert device.data["serial"] == "CZJ0000001"
 
 
-def test_own_asset_tag_is_kept(check_redfish_source):
+def test_own_asset_tag_is_kept(check_redfish_source, caplog):
     """The device which already has the asset tag is not a conflict with itself."""
 
     context = check_redfish_source(collect_hardware_asset_tag=True)
@@ -104,6 +104,7 @@ def test_own_asset_tag_is_kept(check_redfish_source):
 
     assert device.data["asset_tag"] == ASSET_TAG
     assert "asset_tag" not in device.updated_items
+    assert "already used" not in caplog.text
 
 
 def test_long_asset_tag_of_another_device_is_not_set(check_redfish_source, caplog):

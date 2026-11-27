@@ -60,7 +60,8 @@ class CheckRedfishConfig(ConfigBase):
                          falling back to the chassis asset tag) is set as the NetBox device asset tag.
                          An asset tag the device already has in NetBox is overwritten, but not cleared
                          if the BMC reports none. Placeholder values are ignored, as is an asset tag
-                         which another device in NetBox already has, since asset tags are unique in NetBox""",
+                         which another device in NetBox already has, since asset tags are unique in NetBox.
+                         Needs an inventory from check_redfish 2.3.0 or newer""",
                          default_value=False),
 
             ConfigOption("model_components_as_modules",
