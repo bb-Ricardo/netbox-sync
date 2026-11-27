@@ -190,13 +190,14 @@ class SourceBase:
 
         return True
 
-    def _may_move_assigned_ip(self, ip, device_object):
+    def _may_move_assigned_ip(self, ip, device_object, settle=False):
         """
         Move only after the source that holds the IP has reported, trustworthily,
         that the old assignment no longer has it.
 
-        No observation yet is not a complete observation. The move is deferred
-        so the opposite source order can still apply or cancel it.
+        A VMware-governed move is recorded for the whole run even when that
+        report is already complete. Settlement then sees every claimant, so the
+        first one to run does not win.
         """
 
         observations = getattr(device_object, "guest_ip_observations", None) or {}
@@ -211,12 +212,14 @@ class SourceBase:
         if hold == "undetermined":
             self._report_left_assignment(ip, "the source responsible for its current assignment cannot be determined")
             return "reject"
-        state = self._guest_move_state(ip)
+        state = self._guest_move_state(ip, target_device=device_object)
         if state == "pending":
             return "defer"
         if state == "kept":
             self._report_left_assignment(ip, "its current source still reports the address")
             return "reject"
+        if settle is False and self._responsible_guest_tag(ip) is not None:
+            return "defer"
         return "allow"
 
     def _responsible_guest_tag(self, ip):
@@ -235,10 +238,10 @@ class SourceBase:
             return parent_tags[0]
         return None
 
-    def _guest_move_state(self, ip):
+    def _guest_move_state(self, ip, target_device=None):
         """
         'pending' until the responsible VMware source reports.
-        'kept' when that report is complete and still includes this address.
+        'kept' when that report is complete and this address is still on the current assignment.
         'allow' when there is no guest-observation source, or the complete report omitted the address.
         """
 
@@ -260,9 +263,34 @@ class SourceBase:
         if reported is None:
             return "pending"
         address = grab(ip, "data.address", fallback="").split("/")[0]
-        if address in reported:
+        if address in reported and target_device is not parent:
             return "kept"
         return "allow"
+
+    def _defer_guest_removal(self, ip, interface_object, device_object):
+        """
+        Hold an authoritative removal of a VMware-owned address until every
+        claimant in this run has been seen. The unset is not queued yet.
+        """
+
+        if self._responsible_guest_tag(ip) is None:
+            return False
+        pending = getattr(ip, "pending_removals", None)
+        if not isinstance(pending, list):
+            pending = []
+            ip.pending_removals = pending
+        for item in pending:
+            if item.get("interface") is interface_object and item.get("source") is self:
+                item["device"] = device_object
+                return True
+        pending.append({
+            "source": self,
+            "device": device_object,
+            "interface": interface_object,
+        })
+        log.debug(f"Deferred removing IP address '{ip.get_display_name()}' from "
+                  f"'{interface_object.get_display_name()}' until every report of this address is known.")
+        return True
 
     def _defer_ip_move(self, ip, interface_object, device_object, address):
         """
@@ -1185,6 +1213,9 @@ class SourceBase:
                     log.debug(f"{current_ip.name} '{current_ip.get_display_name()}' is the primary IP of "
                               f"'{device_object.get_display_name()}' and 'preserve_primary_ips' is enabled. "
                               f"NOT removing it from this interface")
+                    continue
+
+                if self._defer_guest_removal(current_ip, interface_object, device_object):
                     continue
 
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "

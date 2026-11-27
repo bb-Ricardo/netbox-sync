@@ -642,22 +642,58 @@ class NetBoxInventory:
                 return True
         return False
 
+    def _keep_current_assignment(self, ip):
+        """Drop a queued unassignment and the primary clear that went with it."""
+
+        for attribute in ("assigned_object_id", "assigned_object_type"):
+            if attribute in ip.unset_items:
+                ip.unset_items.remove(attribute)
+        device = ip.get_device_vm()
+        if device is None:
+            return
+        for version in (4, 6):
+            attribute = f"primary_ip{version}"
+            if grab(device, f"data.{attribute}") is ip and attribute in device.unset_items:
+                device.unset_items.remove(attribute)
+
+    def _apply_pending_ip_removal(self, ip, removals):
+        if not removals:
+            return
+        removal = removals[-1]
+        source = removal.get("source")
+        device = removal.get("device")
+        interface = removal.get("interface")
+        if source is None or interface is None:
+            return
+        if source.may_remove_ip_assignments(device, ip=ip) is False:
+            return
+        log.info(f"{ip.name} is no longer assigned to {interface.get_display_name()} and "
+                 f"therefore removed from this interface")
+        source.release_ip_retention(ip)
+        ip.remove_interface_association()
+
     def settle_deferred_ip_moves(self):
         """
-        Apply moves that waited for the source holding the address.
+        Resolve every competing report from this run, then the old assignment.
 
-        A report that arrives before that source has been read is not applied
-        yet. Once every source has run, the same rule either assigns the
-        address or leaves it. Two interfaces requesting one address are an
-        ambiguity and neither is chosen. A single allowed move also applies the
-        primary-IP intent recorded with the request.
+        A VMware move is not applied while another interface may still report
+        the same address. The old interface's removal is held with those
+        reports. One eligible interface receives the address. Several eligible
+        interfaces leave the current assignment and its primary in place, with
+        nothing queued for the write.
         """
 
         for ip in list(self.get_all_items(NBIPAddress)):
             requests = getattr(ip, "deferred_moves", None)
-            if not isinstance(requests, list) or len(requests) == 0:
+            removals = getattr(ip, "pending_removals", None)
+            if not isinstance(requests, list):
+                requests = []
+            if not isinstance(removals, list):
+                removals = []
+            if len(requests) == 0 and len(removals) == 0:
                 continue
             ip.deferred_moves = None
+            ip.pending_removals = None
 
             grouped = []
             for request in requests:
@@ -671,12 +707,17 @@ class NetBoxInventory:
                     group["requests"].append(request)
 
             reporter = next((request.get("source") for request in requests if request.get("source") is not None), None)
-            if len(grouped) != 1:
+            if len(grouped) > 1:
                 if reporter is not None:
                     reporter._report_left_assignment(ip, "more than one interface requested it")
                 else:
                     log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: "
                                 f"more than one interface requested it.")
+                self._keep_current_assignment(ip)
+                continue
+
+            if len(grouped) == 0:
+                self._apply_pending_ip_removal(ip, removals)
                 continue
 
             group = grouped[0]
@@ -684,20 +725,23 @@ class NetBoxInventory:
             source = request.get("source")
             interface = group["interface"]
             if source is None:
+                self._keep_current_assignment(ip)
                 continue
 
             device = request.get("device")
             if device is None:
                 device = interface.data.get("virtual_machine") or interface.data.get("device")
-            decision = source._may_move_assigned_ip(ip, device)
+            decision = source._may_move_assigned_ip(ip, device, settle=True)
             if decision != "allow":
+                self._keep_current_assignment(ip)
                 if decision == "defer":
                     source._report_left_assignment(
                         ip, "its current source has not reported whether the address is still assigned")
                 continue
 
             # The source that held the address has now omitted it, so its
-            # earlier unverified mark no longer applies.
+            # earlier unverified mark no longer applies. The move replaces the
+            # held removal; that removal must not also be written.
             tag = source._responsible_guest_tag(ip)
             retained = getattr(ip, "retained_by", None)
             if isinstance(retained, set) and tag:
