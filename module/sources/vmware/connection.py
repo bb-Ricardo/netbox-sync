@@ -1464,8 +1464,10 @@ class VMWareHandler(SourceBase):
                 if "parent_folder_1" in tag_source:
                     tag_list.extend(self.get_vmware_object_tags(parent_folder_1))
                 if "parent_folder_2" in tag_source:
-                    parent_folder_2 = self.get_parent_object_by_class(obj, vim.Folder)
-                    if parent_folder_2 is not None:
+                    # the folder parent_folder_1 is organized in. Above the top folder of a datacenter
+                    # is the datacenter itself, which is not a folder
+                    parent_folder_2 = self.get_cached_property(parent_folder_1, "parent")
+                    if isinstance(parent_folder_2, vim.Folder):
                         tag_list.extend(self.get_vmware_object_tags(parent_folder_2))
         if not isinstance(obj, (vim.ClusterComputeResource, vim.ComputeResource)) and "cluster" in tag_source:
             cluster = self.get_parent_object_by_class(obj, vim.ClusterComputeResource)
