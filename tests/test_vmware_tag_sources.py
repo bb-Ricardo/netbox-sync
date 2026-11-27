@@ -64,12 +64,13 @@ class _VirtualMachine(vim.VirtualMachine):
     parent = property(lambda self: self._parent)
 
 
-# datacenter "DC" / its VM folder "vm" / "Dept" / "Prod"; every folder carries one tag
+# datacenter "DC" / its VM folder "vm" / "Dept" / "Prod"; every folder and the datacenter carry one tag
 DATACENTER = _Datacenter("datacenter-1", "DC")
 VM_ROOT = _Folder("group-v1", "vm", DATACENTER)
 DEPT = _Folder("group-v2", "Dept", VM_ROOT)
 PROD = _Folder("group-v3", "Prod", DEPT)
-TAGS_BY_OBJECT = {"group-v1": ["root"], "group-v2": ["dept"], "group-v3": ["prod"]}
+# the datacenter is tagged too, its tag must never show up as a folder tag
+TAGS_BY_OBJECT = {"datacenter-1": ["dc"], "group-v1": ["root"], "group-v2": ["dept"], "group-v3": ["prod"]}
 
 
 class _Tagging:
