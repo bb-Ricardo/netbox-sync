@@ -648,22 +648,47 @@ class NetBoxInventory:
 
         A report that arrives before that source has been read is not applied
         yet. Once every source has run, the same rule either assigns the
-        address or leaves it. Setting an unknown observation after the first
-        report therefore cancels the move instead of leaving it in place.
+        address or leaves it. Two interfaces requesting one address are an
+        ambiguity and neither is chosen. A single allowed move also applies the
+        primary-IP intent recorded with the request.
         """
 
         for ip in list(self.get_all_items(NBIPAddress)):
-            move = getattr(ip, "deferred_move", None)
-            if not isinstance(move, dict):
+            requests = getattr(ip, "deferred_moves", None)
+            if not isinstance(requests, list) or len(requests) == 0:
+                continue
+            ip.deferred_moves = None
+
+            grouped = []
+            for request in requests:
+                interface = request.get("interface")
+                if interface is None:
+                    continue
+                group = next((item for item in grouped if item["interface"] is interface), None)
+                if group is None:
+                    grouped.append({"interface": interface, "requests": [request]})
+                else:
+                    group["requests"].append(request)
+
+            reporter = next((request.get("source") for request in requests if request.get("source") is not None), None)
+            if len(grouped) != 1:
+                if reporter is not None:
+                    reporter._report_left_assignment(ip, "more than one interface requested it")
+                else:
+                    log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: "
+                                f"more than one interface requested it.")
                 continue
 
-            source = move.get("source")
-            interface = move.get("interface")
-            ip.deferred_move = None
-            if source is None or interface is None:
+            group = grouped[0]
+            request = group["requests"][0]
+            source = request.get("source")
+            interface = group["interface"]
+            if source is None:
                 continue
 
-            device = interface.data.get("virtual_machine") or interface.data.get("device")
+            device = request.get("device")
+            if device is None:
+                device = interface.data.get("virtual_machine") or interface.data.get("device")
             decision = source._may_move_assigned_ip(ip, device)
             if decision != "allow":
                 if decision == "defer":
@@ -680,9 +705,17 @@ class NetBoxInventory:
                 ip.unverified_retain = bool(retained)
             source.release_ip_retention(ip)
             ip.update(data={
-                "address": move.get("address") or grab(ip, "data.address"),
+                "address": request.get("address") or grab(ip, "data.address"),
                 "assigned_object_id": interface,
             }, source=source)
+
+            version = next((item.get("primary_version") for item in group["requests"]
+                            if item.get("primary_version") in (4, 6)), None)
+            primary_source = next((item.get("source") for item in group["requests"]
+                                   if item.get("primary_version") in (4, 6) and item.get("source") is not None),
+                                  source)
+            if version is not None and primary_source is not None:
+                primary_source.assign_primary_ip(ip.get_device_vm() or device, ip, version)
 
     def tag_all_the_things(self, netbox_handler):
         """

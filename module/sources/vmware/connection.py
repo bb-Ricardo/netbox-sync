@@ -2026,44 +2026,15 @@ class VMWareHandler(SourceBase):
                 ip_interface_object = ip_interface(grab(ip_object, "data.address"))
 
                 # continue if address is not a primary IP
-                if ip_interface_object not in [primary_ipv4_object, primary_ipv6_object]:
-                    continue
+                if ip_interface_object == primary_ipv4_object:
+                    self.assign_primary_ip(device_vm_object, ip_object, 4)
+                elif ip_interface_object == primary_ipv6_object:
+                    self.assign_primary_ip(device_vm_object, ip_object, 6)
 
-                # set/update/remove primary IP addresses
-                set_this_primary_ip = False
-                ip_version = ip_interface_object.ip.version
-                if self.settings.set_primary_ip == "always":
-
-                    for object_type in [NBDevice, NBVM]:
-
-                        # new IPs don't need to be removed from other devices/VMs
-                        if ip_object.is_new is True:
-                            break
-
-                        for devices_vms in self.inventory.get_all_items(object_type):
-
-                            # device has no primary IP of this version
-                            this_primary_ip = grab(devices_vms, f"data.primary_ip{ip_version}")
-
-                            # we found this exact object
-                            if devices_vms == device_vm_object:
-                                continue
-
-                            # device has the same object assigned
-                            if this_primary_ip == ip_object:
-                                devices_vms.unset_attribute(f"primary_ip{ip_version}")
-
-                    set_this_primary_ip = True
-
-                elif self.settings.set_primary_ip != "never" and \
-                        grab(device_vm_object, f"data.primary_ip{ip_version}") is None:
-                    set_this_primary_ip = True
-
-                if set_this_primary_ip is True:
-
-                    log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
-                              f"'{device_vm_object.get_display_name()}'")
-                    device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
+        # A deferred move is not in the returned list, so the loop above cannot
+        # select it. Remember the intent and let settlement apply the same policy.
+        self.note_deferred_primary(device_vm_object, primary_ipv4_object, 4)
+        self.note_deferred_primary(device_vm_object, primary_ipv6_object, 6)
 
         return device_vm_object, interface_objects
 

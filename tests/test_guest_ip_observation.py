@@ -852,7 +852,7 @@ def test_disabled_interface_ip_is_not_moved_until_the_old_source_says_it_is_gone
         if new_first:
             report_new()
             assert ip.get_interface() is old_nic
-            assert ip.deferred_move["interface"] is new_nic
+            assert [request["interface"] for request in ip.deferred_moves] == [new_nic]
             mark(old_vm, old)
         else:
             mark(old_vm, old)
@@ -878,7 +878,7 @@ def test_disabled_interface_ip_is_not_moved_until_the_old_source_says_it_is_gone
         for new_first in (True, False):
             _old_vm, old_nic, ip, _new_nic = run(tag_the_ip, new_first, unknown)
             assert ip.get_interface() is old_nic
-            assert getattr(ip, "deferred_move", None) is None
+            assert getattr(ip, "deferred_moves", None) is None
             assert "assigned_object_id" not in ip.updated_items
 
             _old_vm, old_nic, ip, _new_nic = run(tag_the_ip, new_first, still_present)
@@ -925,7 +925,7 @@ def test_a_later_report_on_the_old_interface_cancels_the_deferred_move(inventory
     old, new = _vmware_pair(inventory, source_settings)
     old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, old)
     _report_on(new, new_vm, new_nic, [ADDRESS])
-    assert ip.deferred_move["interface"] is new_nic
+    assert [request["interface"] for request in ip.deferred_moves] == [new_nic]
 
     old_vm.guest_ip_observations = {old.source_tag: "complete"}
     old_vm.guest_reported_ips = {old.source_tag: set()}
@@ -1048,3 +1048,178 @@ def test_only_the_parent_source_may_remove_a_source_less_ip(inventory, source_se
     empty(other, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
     empty(owner, vm, nic, TOOLS_RUNNING_EMPTY_NIC)
     assert "assigned_object_id" not in ip.unset_items
+
+
+def _settings(source_settings, **changes):
+    values = dict(vars(source_settings))
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+def _vmware_handler(inventory, source):
+    handler = object.__new__(VMWareHandler)
+    handler.inventory = inventory
+    handler.name = source.name
+    handler.source_tag = source.source_tag
+    handler.settings = source.settings
+    return handler
+
+
+def _report_vm(handler, vm, addresses, primary):
+    return handler.add_device_vm_to_inventory(
+        NBVM,
+        object_data={"name": vm.data["name"], "status": "active", "cluster": vm.data["cluster"]},
+        vnic_data={"eth0": {"name": "eth0", "enabled": True}},
+        nic_ips={"eth0": addresses},
+        p_ipv4=primary,
+        vmware_object=TOOLS_RUNNING_WITH_IP,
+        guest_ip_observation="complete",
+    )
+
+
+def test_deferred_move_keeps_the_new_vm_primary_in_both_orders(inventory, source_settings):
+    """
+    The deferred report does not return the IP, so primary selection cannot
+    run during that pass. Settlement applies the same set_primary_ip policy.
+    """
+
+    def prepare(policy):
+        begin_next_run(inventory)
+        settings = _settings(source_settings, set_primary_ip=policy)
+        old = make_source(inventory, "old-vcenter", settings)
+        new = make_source(inventory, "new-vcenter", settings)
+        old.source_type = "vmware"
+        new.source_type = "vmware"
+        old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, old)
+        new_vm.data["primary_ip4"] = None
+        return old, new, old_vm, old_nic, ip, new_vm, new_nic
+
+    def omitted(vm, source):
+        vm.guest_ip_observations = {source.source_tag: "complete"}
+        vm.guest_reported_ips = {source.source_tag: set()}
+
+    for policy in ("when-undefined", "always"):
+        for new_first in (True, False):
+            old, new, old_vm, old_nic, ip, new_vm, new_nic = prepare(policy)
+            handler = _vmware_handler(inventory, new)
+
+            def report_new():
+                device, interfaces = _report_vm(handler, new_vm, [ADDRESS], ADDRESS)
+                assert device is new_vm
+                assert interfaces["eth0"] is new_nic
+                return interfaces["eth0"].get_ip_addresses()
+
+            if new_first:
+                reported = report_new()
+                assert ip not in reported
+                assert new_vm.data.get("primary_ip4") is None
+                assert ip.deferred_moves[0]["primary_version"] == 4
+                omitted(old_vm, old)
+            else:
+                omitted(old_vm, old)
+                reported = report_new()
+                assert ip in reported
+            inventory.settle_deferred_ip_moves()
+
+            assert ip.get_interface() is new_nic
+            assert new_vm.data["primary_ip4"] is ip
+            assert "primary_ip4" in old_vm.unset_items
+            assert "primary_ip4" not in new_vm.unset_items
+
+    for new_first in (True, False):
+        old, new, old_vm, old_nic, ip, new_vm, new_nic = prepare("when-undefined")
+        handler = _vmware_handler(inventory, new)
+        if new_first:
+            _report_vm(handler, new_vm, [ADDRESS], ADDRESS)
+            old_vm.guest_ip_observations = {old.source_tag: "unknown"}
+        else:
+            old_vm.guest_ip_observations = {old.source_tag: "unknown"}
+            _report_vm(handler, new_vm, [ADDRESS], ADDRESS)
+        inventory.settle_deferred_ip_moves()
+        assert ip.get_interface() is old_nic
+        assert new_vm.data.get("primary_ip4") is None
+        assert "primary_ip4" not in old_vm.unset_items
+        assert old_vm.data["primary_ip4"] is ip
+
+    old, new, old_vm, old_nic, ip, new_vm, new_nic = prepare("when-undefined")
+    kept_primary = inventory.add_object(NBIPAddress, data={"address": "10.9.9.8/24"}, read_from_netbox=True)
+    new_vm.data["primary_ip4"] = kept_primary
+    handler = _vmware_handler(inventory, new)
+    _report_vm(handler, new_vm, [ADDRESS], ADDRESS)
+    omitted(old_vm, old)
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is new_nic
+    assert new_vm.data["primary_ip4"] is kept_primary
+
+    old, new, old_vm, old_nic, ip, new_vm, new_nic = prepare("always")
+    previous = inventory.add_object(NBIPAddress, data={"address": "10.9.9.8/24"}, read_from_netbox=True)
+    new_vm.data["primary_ip4"] = previous
+    handler = _vmware_handler(inventory, new)
+    _report_vm(handler, new_vm, [ADDRESS], ADDRESS)
+    omitted(old_vm, old)
+    inventory.settle_deferred_ip_moves()
+    assert new_vm.data["primary_ip4"] is ip
+
+    old, new, old_vm, old_nic, ip, new_vm, new_nic = prepare("never")
+    handler = _vmware_handler(inventory, new)
+    _report_vm(handler, new_vm, [ADDRESS], ADDRESS)
+    omitted(old_vm, old)
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is new_nic
+    assert new_vm.data.get("primary_ip4") is None
+    assert "primary_ip4" in old_vm.unset_items
+
+
+def test_two_deferred_claimants_are_left_unresolved_in_both_orders(inventory, source_settings, caplog):
+    caplog.set_level(logging.WARNING, logger="NetBox-Sync")
+
+    def claimants(first_name):
+        begin_next_run(inventory)
+        caplog.clear()
+        old = make_source(inventory, "old-vcenter", source_settings)
+        first = make_source(inventory, "claim-a", source_settings)
+        second = make_source(inventory, "claim-b", source_settings)
+        for source in (old, first, second):
+            source.source_type = "vmware"
+        old_vm, old_nic, ip = vm_with_ip(inventory, name="old-vm", address=ADDRESS)
+        old_nic.data["enabled"] = False
+        vm_a, nic_a, extra_a = vm_with_ip(inventory, name="vm-a", address="10.9.1.1/24")
+        vm_b, nic_b, extra_b = vm_with_ip(inventory, name="vm-b", address="10.9.1.2/24")
+        for extra in (extra_a, extra_b):
+            extra.data["assigned_object_id"] = None
+            extra.data["assigned_object_type"] = None
+        for obj in (old_vm, old_nic, ip):
+            stamp(obj, NetBoxHandler.primary_tag, old.source_tag)
+        reports = [(first, vm_a, nic_a), (second, vm_b, nic_b)]
+        if first_name == "b":
+            reports.reverse()
+        for source, vm, nic in reports:
+            stamp(vm, NetBoxHandler.primary_tag, source.source_tag)
+            stamp(nic, NetBoxHandler.primary_tag, source.source_tag)
+            _report_on(source, vm, nic, [ADDRESS])
+        return old_vm, old_nic, ip, nic_a, nic_b
+
+    for first_name in ("a", "b"):
+        old_vm, old_nic, ip, nic_a, nic_b = claimants(first_name)
+        requested = {request["interface"] for request in ip.deferred_moves}
+        assert requested == {nic_a, nic_b}
+        assert ip.get_interface() is old_nic
+        old_vm.guest_ip_observations = {"Source: old-vcenter": "complete"}
+        old_vm.guest_reported_ips = {"Source: old-vcenter": set()}
+        inventory.settle_deferred_ip_moves()
+        assert ip.get_interface() is old_nic
+        assert ip not in nic_a.get_ip_addresses()
+        assert ip not in nic_b.get_ip_addresses()
+        assert "primary_ip4" not in old_vm.unset_items
+        assert "more than one interface requested it" in caplog.text
+
+    begin_next_run(inventory)
+    source = make_source(inventory, "vcenter", source_settings)
+    source.source_type = "vmware"
+    old_vm, old_nic, ip, new_vm, new_nic = _disabled_assignment(inventory, True, source)
+    _report_on(source, new_vm, new_nic, [ADDRESS])
+    assert [request["interface"] for request in ip.deferred_moves] == [new_nic]
+    old_vm.guest_ip_observations = {source.source_tag: "complete"}
+    old_vm.guest_reported_ips = {source.source_tag: set()}
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is new_nic

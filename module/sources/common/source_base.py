@@ -264,6 +264,93 @@ class SourceBase:
             return "kept"
         return "allow"
 
+    def _defer_ip_move(self, ip, interface_object, device_object, address):
+        """
+        Remember one request to move ip onto interface_object.
+
+        A second interface is kept as a competing request. The same interface
+        reporting again refreshes its request and does not become a second claimant.
+        """
+
+        requests = getattr(ip, "deferred_moves", None)
+        if not isinstance(requests, list):
+            requests = []
+            ip.deferred_moves = requests
+        for request in requests:
+            if request.get("interface") is interface_object:
+                request["source"] = self
+                request["device"] = device_object
+                request["address"] = address
+                return
+        requests.append({
+            "interface": interface_object,
+            "device": device_object,
+            "source": self,
+            "address": address,
+            "primary_version": None,
+        })
+        log.debug(f"Deferred moving IP address '{ip.get_display_name()}' "
+                  f"until the source that holds it reports whether the address is still assigned.")
+
+    def note_deferred_primary(self, device, primary_address, version):
+        """
+        Remember that a deferred move onto device was this device's primary address.
+
+        The address is not assigned yet, so the primary cannot be written now.
+        Settlement applies it with assign_primary_ip once the move is allowed.
+        """
+
+        if device is None or primary_address is None or version not in (4, 6):
+            return
+        try:
+            wanted = ip_interface(primary_address)
+        except (ValueError, TypeError):
+            return
+        for ip in self.inventory.get_all_items(NBIPAddress):
+            for request in getattr(ip, "deferred_moves", None) or []:
+                request_device = request.get("device")
+                if request_device is None:
+                    interface = request.get("interface")
+                    if interface is not None:
+                        request_device = grab(interface, "data.virtual_machine") or grab(interface, "data.device")
+                if request_device is not device:
+                    continue
+                try:
+                    reported = ip_interface(request.get("address") or grab(ip, "data.address"))
+                except (ValueError, TypeError):
+                    continue
+                if reported == wanted:
+                    request["primary_version"] = version
+
+    def assign_primary_ip(self, device_object, ip_object, ip_version):
+        """
+        Apply this source's set_primary_ip policy to one address.
+
+        'always' moves the primary off any other device or VM. 'when-undefined'
+        sets it only while this object has none. 'never' leaves it alone.
+        """
+
+        if device_object is None or ip_object is None or ip_version not in (4, 6):
+            return
+        policy = getattr(self.settings, "set_primary_ip", "when-undefined")
+        set_this_primary_ip = False
+        if policy == "always":
+            for object_type in (NBDevice, NBVM):
+                if ip_object.is_new is True:
+                    break
+                for other in self.inventory.get_all_items(object_type):
+                    if other == device_object:
+                        continue
+                    if grab(other, f"data.primary_ip{ip_version}") == ip_object:
+                        other.unset_attribute(f"primary_ip{ip_version}")
+            set_this_primary_ip = True
+        elif policy != "never" and grab(device_object, f"data.primary_ip{ip_version}") is None:
+            set_this_primary_ip = True
+        if set_this_primary_ip is True:
+            log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
+                      f"'{device_object.get_display_name()}'")
+            device_object.update(data={f"primary_ip{ip_version}": ip_object})
+
     def _report_left_assignment(self, ip, detail):
         log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: {detail}.")
 
@@ -989,13 +1076,8 @@ class SourceBase:
                     if move == "reject":
                         continue
                     if move == "defer":
-                        this_ip_object.deferred_move = {
-                            "interface": interface_object,
-                            "source": self,
-                            "address": ip_object.compressed,
-                        }
-                        log.debug(f"Deferred moving IP address '{this_ip_object.get_display_name()}' "
-                                  f"until the source that holds it reports whether the address is still assigned.")
+                        self._defer_ip_move(this_ip_object, interface_object, device_object,
+                                            ip_object.compressed)
                         continue
 
             nic_ip_data = {
