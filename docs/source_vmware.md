@@ -132,7 +132,11 @@ Exactly one other interface may receive the address; the primary IP then follows
 `set_primary_ip` and the old primary is cleared. More than one requesting interface leaves
 the address and its primary where they are. A skipped report that is still unresolved
 counts as a requesting interface, so the address is not moved while that claim remains.
-Resolving one interface clears only that claim. Source order does not choose the winner.
+Resolving one interface clears only that claim. An address still on an absent VM with
+no `Source:` tag has nothing to confirm that it left, so a new VMware claim waits until
+every report is in. One claimant may take it. Another claimant, or a VMware listing that
+did not finish, leaves the address and its primary where they are. Source order does not
+choose the winner.
 This is still a policy choice. It does not claim that Tools can never return a
 temporarily incomplete list for one NIC.
 

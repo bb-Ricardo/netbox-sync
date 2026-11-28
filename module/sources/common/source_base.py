@@ -196,8 +196,9 @@ class SourceBase:
         that the old assignment no longer has it.
 
         A VMware-governed move is recorded for the whole run even when that
-        report is already complete. Settlement then sees every claimant, so the
-        first one to run does not win.
+        report is already complete. An address on an absent VM with no Source:
+        tag has no such report to wait for, so a new VMware claim waits as well.
+        Settlement then sees every claimant, so the first one to run does not win.
         """
 
         observations = getattr(device_object, "guest_ip_observations", None) or {}
@@ -224,7 +225,30 @@ class SourceBase:
             return "reject"
         if settle is False and self._responsible_guest_tag(ip) is not None:
             return "defer"
+        # No Source: tag can identify the old VM, so this report is not proof
+        # that it is the only one. Wait until every VMware report is in.
+        if self._absent_sourceless_vm_assignment(ip):
+            if settle is False:
+                return "defer"
+            if self.inventory._any_enabled_vmware_listing_incomplete():
+                self._report_left_assignment(ip, "a VMware listing did not finish")
+                return "reject"
         return "allow"
+
+    def _absent_sourceless_vm_assignment(self, ip):
+        """
+        True when this VMware source wants an address that is still on a VM
+        this run did not see, and neither the address nor that VM has a Source: tag.
+        """
+
+        if getattr(self, "source_type", None) != "vmware":
+            return False
+        parent = ip.get_device_vm()
+        if not isinstance(parent, NBVM) or parent.source is not None:
+            return False
+        if self._source_tags(ip) or self._source_tags(parent):
+            return False
+        return True
 
     def _responsible_guest_tag(self, ip):
         """Source tag that must report on the assignment currently holding ip, if that source tracks guest data."""
@@ -412,7 +436,7 @@ class SourceBase:
             "primary_version": None,
         })
         log.debug(f"Deferred moving IP address '{ip.get_display_name()}' "
-                  f"until the source that holds it reports whether the address is still assigned.")
+                  f"until every report of this address in this run is known.")
 
     def note_deferred_primary(self, device, primary_address, version):
         """

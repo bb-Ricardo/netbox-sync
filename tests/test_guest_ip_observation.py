@@ -1853,6 +1853,100 @@ def test_one_resolved_claim_does_not_move_the_ip_while_another_remains(inventory
         assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is False
 
 
+def test_source_less_absent_vm_claims_wait_until_every_report_is_in(inventory, source_settings, caplog):
+    """
+    An orphaned VM with no Source: tag cannot confirm that the address left.
+    The first VMware claim waits. One claimant then takes it. Two claimants,
+    in either order, leave the address and the primary. An unfinished listing
+    does not move it.
+    """
+
+    caplog.set_level(logging.WARNING, logger="NetBox-Sync")
+
+    def orphaned_ip():
+        begin_next_run(inventory)
+        settings = _settings(source_settings, set_primary_ip="when-undefined")
+        old_vm, old_nic, ip = vm_with_ip(inventory, name="gone-vm", address=ADDRESS)
+        old_vm.data["status"] = "decommissioning"
+        old_vm.nb_id = 91
+        old_nic.nb_id = 92
+        ip.nb_id = 93
+        stamp(old_vm, NetBoxHandler.primary_tag, NetBoxHandler.orphaned_tag)
+        stamp(old_nic, NetBoxHandler.primary_tag)
+        stamp(ip, NetBoxHandler.primary_tag, "phpIPAM")
+        return settings, old_vm, old_nic, ip
+
+    def new_vm(settings, name, source_name, vm_id, nic_id):
+        source = make_source(inventory, source_name, settings)
+        source.source_type = "vmware"
+        vm, nic, extra = vm_with_ip(inventory, name=name, address=f"10.9.{vm_id}.1/24")
+        extra.data["assigned_object_id"] = None
+        extra.data["assigned_object_type"] = None
+        vm.data["primary_ip4"] = None
+        vm.nb_id = vm_id
+        nic.nb_id = nic_id
+        stamp(vm, NetBoxHandler.primary_tag, source.source_tag)
+        stamp(nic, NetBoxHandler.primary_tag, source.source_tag)
+        return source, vm, nic
+
+    def claim(source, vm):
+        _report_vm(_vmware_handler(inventory, source), vm, [ADDRESS], ADDRESS)
+
+    for first_is_a in (True, False):
+        caplog.clear()
+        settings, old_vm, old_nic, ip = orphaned_ip()
+        source_a, vm_a, nic_a = new_vm(settings, "vm-a", "claim-a", 94, 95)
+        source_b, vm_b, nic_b = new_vm(settings, "vm-b", "claim-b", 96, 97)
+        order = ((source_a, vm_a), (source_b, vm_b))
+        if not first_is_a:
+            order = (order[1], order[0])
+        for source, vm in order:
+            claim(source, vm)
+            assert ip.get_interface() is old_nic
+            assert "primary_ip4" not in old_vm.unset_items
+        assert {request["interface"] for request in ip.deferred_moves} == {nic_a, nic_b}
+        inventory.settle_deferred_ip_moves()
+        assert ip.get_interface() is old_nic
+        assert old_vm.data["primary_ip4"] is ip
+        assert vm_a.data.get("primary_ip4") is None
+        assert vm_b.data.get("primary_ip4") is None
+        assert "primary_ip4" not in old_vm.unset_items
+        assert "more than one interface requested it" in caplog.text
+        payloads = _writes(inventory)
+        assert not any(isinstance(item[3], dict) and item[3].get("assigned_object_id") in (nic_a.nb_id, nic_b.nb_id)
+                       for item in payloads if item[1] == NBIPAddress.name)
+        assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is False
+
+    settings, old_vm, old_nic, ip = orphaned_ip()
+    source, vm, nic = new_vm(settings, "only-vm", "only", 94, 95)
+    claim(source, vm)
+    assert ip.get_interface() is old_nic
+    assert len(ip.deferred_moves) == 1
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is nic
+    assert vm.data["primary_ip4"] is ip
+    assert "primary_ip4" in old_vm.unset_items
+    payloads = _writes(inventory)
+    assert any(item[0] == "PATCH" and item[1] == NBIPAddress.name and isinstance(item[3], dict)
+               and item[3].get("assigned_object_id") == nic.nb_id for item in payloads)
+    assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is True
+
+    caplog.clear()
+    settings, old_vm, old_nic, ip = orphaned_ip()
+    source, vm, nic = new_vm(settings, "only-vm", "only", 94, 95)
+    source.inventory_complete = False
+    claim(source, vm)
+    inventory.settle_deferred_ip_moves()
+    assert ip.get_interface() is old_nic
+    assert old_vm.data["primary_ip4"] is ip
+    assert "primary_ip4" not in old_vm.unset_items
+    assert "a VMware listing did not finish" in caplog.text
+    payloads = _writes(inventory)
+    assert not any(isinstance(item[3], dict) and item[3].get("assigned_object_id") == nic.nb_id
+                   for item in payloads if item[1] == NBIPAddress.name)
+    assert _payload_clears(payloads, NBVM.name, old_vm.nb_id, "primary_ip4") is False
+
+
 def test_a_skipped_enabled_claim_is_not_orphaned_and_a_resolved_one_is_cleared(inventory, source_settings):
     begin_next_run(inventory)
     old = make_source(inventory, "old-vcenter", source_settings)
