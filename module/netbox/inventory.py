@@ -258,6 +258,16 @@ class _TypeIndex:
         return sorted(result, key=self.position.__getitem__)
 
 
+class OwnerResolution:
+    """How the source that owns a VM, device, or IP was identified."""
+
+    def __init__(self, status, source=None, tags=None, sources=None):
+        self.status = status
+        self.source = source
+        self.sources = list(sources if sources is not None else ([source] if source is not None else []))
+        self.tags = list(tags or [])
+
+
 class NetBoxInventory:
     """
     Singleton class to manage an inventory of NetBoxObject objects
@@ -282,6 +292,7 @@ class NetBoxInventory:
 
         # object types read from NetBox in this run
         self.loaded_types = set()
+        self._ambiguous_owner_reports = set()
 
         # indexes per object type name, built on first lookup
         self._indexes = dict()
@@ -818,6 +829,539 @@ class NetBoxInventory:
 
         return None
 
+    def _configured_sources_by_tag(self):
+        sources = {}
+        for source in self.source_list:
+            tag = getattr(source, "source_tag", None)
+            if tag:
+                sources[tag] = source
+        return sources
+
+    @staticmethod
+    def _source_tag_names(obj):
+        if obj is None:
+            return []
+
+        names = []
+        for tag in obj.get_tags():
+            if isinstance(tag, str) and tag.startswith("Source:"):
+                names.append(tag)
+        return names
+
+    def _resolve_parent_owner(self, parent):
+        """
+        The owner is the single known Source tag. Several known tags on one
+        device are shared provenance, not a conflict. An unknown Source tag is
+        ambiguous. No tag is absent. Processing order is not a tie-break.
+        """
+
+        configured = self._configured_sources_by_tag()
+        tags = self._source_tag_names(parent)
+        unknown_tags = [tag for tag in tags if tag not in configured]
+        known_sources = []
+        for tag in tags:
+            source = configured.get(tag)
+            if source is not None and source not in known_sources:
+                known_sources.append(source)
+
+        if unknown_tags:
+            return OwnerResolution("ambiguous", None, tags)
+
+        # Several configured sources on one device are provenance. VMware and
+        # Redfish both tag an ESXi host; that is not an ownership conflict.
+        if len(known_sources) > 1:
+            return OwnerResolution("shared", None, tags, sources=known_sources)
+
+        if len(known_sources) == 1:
+            return OwnerResolution("owner", known_sources[0], tags)
+
+        observations = getattr(parent, "guest_ip_observations", None) or {}
+        resolvers = []
+        for tag in observations:
+            source = configured.get(tag)
+            if source is not None and source not in resolvers:
+                resolvers.append(source)
+
+        if len(resolvers) == 1 and len(observations) == 1:
+            return OwnerResolution("owner", resolvers[0], tags)
+
+        if observations:
+            return OwnerResolution("ambiguous", None, list(observations.keys()))
+
+        return OwnerResolution("none", None, tags)
+
+    def resolve_owner(self, obj):
+        """
+        Identify the source that owns obj.
+
+        An IP is decided by its own Source tags. No source tag on the IP uses
+        its parent. Several known tags on the IP, or a Source tag that matches
+        no configured source, is ambiguous. Several tags on the parent are not.
+        """
+
+        if isinstance(obj, NBIPAddress):
+            parent = obj.get_device_vm()
+            parent_decision = self._resolve_parent_owner(parent) if parent is not None \
+                else OwnerResolution("none", None, [])
+            configured = self._configured_sources_by_tag()
+            ip_tags = self._source_tag_names(obj)
+            unknown_tags = [tag for tag in ip_tags if tag not in configured]
+            known_sources = []
+            for tag in ip_tags:
+                source = configured.get(tag)
+                if source is not None and source not in known_sources:
+                    known_sources.append(source)
+
+            # The IP's own tags decide. A parent with several source tags does
+            # not make this address ambiguous, and it is not copied into the warning.
+            if unknown_tags or len(known_sources) > 1:
+                return OwnerResolution("ambiguous", None, ip_tags)
+
+            if len(known_sources) == 1:
+                return OwnerResolution("owner", known_sources[0], ip_tags)
+
+            return parent_decision
+
+        if isinstance(obj, (NBVMInterface, NBInterface)):
+            parent = obj.data.get("virtual_machine") if isinstance(obj, NBVMInterface) else obj.data.get("device")
+            if parent is not None:
+                return self._resolve_parent_owner(parent)
+
+        return self._resolve_parent_owner(obj)
+
+    def report_ambiguous_owner(self, obj, decision):
+        if not hasattr(self, "_ambiguous_owner_reports"):
+            self._ambiguous_owner_reports = set()
+
+        if id(obj) in self._ambiguous_owner_reports:
+            return
+
+        self._ambiguous_owner_reports.add(id(obj))
+        tag_list = ", ".join(decision.tags) if decision.tags else "(no source tag)"
+        log.warning(f"Unresolved source metadata for {obj.name} '{obj.get_display_name()}'; "
+                    f"tags: {tag_list}. Left the current record unchanged.")
+
+    def assignment_hold(self, ip, acting_source_tag=None):
+        """
+        Why the current assignment of ip must stay where it is.
+
+        'unknown' means the source responsible for that assignment recorded an
+        unknown guest-IP observation. A VM with no Source: tag can still record
+        that observation when it is found this run. 'undetermined' means that
+        source cannot be identified. None means a move may follow the existing rules.
+        """
+
+        configured = set(self._configured_sources_by_tag())
+        if acting_source_tag:
+            configured.add(acting_source_tag)
+
+        def classify(tags):
+            ordered = []
+            for tag in tags:
+                if tag not in ordered:
+                    ordered.append(tag)
+            unknown = [tag for tag in ordered if tag not in configured]
+            known = [tag for tag in ordered if tag in configured]
+            return unknown, known
+
+        ip_unknown, ip_known = classify(self._source_tag_names(ip))
+        parent = ip.get_device_vm()
+        observations = getattr(parent, "guest_ip_observations", None) or {} if parent is not None else {}
+
+        if ip_unknown or len(ip_known) > 1:
+            return "undetermined"
+
+        if len(ip_known) == 1:
+            if observations.get(ip_known[0]) == "unknown":
+                return "unknown"
+            return None
+
+        if parent is None:
+            return None
+
+        parent_unknown, parent_known = classify(self._source_tag_names(parent))
+        if parent_unknown:
+            return "undetermined"
+        if len(parent_known) > 1:
+            if any(observations.get(tag) == "unknown" for tag in parent_known):
+                return "undetermined"
+            return None
+        if len(parent_known) == 1 and observations.get(parent_known[0]) == "unknown":
+            return "unknown"
+
+        # The address and the VM have no Source: tag. The observation recorded
+        # when the VM was found this run is still the evidence for this assignment.
+        if not parent_known and not parent_unknown and observations:
+            if len(observations) != 1:
+                return "undetermined"
+            state = next(iter(observations.values()))
+            if state == "unknown":
+                return "unknown"
+            if state != "complete":
+                return "undetermined"
+        return None
+
+    def _owner_observation_is_unknown(self, parent):
+        if parent is None:
+            return False
+
+        observations = getattr(parent, "guest_ip_observations", None) or {}
+        if "unknown" not in observations.values():
+            return False
+
+        decision = self._resolve_parent_owner(parent)
+        if decision.status == "owner" and decision.source is not None:
+            return observations.get(decision.source.source_tag) == "unknown"
+        if decision.status == "shared":
+            return any(observations.get(source.source_tag) == "unknown" for source in decision.sources)
+        return True
+
+    def _has_tag(self, obj, tag_name):
+        return tag_name in obj.get_tags()
+
+    def retention_reason(self, obj, _seen=None):
+        """
+        Why orphaning and pruning must leave obj alone this run.
+
+        'unknown' is a guest-IP observation and clears a stale orphan tag.
+        'ambiguous' and 'incomplete' block a new orphan tag and any delete.
+        None means the ordinary lifecycle applies.
+
+        Returns
+        -------
+        str, None
+        """
+
+        if obj is None:
+            return None
+
+        if _seen is None:
+            _seen = set()
+        if id(obj) in _seen:
+            return None
+        _seen.add(id(obj))
+
+        if not isinstance(obj, (NBVM, NBDevice, NBIPAddress, NBVMInterface, NBInterface)):
+            return None
+
+        if getattr(obj, "unverified_retain", False) is True:
+            return "unknown"
+
+        if isinstance(obj, NBIPAddress):
+            hold = self.assignment_hold(obj)
+            if hold == "unknown":
+                return "unknown"
+            if hold == "undetermined":
+                self.report_ambiguous_owner(obj, OwnerResolution("undetermined", None, self._source_tag_names(obj)))
+                return "ambiguous"
+
+        if isinstance(obj, NBIPAddress) and self.has_unresolved_claim(obj):
+            return "unresolved"
+
+        if getattr(obj, "seen_this_run", False) is True:
+            return "seen"
+
+        if isinstance(obj, (NBVMInterface, NBInterface)):
+            parent = obj.data.get("virtual_machine") if isinstance(obj, NBVMInterface) else obj.data.get("device")
+            if self._owner_observation_is_unknown(parent):
+                for ip in obj.get_ip_addresses():
+                    if ip.get_device_vm() is parent:
+                        return "unknown"
+            for ip in obj.get_ip_addresses():
+                reason = self.retention_reason(ip, _seen)
+                if reason is not None:
+                    return reason
+
+        decision = self.resolve_owner(obj)
+        if decision.status == "ambiguous":
+            self.report_ambiguous_owner(obj, decision)
+            return "ambiguous"
+
+        if decision.status == "owner" and decision.source is not None and \
+                getattr(decision.source, "inventory_complete", True) is False:
+            return "incomplete"
+
+        if decision.status == "shared" and any(getattr(source, "inventory_complete", True) is False
+                                                for source in decision.sources):
+            return "incomplete"
+
+        # Normal orphaning removes the source tag. A later incomplete listing
+        # then cannot tell which source owned the object, so it must not treat
+        # that earlier absence as confirmed and delete it. A following complete
+        # listing can prune it again.
+        if decision.status == "none" and self._has_tag(obj, f"{primary_tag_name}: Orphaned") and \
+                self._any_source_listing_incomplete():
+            return "incomplete"
+
+        if isinstance(obj, NBIPAddress) and decision.status == "none" and \
+                not self._source_tag_names(obj) and self._has_tag(obj, primary_tag_name) and \
+                isinstance(obj.get_device_vm(), NBVM) and obj.get_device_vm().source is None and \
+                self._has_tag(obj.get_device_vm(), primary_tag_name):
+            if self._any_enabled_vmware_listing_incomplete():
+                return "incomplete"
+            if self._absent_vm_orphan_eligible(obj.get_device_vm()):
+                return None
+
+        if decision.status == "none" and isinstance(obj, (NBVM, NBDevice, NBIPAddress)) and \
+                self._has_tag(obj, primary_tag_name) and \
+                self._has_tag(obj, f"{primary_tag_name}: Orphaned") is False:
+            self.report_ambiguous_owner(obj, decision)
+            return "ambiguous"
+
+        return None
+
+    def _absent_vm_orphan_eligible(self, vm):
+        """
+        Whether vm is an absent sync-managed VM that already carries the orphan
+        tag, or would receive it from the same rules as VM tagging.
+
+        Computed directly. An orphan tag this pass has not written yet is not
+        required, and a retention result of None is not eligibility on its own.
+        """
+
+        if not isinstance(vm, NBVM):
+            return False
+        if vm.source is not None:
+            return False
+        if not self._has_tag(vm, primary_tag_name):
+            return False
+        if self._tagged_by_disabled_source(vm):
+            return False
+        if getattr(vm, "prune", False) is not True:
+            return False
+        if self.retention_reason(vm) is not None:
+            return False
+        source_tags = self._source_tag_names(vm)
+        if not source_tags and self._ignore_unknown_source_pruning():
+            return False
+        if self._has_tag(vm, f"{primary_tag_name}: Orphaned"):
+            return True
+        return True
+
+    def _tagged_by_disabled_source(self, obj):
+        disabled = []
+        for source in self.source_list:
+            if grab(source, "settings.enabled", fallback=True) is False and getattr(source, "source_tag", None):
+                disabled.append(source.source_tag)
+        return bool(set(obj.get_tags()).intersection(disabled))
+
+    def _ignore_unknown_source_pruning(self):
+        handler = getattr(self, "_tagging_handler", None)
+        if handler is None:
+            return False
+        return grab(handler, "settings.ignore_unknown_source_object_pruning", fallback=False) is True
+
+    def _any_enabled_vmware_listing_incomplete(self):
+        for source in self.source_list:
+            if grab(source, "settings.enabled", fallback=True) is False:
+                continue
+            if getattr(source, "source_type", None) != "vmware":
+                continue
+            if getattr(source, "inventory_complete", True) is False:
+                return True
+        return False
+
+    def note_unresolved_claim(self, ip, interface):
+        """Remember that this interface reported ip and the run did not assign it there."""
+
+        if ip is None or interface is None:
+            return
+        claims = getattr(ip, "unresolved_claims", None)
+        if not isinstance(claims, dict):
+            claims = {}
+            ip.unresolved_claims = claims
+        claims[id(interface)] = interface
+
+    def resolve_unresolved_claim(self, ip, interface):
+        """Drop only this interface's skipped claim. Another interface's claim stays."""
+
+        claims = getattr(ip, "unresolved_claims", None)
+        if isinstance(claims, dict) and interface is not None:
+            claims.pop(id(interface), None)
+
+    def has_unresolved_claim(self, ip):
+        claims = getattr(ip, "unresolved_claims", None)
+        return isinstance(claims, dict) and len(claims) > 0
+
+    def unresolved_claims_except(self, ip, interface):
+        """Claims recorded for interfaces other than interface."""
+
+        claims = getattr(ip, "unresolved_claims", None)
+        if not isinstance(claims, dict):
+            return []
+        return [item for item in claims.values() if item is not interface]
+
+    def _any_source_listing_incomplete(self):
+        for source in self.source_list:
+            if grab(source, "settings.enabled", fallback=True) is False:
+                continue
+            if getattr(source, "inventory_complete", True) is False:
+                return True
+        return False
+
+    def _keep_current_assignment(self, ip):
+        """Drop a queued unassignment and the primary clear that went with it."""
+
+        for attribute in ("assigned_object_id", "assigned_object_type"):
+            if attribute in ip.unset_items:
+                ip.unset_items.remove(attribute)
+        device = ip.get_device_vm()
+        if device is None:
+            return
+        for version in (4, 6):
+            attribute = f"primary_ip{version}"
+            if grab(device, f"data.{attribute}") is ip and attribute in device.unset_items:
+                device.unset_items.remove(attribute)
+
+    def _pending_removal_still_applies(self, ip, removal):
+        """A later confirmation of this assignment by the same source retires the hold."""
+
+        source = removal.get("source")
+        interface = removal.get("interface")
+        if source is None or interface is None or ip.get_interface() is not interface:
+            return False
+        sequence = removal.get("sequence", 0)
+        tag = getattr(source, "source_tag", None)
+        for mark in getattr(ip, "assignment_confirmations", None) or []:
+            if mark.get("interface") is not interface or mark.get("sequence", 0) <= sequence:
+                continue
+            if mark.get("source") is source or (tag is not None and mark.get("tag") == tag):
+                return False
+        device = removal.get("device")
+        if device is None:
+            device = interface.data.get("virtual_machine") or interface.data.get("device")
+        return source.may_remove_ip_assignments(device, ip=ip) is True
+
+    def _apply_pending_ip_removal(self, ip, removals):
+        applicable = [item for item in removals if self._pending_removal_still_applies(ip, item)]
+        if not applicable:
+            return
+        removal = applicable[-1]
+        source = removal.get("source")
+        interface = removal.get("interface")
+        log.info(f"{ip.name} is no longer assigned to {interface.get_display_name()} and "
+                 f"therefore removed from this interface")
+        source.release_ip_retention(ip)
+        ip.remove_interface_association()
+
+    def settle_deferred_ip_moves(self):
+        """
+        Resolve every competing report from this run, then the old assignment.
+
+        A VMware move is not applied while another interface may still report
+        the same address. A skipped report is one of those reports: it stays an
+        unresolved claim, and a deferred request does not win while that claim
+        remains. The old interface's removal is held with those reports. One
+        eligible interface receives the address. Several eligible interfaces,
+        or one eligible interface and a remaining claim, leave the current
+        assignment and its primary in place, with nothing queued for the write.
+        """
+
+        for ip in list(self.get_all_items(NBIPAddress)):
+            requests = getattr(ip, "deferred_moves", None)
+            removals = getattr(ip, "pending_removals", None)
+            if not isinstance(requests, list):
+                requests = []
+            if not isinstance(removals, list):
+                removals = []
+            if len(requests) == 0 and len(removals) == 0:
+                continue
+
+            grouped = []
+            for request in requests:
+                interface = request.get("interface")
+                if interface is None:
+                    continue
+                group = next((item for item in grouped if item["interface"] is interface), None)
+                if group is None:
+                    grouped.append({"interface": interface, "requests": [request]})
+                else:
+                    group["requests"].append(request)
+
+            try:
+                self._settle_one_ip(ip, requests, removals, grouped)
+            finally:
+                # Clear after the decision. Move eligibility reads the held
+                # removal, and clearing it first makes the earlier confirmation
+                # look current again.
+                ip.deferred_moves = None
+                ip.pending_removals = None
+
+    def _settle_one_ip(self, ip, requests, removals, grouped):
+        reporter = next((request.get("source") for request in requests if request.get("source") is not None), None)
+        if len(grouped) > 1:
+            for group in grouped:
+                self.note_unresolved_claim(ip, group["interface"])
+            if reporter is not None:
+                reporter._report_left_assignment(ip, "more than one interface requested it")
+            else:
+                log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: "
+                            f"more than one interface requested it.")
+            self._keep_current_assignment(ip)
+            return
+
+        if len(grouped) == 0:
+            # A skipped report is not an empty one. Do not unassign the address,
+            # or clear its primary, while another interface still claims it.
+            if self.unresolved_claims_except(ip, ip.get_interface()):
+                self._keep_current_assignment(ip)
+                return
+            self._apply_pending_ip_removal(ip, removals)
+            return
+
+        group = grouped[0]
+        request = group["requests"][0]
+        source = request.get("source")
+        interface = group["interface"]
+        if source is None:
+            self._keep_current_assignment(ip)
+            return
+
+        device = request.get("device")
+        if device is None:
+            device = interface.data.get("virtual_machine") or interface.data.get("device")
+        decision = source._may_move_assigned_ip(ip, device, settle=True)
+        if decision != "allow":
+            # The report did not become an assignment. Keep it visible after
+            # deferred_moves is cleared so tagging does not treat it as unclaimed.
+            self.note_unresolved_claim(ip, interface)
+            self._keep_current_assignment(ip)
+            if decision == "defer":
+                source._report_left_assignment(
+                    ip, "its current source has not reported whether the address is still assigned")
+            return
+
+        # This report is resolved. A different interface's skipped claim is not,
+        # and it is not permission to take the address from its current assignment.
+        if self.unresolved_claims_except(ip, interface):
+            self.resolve_unresolved_claim(ip, interface)
+            self._keep_current_assignment(ip)
+            source._report_left_assignment(ip, "another interface still has an unresolved claim")
+            return
+
+        # The source that held the address has now omitted it, so its
+        # earlier unverified mark no longer applies. The move replaces the
+        # held removal; that removal must not also be written.
+        tag = source._responsible_guest_tag(ip)
+        retained = getattr(ip, "retained_by", None)
+        if isinstance(retained, set) and tag:
+            retained.discard(tag)
+            ip.unverified_retain = bool(retained)
+        source.release_ip_retention(ip)
+        ip.update(data={
+            "address": request.get("address") or grab(ip, "data.address"),
+            "assigned_object_id": interface,
+        }, source=source)
+        self.resolve_unresolved_claim(ip, interface)
+
+        version = next((item.get("primary_version") for item in group["requests"]
+                        if item.get("primary_version") in (4, 6)), None)
+        primary_source = next((item.get("source") for item in group["requests"]
+                               if item.get("primary_version") in (4, 6) and item.get("source") is not None),
+                              source)
+        if version is not None and primary_source is not None:
+            primary_source.assign_primary_ip(ip.get_device_vm() or device, ip, version)
+
     def tag_all_the_things(self, netbox_handler):
         """
         Tag all items which have been created/updated/inherited by this program
@@ -833,9 +1377,17 @@ class NetBoxInventory:
             the object instance of a NetBox handler to get the tag names from
         """
 
+        self._tagging_handler = netbox_handler
         all_sources_tags = [x.source_tag for x in self.source_list]
         disabled_sources_tags = \
             [x.source_tag for x in self.source_list if grab(x, "settings.enabled", fallback=False) is False]
+
+        # Decide retention before any source tag is removed. Prune reads the same
+        # flag, including when a later tag write does not succeed.
+        for object_type in NetBoxObject.__subclasses__():
+            for this_object in self.get_all_items(object_type):
+                this_object.retention_reason = self.retention_reason(this_object)
+                this_object.retain_from_prune = this_object.retention_reason is not None
 
         for object_type in NetBoxObject.__subclasses__():
 
@@ -845,6 +1397,12 @@ class NetBoxInventory:
 
                 # if object was found in source
                 if this_object.source is not None:
+                    # source or seen_this_run is not a completed move while any
+                    # interface's claim is still unresolved. Resolving one
+                    # interface does not retire a different one.
+                    if isinstance(this_object, NBIPAddress) and self.has_unresolved_claim(this_object):
+                        continue
+
                     # skip tagging of VLANs if vlan sync is disabled
                     if object_type == NBVLAN and \
                           grab(this_object.source, "settings.disable_vlan_sync", fallback=False) is True:
@@ -880,6 +1438,15 @@ class NetBoxInventory:
                     if netbox_handler.primary_tag not in this_object_tags:
                         continue
 
+                    # Retention is decided from the source tags still stored on the
+                    # object. Removing those tags first makes the next run, loaded
+                    # from NetBox, forget why the object was protected.
+                    if getattr(this_object, "retain_from_prune", False) is True:
+                        if this_object.retention_reason in ("unknown", "seen") and \
+                                netbox_handler.orphaned_tag in this_object.get_tags():
+                            this_object.remove_tags(netbox_handler.orphaned_tag)
+                        continue
+
                     if bool(set(this_object_tags).intersection(all_sources_tags)) is True:
                         for source_tag in all_sources_tags:
                             this_object.remove_tags(source_tag)
@@ -891,24 +1458,36 @@ class NetBoxInventory:
                         this_object.remove_tags(netbox_handler.orphaned_tag)
                         continue
 
-                    # don't mark IPs as orphaned if vm/device is only switched off
+                    # A VM that was seen this run and is not active is powered off.
+                    # An absent VM is not. decommissioning alone is not the distinction:
+                    # that status can be set by hand, and the sync also sets it when
+                    # it orphans a VM that is gone.
                     if isinstance(this_object, NBIPAddress):
                         device_vm_object = this_object.get_device_vm()
 
-                        if device_vm_object is not None and \
+                        if isinstance(device_vm_object, NBVM) and device_vm_object.source is not None and \
                                 grab(device_vm_object, "data.status") is not None and \
                                 "active" not in str(grab(device_vm_object, "data.status")):
-
                             if netbox_handler.orphaned_tag in this_object.get_tags():
                                 this_object.remove_tags(netbox_handler.orphaned_tag)
-
                             log.debug2(f"{device_vm_object.name} '{device_vm_object.get_display_name()}' has IP "
                                        f"'{this_object.get_display_name()}' assigned but is in status "
                                        f"{grab(device_vm_object, 'data.status')}. "
                                        f"IP address will not marked as orphaned.")
                             continue
 
+                        if device_vm_object is not None and not isinstance(device_vm_object, NBVM) and \
+                                grab(device_vm_object, "data.status") is not None and \
+                                "active" not in str(grab(device_vm_object, "data.status")):
+                            if netbox_handler.orphaned_tag in this_object.get_tags():
+                                this_object.remove_tags(netbox_handler.orphaned_tag)
+                            continue
+
+                    already_orphaned = netbox_handler.orphaned_tag in this_object.get_tags()
                     this_object.add_tags(netbox_handler.orphaned_tag)
+                    if already_orphaned is False:
+                        this_object.orphan_tag_added_this_run = True
+                        this_object.orphan_tag_last_updated_at_add = grab(this_object, "data.last_updated")
 
                     # set orphaned status on devices/VMs if configured
                     # and pruning is enabled (if a source was unavailable,

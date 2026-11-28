@@ -117,6 +117,10 @@ def main():
         log.debug(f"Retrieving data from source '{source.name}'")
         source.apply()
 
+    # A move requested before the previous assignment was read is decided here,
+    # after every source has reported. Order no longer decides the result.
+    inventory.settle_deferred_ip_moves()
+
     # add/remove tags to/from all inventory items
     inventory.tag_all_the_things(nb_handler)
 

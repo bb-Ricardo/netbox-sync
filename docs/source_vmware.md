@@ -120,6 +120,43 @@ synced with `sync_vm_dummy_interfaces = True`, or for the VMs whose name matches
 
 **Note:**<br>
 IP address information can only be extracted if guest tools are installed and running.
+When Tools are not running, or the guest NIC list is missing or empty, existing NetBox
+IP assignments and the primary IP are retained and are not orphaned from that run. The
+sync logs `VMware guest IP data unavailable for '{name}'; existing NetBox IP assignments retained`.
+Cached addresses in `guest.net` are not treated as a fresh verification.
+
+When Tools are running and `guest.net` lists a NIC with no addresses, that empty list is
+the removal signal. The removal waits until the end of the run. A later report of the
+address on the same NIC drops it, and a later empty report drops an earlier confirmation.
+Exactly one other interface may receive the address; the primary IP then follows
+`set_primary_ip` and the old primary is cleared. More than one requesting interface leaves
+the address and its primary where they are. A skipped report that is still unresolved
+counts as a requesting interface, so the address is not moved while that claim remains.
+Resolving one interface clears only that claim. An address still on an absent VM with
+no `Source:` tag has nothing to confirm that it left, so a new VMware claim waits until
+every report is in. One claimant may take it. Another claimant, or a VMware listing that
+did not finish, leaves the address and its primary where they are. If that VM is found
+later in the same run and Tools are unavailable, the unknown observation keeps the
+address and its primary. Reporting the VM first does the same. Source order does not
+choose the winner.
+This is still a policy choice. It does not claim that Tools can never return a
+temporarily incomplete list for one NIC.
+
+A VM that is absent from a finished vCenter listing is not given an unknown observation.
+It keeps the ordinary orphan and prune lifecycle. An address still assigned to that VM
+is orphaned with it, including an address that no longer has its own `Source:` tag.
+An address that moved to a VM seen this run stays there. A claim that was skipped, or
+that more than one interface still holds, is not treated as unclaimed. A VM that is
+only powered off keeps the existing protection. `decommissioning` alone does not mean
+the VM was orphaned. phpIPAM tags stay until the record is deleted.
+
+The address does not necessarily spend `prune_delay_in_days` orphaned on its own. It
+may be deleted earlier through its interface when the parent VM has already met the
+VM's pruning delay. A failed orphan-tag write skips that direct IP prune. It does not
+stop an already-due parent from deleting its interface, which can delete the assigned IP. If the vCenter session or the VM listing does not finish, existing
+VMs from that source are left unchanged. A source-less address is also kept when any
+enabled VMware listing failed. A silently incomplete but successful-looking response
+can remain invisible; the delay reduces that risk and does not remove it.
 
 #### 5b. Resolve the tenant of a VM
 

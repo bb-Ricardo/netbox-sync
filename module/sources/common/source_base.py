@@ -29,6 +29,9 @@ class SourceBase:
     source_tag = None
     settings = None
     init_successful = False
+    # False when this source did not finish a complete listing. Orphaning and
+    # pruning then keep the records that belong to it.
+    inventory_complete = True
     name = None
 
     def ip_address_objects_for(self, address: str) -> list:
@@ -45,6 +48,453 @@ class SourceBase:
 
     def can_reassign_stale_ip(self, ip, device_vm_object):
         return False
+
+    def retain_existing_ip(self, ip):
+        """
+        Remember that this source could not verify ip. Another source must not
+        clear that mark by writing a shared flag.
+        """
+
+        retained = getattr(ip, "retained_by", None)
+        if not isinstance(retained, set):
+            retained = set()
+            ip.retained_by = retained
+        if self.source_tag:
+            retained.add(self.source_tag)
+        ip.unverified_retain = True
+
+    def release_ip_retention(self, ip):
+        """Drop only this source's unverified mark."""
+
+        retained = getattr(ip, "retained_by", None)
+        if isinstance(retained, set) and self.source_tag:
+            retained.discard(self.source_tag)
+        else:
+            retained = set()
+            ip.retained_by = retained
+        ip.unverified_retain = bool(retained)
+
+    def may_remove_ip_assignments(self, device_object, ip=None):
+        """
+        Whether this source may unassign one IP address of device_object.
+
+        The owning source is taken from source-tag metadata. An unknown guest-IP
+        observation from that owner blocks removal. Another source cannot clear
+        that condition, and a missing or conflicting owner fails safe. An IP
+        whose source tag disagrees with its parent is conflicting metadata.
+        """
+
+        if device_object is None or self.inventory is None:
+            return True
+
+        observations = getattr(device_object, "guest_ip_observations", None) or {}
+        if observations.get(self.source_tag) == "unknown":
+            return False
+
+        if ip is None or ip.get_interface() is None:
+            return True
+
+        hold = self.inventory.assignment_hold(ip, acting_source_tag=self.source_tag)
+        if hold == "unknown":
+            return False
+        if hold == "undetermined":
+            self._report_left_assignment(ip, "the source responsible for its current assignment cannot be determined")
+            return False
+
+        foreign_tags = [tag for tag in self._source_tags(ip) if tag != self.source_tag]
+        if foreign_tags:
+            self._report_left_assignment(ip, "it is tagged for a different source")
+            return False
+
+        if not self._source_tags(ip):
+            parent = ip.get_device_vm()
+            parent_tags = self._source_tags(parent) if parent is not None else []
+            synced = primary_tag_name in ip.get_tags()
+            # A single parent source may remove the address only when it is the
+            # source acting now. Another source must not use that fallback.
+            if len(parent_tags) == 1 and parent_tags[0] != self.source_tag:
+                self._report_left_assignment(ip, "only its parent source can remove it")
+                return False
+            # A synced address with no source tag and no single parent source cannot
+            # be removed safely. An address this run just created has neither, and an
+            # authoritative empty NIC may still drop it.
+            if synced and len(parent_tags) != 1:
+                self._report_left_assignment(
+                    ip, "the source responsible for its current assignment cannot be determined")
+                return False
+
+        return True
+
+    def _source_tags(self, obj):
+        tags = []
+        for tag in self.inventory._source_tag_names(obj):
+            if tag not in tags:
+                tags.append(tag)
+        return tags
+
+    def _source_may_refresh_ip(self, ip):
+        """This source may write the IP only when that does not take it from another source."""
+
+        tags = self._source_tags(ip)
+        if not tags:
+            return True
+        return all(tag == self.source_tag for tag in tags)
+
+    def _may_claim_unassigned_ip(self, ip, device_object, vrf):
+        """
+        Reuse one unassigned record. Duplicate matches, conflicting tags, a
+        non-unique role, or an unknown observation are not a claim.
+        """
+
+        observations = getattr(device_object, "guest_ip_observations", None) or {}
+        if observations.get(self.source_tag) == "unknown":
+            self._report_left_assignment(ip, "the reporting guest IP observation is unknown")
+            return False
+
+        if ip.get_role() in self.non_unique_ip_roles:
+            self._report_left_assignment(ip, f"its role '{ip.get_role()}' can exist on more than one interface")
+            return False
+
+        tags = self._source_tags(ip)
+        configured = set(self.inventory._configured_sources_by_tag())
+        configured.add(self.source_tag)
+        unknown = [tag for tag in tags if tag not in configured]
+        known = [tag for tag in tags if tag in configured and tag != self.source_tag]
+        if unknown or known:
+            self._report_left_assignment(ip, "its source tags conflict with this report")
+            return False
+
+        address = grab(ip, "data.address", fallback="").split("/")[0]
+        matches = []
+        for other in self.ip_address_objects_for(address):
+            if not grab(other, "data.address", fallback="").startswith(f"{address}/"):
+                continue
+            if vrf != grab(other, "data.vrf"):
+                continue
+            # Non-unique roles are allowed to repeat and do not compete for this claim.
+            if other.get_role() in self.non_unique_ip_roles:
+                continue
+            matches.append(other)
+        if len(matches) != 1 or matches[0] is not ip:
+            self._report_left_assignment(ip, "more than one record matches this address in the same VRF")
+            return False
+
+        return True
+
+    def _may_move_assigned_ip(self, ip, device_object, settle=False):
+        """
+        Move only after the source that holds the IP has reported, trustworthily,
+        that the old assignment no longer has it.
+
+        A VMware-governed move is recorded for the whole run even when that
+        report is already complete. An address on an absent VM with no Source:
+        tag has no such report to wait for, so a new VMware claim waits as well.
+        Settlement then sees every claimant, so the first one to run does not win.
+        """
+
+        observations = getattr(device_object, "guest_ip_observations", None) or {}
+        if observations.get(self.source_tag) == "unknown":
+            self._report_left_assignment(ip, "the reporting guest IP observation is unknown")
+            return "reject"
+
+        hold = self.inventory.assignment_hold(ip, acting_source_tag=self.source_tag)
+        if hold == "unknown":
+            self._report_left_assignment(ip, "guest IP data for the source that holds it is unavailable")
+            return "reject"
+        if hold == "undetermined":
+            self._report_left_assignment(ip, "the source responsible for its current assignment cannot be determined")
+            return "reject"
+        state = self._guest_move_state(ip, target_device=device_object)
+        if state == "pending":
+            return "defer"
+        if state == "kept" and settle is False and self._responsible_guest_tag(ip) is not None:
+            # Record the request. A later empty report from the current NIC can
+            # still make it eligible; settlement reads the latest report.
+            return "defer"
+        if state == "kept":
+            self._report_left_assignment(ip, "its current source still reports the address")
+            return "reject"
+        if settle is False and self._responsible_guest_tag(ip) is not None:
+            return "defer"
+        # No Source: tag identifies the old VM. A new VMware claim waits until
+        # every report is in, including a later pass that finds the VM with
+        # Tools unavailable. That observation is read by assignment_hold.
+        if self._tagless_vm_assignment(ip):
+            if settle is False:
+                return "defer"
+            if self.inventory._any_enabled_vmware_listing_incomplete():
+                self._report_left_assignment(ip, "a VMware listing did not finish")
+                return "reject"
+        return "allow"
+
+    def _tagless_vm_assignment(self, ip):
+        """
+        True when this VMware source wants an address that is on a VM, and
+        neither the address nor that VM has a Source: tag.
+        """
+
+        if getattr(self, "source_type", None) != "vmware":
+            return False
+        parent = ip.get_device_vm()
+        if not isinstance(parent, NBVM):
+            return False
+        if self._source_tags(ip) or self._source_tags(parent):
+            return False
+        return True
+
+    def _responsible_guest_tag(self, ip):
+        """Source tag that must report on the assignment currently holding ip, if that source tracks guest data."""
+
+        configured = self.inventory._configured_sources_by_tag()
+        tags = self._source_tags(ip)
+        if len(tags) == 1 and tags[0] in configured and getattr(configured[tags[0]], "source_type", None) == "vmware":
+            return tags[0]
+        if tags:
+            return None
+        parent = ip.get_device_vm()
+        parent_tags = self._source_tags(parent) if parent is not None else []
+        if len(parent_tags) == 1 and parent_tags[0] in configured and \
+                getattr(configured[parent_tags[0]], "source_type", None) == "vmware":
+            return parent_tags[0]
+        return None
+
+    def _guest_move_state(self, ip, target_device=None):
+        """
+        'pending' until the responsible VMware source reports.
+        'kept' when that report is complete and this address is still on the current assignment.
+        'allow' when there is no guest-observation source, or the complete report omitted the address.
+        """
+
+        tag = self._responsible_guest_tag(ip)
+        parent = ip.get_device_vm()
+        observations = getattr(parent, "guest_ip_observations", None) or {} if parent is not None else {}
+        # No Source: tag. One current-run observation is the report for this VM.
+        if tag is None and isinstance(parent, NBVM) and not self._source_tags(ip) and \
+                not self._source_tags(parent) and len(observations) == 1:
+            tag = next(iter(observations))
+        if tag is None:
+            return "allow"
+        state = observations.get(tag)
+        # Missing and unknown are not a complete report. Unknown is also rejected
+        # by assignment_hold; a missing key stays pending so source order can
+        # still supply the report.
+        if state != "complete":
+            return "pending"
+        # confirmed_by keeps every confirmation from this run. Only the latest
+        # report for this interface counts: a later empty NIC supersedes it.
+        latest = self._latest_assignment_report(ip, tag)
+        if latest == "present":
+            return "kept"
+        if latest == "absent":
+            return "allow"
+        reported = (getattr(parent, "guest_reported_ips", None) or {}).get(tag) if parent is not None else None
+        # A complete flag with no address list is not evidence this address is gone.
+        if reported is None:
+            return "pending"
+        address = grab(ip, "data.address", fallback="").split("/")[0]
+        if address in reported and target_device is not parent:
+            return "kept"
+        return "allow"
+
+    def _latest_assignment_report(self, ip, tag):
+        """
+        'present' or 'absent' for the newest sequenced report of ip's current
+        interface by tag, or None when this run has not sequenced one.
+        """
+
+        interface = ip.get_interface()
+        latest_sequence = -1
+        latest = None
+        for mark in getattr(ip, "assignment_confirmations", None) or []:
+            if mark.get("interface") is not interface:
+                continue
+            mark_tag = mark.get("tag") or getattr(mark.get("source"), "source_tag", None)
+            if mark_tag != tag:
+                continue
+            sequence = mark.get("sequence", 0)
+            if sequence >= latest_sequence:
+                latest_sequence = sequence
+                latest = "present"
+        for item in getattr(ip, "pending_removals", None) or []:
+            if item.get("interface") is not interface:
+                continue
+            if getattr(item.get("source"), "source_tag", None) != tag:
+                continue
+            sequence = item.get("sequence", 0)
+            if sequence >= latest_sequence:
+                latest_sequence = sequence
+                latest = "absent"
+        if latest is None and tag in (getattr(ip, "confirmed_by", None) or set()):
+            return "present"
+        return latest
+
+    def _next_report_sequence(self, ip):
+        sequence = getattr(ip, "report_sequence", 0) + 1
+        ip.report_sequence = sequence
+        return sequence
+
+    def _defer_guest_removal(self, ip, interface_object, device_object):
+        """
+        Hold an authoritative removal of a VMware-owned address until every
+        claimant in this run has been seen. The unset is not queued yet.
+        """
+
+        if self._responsible_guest_tag(ip) is None:
+            return False
+        pending = getattr(ip, "pending_removals", None)
+        if not isinstance(pending, list):
+            pending = []
+            ip.pending_removals = pending
+        sequence = self._next_report_sequence(ip)
+        for item in pending:
+            if item.get("interface") is interface_object and self._same_source(item.get("source")):
+                item["device"] = device_object
+                item["sequence"] = sequence
+                return True
+        pending.append({
+            "source": self,
+            "device": device_object,
+            "interface": interface_object,
+            "sequence": sequence,
+        })
+        log.debug(f"Deferred removing IP address '{ip.get_display_name()}' from "
+                  f"'{interface_object.get_display_name()}' until every report of this address is known.")
+        return True
+
+    def _same_source(self, other):
+        if other is self:
+            return True
+        return getattr(other, "source_tag", None) == self.source_tag and self.source_tag is not None
+
+    def _note_assignment_confirmed(self, ip, interface_object):
+        """
+        This source reports the address on its current interface.
+
+        That supersedes an earlier held removal of the same assignment. A later
+        empty report records a new removal after this confirmation.
+        """
+
+        responsible = self._responsible_guest_tag(ip)
+        if responsible not in (None, self.source_tag):
+            return
+        sequence = self._next_report_sequence(ip)
+        marks = getattr(ip, "assignment_confirmations", None)
+        if not isinstance(marks, list):
+            marks = []
+            ip.assignment_confirmations = marks
+        marks.append({
+            "interface": interface_object,
+            "source": self,
+            "tag": self.source_tag,
+            "sequence": sequence,
+        })
+        pending = getattr(ip, "pending_removals", None)
+        if not isinstance(pending, list):
+            return
+        ip.pending_removals = [
+            item for item in pending
+            if not (item.get("interface") is interface_object and self._same_source(item.get("source")))
+        ]
+
+    def _move_waits_for_other_claims(self, ip, interface_object):
+        """True when some other interface already claims ip and this move must wait."""
+
+        if self.inventory.unresolved_claims_except(ip, interface_object):
+            return True
+        for request in getattr(ip, "deferred_moves", None) or []:
+            if request.get("interface") is not interface_object:
+                return True
+        return False
+
+    def _defer_ip_move(self, ip, interface_object, device_object, address):
+        """
+        Remember one request to move ip onto interface_object.
+
+        A second interface is kept as a competing request. The same interface
+        reporting again refreshes its request and does not become a second claimant.
+        """
+
+        requests = getattr(ip, "deferred_moves", None)
+        if not isinstance(requests, list):
+            requests = []
+            ip.deferred_moves = requests
+        for request in requests:
+            if request.get("interface") is interface_object:
+                request["source"] = self
+                request["device"] = device_object
+                request["address"] = address
+                return
+        requests.append({
+            "interface": interface_object,
+            "device": device_object,
+            "source": self,
+            "address": address,
+            "primary_version": None,
+        })
+        log.debug(f"Deferred moving IP address '{ip.get_display_name()}' "
+                  f"until every report of this address in this run is known.")
+
+    def note_deferred_primary(self, device, primary_address, version):
+        """
+        Remember that a deferred move onto device was this device's primary address.
+
+        The address is not assigned yet, so the primary cannot be written now.
+        Settlement applies it with assign_primary_ip once the move is allowed.
+        """
+
+        if device is None or primary_address is None or version not in (4, 6):
+            return
+        try:
+            wanted = ip_interface(primary_address)
+        except (ValueError, TypeError):
+            return
+        for ip in self.inventory.get_all_items(NBIPAddress):
+            for request in getattr(ip, "deferred_moves", None) or []:
+                request_device = request.get("device")
+                if request_device is None:
+                    interface = request.get("interface")
+                    if interface is not None:
+                        request_device = grab(interface, "data.virtual_machine") or grab(interface, "data.device")
+                if request_device is not device:
+                    continue
+                try:
+                    reported = ip_interface(request.get("address") or grab(ip, "data.address"))
+                except (ValueError, TypeError):
+                    continue
+                if reported == wanted:
+                    request["primary_version"] = version
+
+    def assign_primary_ip(self, device_object, ip_object, ip_version):
+        """
+        Apply this source's set_primary_ip policy to one address.
+
+        'always' moves the primary off any other device or VM. 'when-undefined'
+        sets it only while this object has none. 'never' leaves it alone.
+        """
+
+        if device_object is None or ip_object is None or ip_version not in (4, 6):
+            return
+        policy = getattr(self.settings, "set_primary_ip", "when-undefined")
+        set_this_primary_ip = False
+        if policy == "always":
+            for object_type in (NBDevice, NBVM):
+                if ip_object.is_new is True:
+                    break
+                for other in self.inventory.get_all_items(object_type):
+                    if other == device_object:
+                        continue
+                    if grab(other, f"data.primary_ip{ip_version}") == ip_object:
+                        other.unset_attribute(f"primary_ip{ip_version}")
+            set_this_primary_ip = True
+        elif policy != "never" and grab(device_object, f"data.primary_ip{ip_version}") is None:
+            set_this_primary_ip = True
+        if set_this_primary_ip is True:
+            log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
+                      f"'{device_object.get_display_name()}'")
+            device_object.update(data={f"primary_ip{ip_version}": ip_object})
+
+    def _report_left_assignment(self, ip, detail):
+        log.warning(f"Left IP address '{ip.get_display_name()}' on its current assignment: {detail}.")
 
     @classmethod
     def implements(cls, source_type):
@@ -731,6 +1181,7 @@ class SourceBase:
                     log.debug(f"Current interface '{current_ip_nic.get_display_name()}' for IP '{ip_object}'"
                               f" is enabled and this one '{interface_object.get_display_name()}' is disabled. "
                               f"IP assignment skipped!")
+                    self.inventory.note_unresolved_claim(ip, interface_object)
                     skip_this_ip = True
                     break
 
@@ -760,11 +1211,45 @@ class SourceBase:
                         log_msg += " IP assignment skipped because it is unclear which one is the correct one!"
 
                     this_log_handler(log_msg)
+                    self.inventory.note_unresolved_claim(ip, interface_object)
                     skip_this_ip = True
                     break
 
             if skip_this_ip is True:
                 continue
+
+            # Seeing an address is not permission to own it or move it.
+            if isinstance(this_ip_object, NBIPAddress):
+                current_nic = this_ip_object.get_interface()
+                if current_nic == interface_object:
+                    this_ip_object.seen_this_run = True
+                    confirmed = getattr(this_ip_object, "confirmed_by", None)
+                    if not isinstance(confirmed, set):
+                        this_ip_object.confirmed_by = set()
+                        confirmed = this_ip_object.confirmed_by
+                    # The source that holds the address has just reported it here.
+                    # That is evidence the assignment still has it, even when this
+                    # source must not take ownership of the record. It also retires
+                    # a removal this source held from an earlier empty report.
+                    confirmed.add(self.source_tag)
+                    self._note_assignment_confirmed(this_ip_object, interface_object)
+                    if not self._source_may_refresh_ip(this_ip_object):
+                        ip_address_objects.append(this_ip_object)
+                        continue
+                elif current_nic is None:
+                    if not self._may_claim_unassigned_ip(this_ip_object, device_object, possible_ip_vrf):
+                        continue
+                else:
+                    move = self._may_move_assigned_ip(this_ip_object, device_object)
+                    if move == "reject":
+                        continue
+                    # An allowed move is still one claimant. Another skipped claim,
+                    # or a move already deferred for a different interface, has to
+                    # be seen at settlement before this address changes hands.
+                    if move == "defer" or self._move_waits_for_other_claims(this_ip_object, interface_object):
+                        self._defer_ip_move(this_ip_object, interface_object, device_object,
+                                            ip_object.compressed)
+                        continue
 
             nic_ip_data = {
                 "address": ip_object.compressed,
@@ -813,14 +1298,17 @@ class SourceBase:
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
+                self.release_ip_retention(this_ip_object)
 
             # update IP address with additional data if not already present
             else:
 
                 log.debug2(f"Found existing NetBox {NBIPAddress.name} object: {this_ip_object.get_display_name()}")
 
+                self.release_ip_retention(this_ip_object)
                 this_ip_object.update(data=nic_ip_data, source=self)
 
+            self.inventory.resolve_unresolved_claim(this_ip_object, nic_ip_data.get("assigned_object_id"))
             ip_address_objects.append(this_ip_object)
 
         # the caller states whether it discovered anything; interface_ips is only its
@@ -838,9 +1326,22 @@ class SourceBase:
                       f"keeping the addresses currently assigned in NetBox")
             skip_ip_removal = True
 
+        # An unknown observation, or a source that says it did not discover host
+        # addresses, keeps the assignments it already has. Leave source unset so
+        # this is not recorded as a fresh discovery.
+        if interface_object is not None and (skip_ip_handling is True or skip_ip_removal is True):
+            for retained_ip in interface_object.get_ip_addresses():
+                self.retain_existing_ip(retained_ip)
+
         for current_ip in interface_object.get_ip_addresses():
 
             if skip_ip_handling is True or skip_ip_removal is True:
+                continue
+
+            # A source that does not own this VM must not unassign an address, and
+            # neither may the owner while its own guest-IP observation is unknown.
+            # The check is by source identity, so processing order does not matter.
+            if self.may_remove_ip_assignments(device_object, ip=current_ip) is False:
                 continue
 
             current_ip_role = current_ip.get_role()
@@ -858,8 +1359,12 @@ class SourceBase:
                               f"NOT removing it from this interface")
                     continue
 
+                if self._defer_guest_removal(current_ip, interface_object, device_object):
+                    continue
+
                 log.info(f"{current_ip.name} is no longer assigned to {interface_object.get_display_name()} and "
                          f"therefore removed from this interface")
+                self.release_ip_retention(current_ip)
                 current_ip.remove_interface_association()
 
         matching_untagged_vlan = None

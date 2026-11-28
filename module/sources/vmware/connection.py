@@ -175,6 +175,7 @@ class VMWareHandler(SourceBase):
 
         if self.session is None:
             log.info(f"Source '{name}' is currently unavailable. Skipping")
+            self.inventory_complete = False
             return
 
         self.create_api_session()
@@ -782,6 +783,7 @@ class VMWareHandler(SourceBase):
 
             if self.session is None:
                 log.error("Recreating session failed")
+                self.inventory_complete = False
                 break
 
             if self.property_cache is None or self.property_cache.stub is not self._sdk_instance._stub:
@@ -797,12 +799,16 @@ class VMWareHandler(SourceBase):
                 container_view = self.session.viewManager.CreateContainerView(**view_data)
             except Exception as e:
                 log.error(f"Problem creating vCenter view for '{view_name}s': {e}")
+                if view_name in ("virtual machine", "offline virtual machine"):
+                    self.inventory_complete = False
                 continue
 
             view_objects = grab(container_view, "view")
 
             if view_objects is None:
                 log.error(f"Creating vCenter view for '{view_name}s' failed!")
+                if view_name in ("virtual machine", "offline virtual machine"):
+                    self.inventory_complete = False
                 continue
 
             if view_name != "offline virtual machine":
@@ -1708,7 +1714,7 @@ class VMWareHandler(SourceBase):
 
     def add_device_vm_to_inventory(self, object_type, object_data, pnic_data=None, vnic_data=None,
                                    nic_ips=None, p_ipv4=None, p_ipv6=None, vmware_object=None, disk_data=None,
-                                   fc_hba_data=None):
+                                   fc_hba_data=None, guest_ip_observation=None):
         """
         Add/update device/VM object in inventory based on gathered data.
 
@@ -1910,6 +1916,33 @@ class VMWareHandler(SourceBase):
 
             device_vm_object.update(data=object_data, source=self)
 
+        # Record the guest-IP observation on the resolved VM before any interface
+        # reconciliation. Interfaces this run never walks stay covered by it.
+        if object_type == NBVM and guest_ip_observation is not None:
+            observations = getattr(device_vm_object, "guest_ip_observations", None)
+            if not isinstance(observations, dict):
+                device_vm_object.guest_ip_observations = {}
+                observations = device_vm_object.guest_ip_observations
+            observations[self.source_tag] = guest_ip_observation
+            reported = getattr(device_vm_object, "guest_reported_ips", None)
+            if not isinstance(reported, dict):
+                device_vm_object.guest_reported_ips = {}
+                reported = device_vm_object.guest_reported_ips
+            if guest_ip_observation == "complete":
+                addresses = set()
+                for interface_addresses in (nic_ips or {}).values():
+                    for address in interface_addresses or []:
+                        addresses.add(str(address).split("/")[0])
+                reported[self.source_tag] = addresses
+            else:
+                # An unknown pass must not leave an earlier address list behind.
+                reported.pop(self.source_tag, None)
+            if guest_ip_observation == "unknown" and \
+                    getattr(device_vm_object, "_logged_guest_ip_unknown", False) is False:
+                device_vm_object._logged_guest_ip_unknown = True
+                log.info(f"VMware guest IP data unavailable for '{device_vm_object.get_display_name()}'; "
+                         f"existing NetBox IP assignments retained")
+
         # add object to cache
         self.add_object_to_cache(vmware_object, device_vm_object)
 
@@ -2059,44 +2092,15 @@ class VMWareHandler(SourceBase):
                 ip_interface_object = ip_interface(grab(ip_object, "data.address"))
 
                 # continue if address is not a primary IP
-                if ip_interface_object not in [primary_ipv4_object, primary_ipv6_object]:
-                    continue
+                if ip_interface_object == primary_ipv4_object:
+                    self.assign_primary_ip(device_vm_object, ip_object, 4)
+                elif ip_interface_object == primary_ipv6_object:
+                    self.assign_primary_ip(device_vm_object, ip_object, 6)
 
-                # set/update/remove primary IP addresses
-                set_this_primary_ip = False
-                ip_version = ip_interface_object.ip.version
-                if self.settings.set_primary_ip == "always":
-
-                    for object_type in [NBDevice, NBVM]:
-
-                        # new IPs don't need to be removed from other devices/VMs
-                        if ip_object.is_new is True:
-                            break
-
-                        for devices_vms in self.inventory.get_all_items(object_type):
-
-                            # device has no primary IP of this version
-                            this_primary_ip = grab(devices_vms, f"data.primary_ip{ip_version}")
-
-                            # we found this exact object
-                            if devices_vms == device_vm_object:
-                                continue
-
-                            # device has the same object assigned
-                            if this_primary_ip == ip_object:
-                                devices_vms.unset_attribute(f"primary_ip{ip_version}")
-
-                    set_this_primary_ip = True
-
-                elif self.settings.set_primary_ip != "never" and \
-                        grab(device_vm_object, f"data.primary_ip{ip_version}") is None:
-                    set_this_primary_ip = True
-
-                if set_this_primary_ip is True:
-
-                    log.debug(f"Setting IP '{grab(ip_object, 'data.address')}' as primary IPv{ip_version} for "
-                              f"'{device_vm_object.get_display_name()}'")
-                    device_vm_object.update(data={f"primary_ip{ip_version}": ip_object})
+        # A deferred move is not in the returned list, so the loop above cannot
+        # select it. Remember the intent and let settlement apply the same policy.
+        self.note_deferred_primary(device_vm_object, primary_ipv4_object, 4)
+        self.note_deferred_primary(device_vm_object, primary_ipv6_object, 6)
 
         return device_vm_object, interface_objects
 
@@ -3712,6 +3716,32 @@ class VMWareHandler(SourceBase):
 
         return name, vm_description
 
+    @staticmethod
+    def guest_ip_observation_state(vmware_object):
+        """
+        'unknown' when guest IP data cannot prove an address was removed.
+        'complete' when Tools are running and the guest reported at least one NIC.
+
+        A reported NIC with an empty address list, while this returns 'complete',
+        keeps the current upstream policy and is treated as a removal. That is a
+        policy choice, not a guarantee that Tools never returns a short list.
+        """
+
+        tools_status = grab(vmware_object, "guest.toolsRunningStatus")
+        guest_net = grab(vmware_object, "guest.net")
+        if tools_status != "guestToolsRunning" or guest_net is None:
+            return "unknown"
+
+        try:
+            guest_net_empty = len(guest_net) == 0
+        except TypeError:
+            guest_net_empty = False
+
+        if guest_net_empty:
+            return "unknown"
+
+        return "complete"
+
     def add_virtual_machine(self, obj):
         """
         Parse a vCenter VM  add to NetBox once all data is gathered.
@@ -4305,7 +4335,8 @@ class VMWareHandler(SourceBase):
         # add VM to inventory
         self.add_device_vm_to_inventory(NBVM, object_data=vm_data, vnic_data=nic_data,
                                         nic_ips=nic_ips, p_ipv4=vm_primary_ip4, p_ipv6=vm_primary_ip6,
-                                        vmware_object=obj, disk_data=disk_data)
+                                        vmware_object=obj, disk_data=disk_data,
+                                        guest_ip_observation=self.guest_ip_observation_state(obj))
 
         return
 
