@@ -494,8 +494,9 @@ class NetBoxInventory:
         Why the current assignment of ip must stay where it is.
 
         'unknown' means the source responsible for that assignment recorded an
-        unknown guest-IP observation. 'undetermined' means that source cannot
-        be identified. None means a move may follow the existing rules.
+        unknown guest-IP observation. A VM with no Source: tag can still record
+        that observation when it is found this run. 'undetermined' means that
+        source cannot be identified. None means a move may follow the existing rules.
         """
 
         configured = set(self._configured_sources_by_tag())
@@ -535,6 +536,17 @@ class NetBoxInventory:
             return None
         if len(parent_known) == 1 and observations.get(parent_known[0]) == "unknown":
             return "unknown"
+
+        # The address and the VM have no Source: tag. The observation recorded
+        # when the VM was found this run is still the evidence for this assignment.
+        if not parent_known and not parent_unknown and observations:
+            if len(observations) != 1:
+                return "undetermined"
+            state = next(iter(observations.values()))
+            if state == "unknown":
+                return "unknown"
+            if state != "complete":
+                return "undetermined"
         return None
 
     def _owner_observation_is_unknown(self, parent):

@@ -225,9 +225,10 @@ class SourceBase:
             return "reject"
         if settle is False and self._responsible_guest_tag(ip) is not None:
             return "defer"
-        # No Source: tag can identify the old VM, so this report is not proof
-        # that it is the only one. Wait until every VMware report is in.
-        if self._absent_sourceless_vm_assignment(ip):
+        # No Source: tag identifies the old VM. A new VMware claim waits until
+        # every report is in, including a later pass that finds the VM with
+        # Tools unavailable. That observation is read by assignment_hold.
+        if self._tagless_vm_assignment(ip):
             if settle is False:
                 return "defer"
             if self.inventory._any_enabled_vmware_listing_incomplete():
@@ -235,16 +236,16 @@ class SourceBase:
                 return "reject"
         return "allow"
 
-    def _absent_sourceless_vm_assignment(self, ip):
+    def _tagless_vm_assignment(self, ip):
         """
-        True when this VMware source wants an address that is still on a VM
-        this run did not see, and neither the address nor that VM has a Source: tag.
+        True when this VMware source wants an address that is on a VM, and
+        neither the address nor that VM has a Source: tag.
         """
 
         if getattr(self, "source_type", None) != "vmware":
             return False
         parent = ip.get_device_vm()
-        if not isinstance(parent, NBVM) or parent.source is not None:
+        if not isinstance(parent, NBVM):
             return False
         if self._source_tags(ip) or self._source_tags(parent):
             return False
@@ -274,10 +275,14 @@ class SourceBase:
         """
 
         tag = self._responsible_guest_tag(ip)
-        if tag is None:
-            return "allow"
         parent = ip.get_device_vm()
         observations = getattr(parent, "guest_ip_observations", None) or {} if parent is not None else {}
+        # No Source: tag. One current-run observation is the report for this VM.
+        if tag is None and isinstance(parent, NBVM) and not self._source_tags(ip) and \
+                not self._source_tags(parent) and len(observations) == 1:
+            tag = next(iter(observations))
+        if tag is None:
+            return "allow"
         state = observations.get(tag)
         # Missing and unknown are not a complete report. Unknown is also rejected
         # by assignment_hold; a missing key stays pending so source order can
